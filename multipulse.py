@@ -25,6 +25,7 @@ from mri_fast import (
     outside_slice_weights,
     excite_sinc_numpy, rodrigues_numpy, z_step_numpy,
     make_value_and_grad_full,
+    make_value_and_grad_full_fast,
 )
 from mri_opt import (
     SearchConfig,

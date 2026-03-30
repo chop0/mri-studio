@@ -68,7 +68,7 @@ def _make_step_fn(value_and_grad_fn, history_size):
         d = jnp.where(slope >= 0, neg_g, d)
         slope = jnp.where(slope >= 0, jnp.dot(grad, neg_g), slope)
 
-        # 4. Backtracking Armijo line search
+        # 4. Backtracking Armijo line search (while_loop, memory-efficient)
         c1 = jnp.float32(1e-4)
 
         def ls_cond(state):

@@ -616,6 +616,188 @@ def make_value_and_grad_full(
     return jax.jit(jax.value_and_grad(loss))
 
 
+def make_value_and_grad_full_fast(
+    prob,
+    segments,
+    lam_out,
+    lam_pow,
+    rf_pen,
+    rf_smooth_pen=0.0,
+    gate_switch_pen=0.0,
+    gate_binary_pen=0.0,
+):
+    """
+    Like make_value_and_grad_full but uses associative_scan for O(log T)
+    parallel depth instead of O(T) sequential scan.
+
+    Each Bloch timestep is expressed as a 4×4 affine matrix (rotation +
+    relaxation + recovery in homogeneous coords).  Matrix composition is
+    associative, so jax.lax.associative_scan computes all prefix products
+    in ~log2(T) parallel rounds, enabling massive parallelism.
+    """
+    # ── per-step metadata (same as make_value_and_grad_full) ──
+    gamma_dt_list, E1_list, E2_list = [], [], []
+    is_free_list, legacy_gate_list, dt_list = [], [], []
+    seg_id_list, local_step_list = [], []
+
+    for si, seg in enumerate(segments):
+        dt_s = seg["dt"]
+        nf = seg["n_free"]
+        ns = nf + seg["n_pulse"]
+        for j in range(ns):
+            gamma_dt_list.append(GAMMA * dt_s)
+            E1_list.append(np.exp(-dt_s / T1))
+            E2_list.append(np.exp(-dt_s / T2))
+            is_free_list.append(j < nf)
+            legacy_gate_list.append(0.0 if j < nf else 1.0)
+            dt_list.append(dt_s)
+            seg_id_list.append(si)
+            local_step_list.append(j)
+
+    n_total = len(gamma_dt_list)
+    control_dim = max(seg.get("n_ctrl", 4) for seg in segments)
+    gdt = jnp.array(gamma_dt_list, dtype=jnp.float32)
+    E1 = jnp.array(E1_list, dtype=jnp.float32)
+    E2 = jnp.array(E2_list, dtype=jnp.float32)
+    is_free = jnp.array(is_free_list, dtype=jnp.bool_)
+    legacy_gate = jnp.array(legacy_gate_list, dtype=jnp.float32)
+    dt_arr = jnp.array(dt_list, dtype=jnp.float32)
+    seg_id_arr = jnp.array(seg_id_list, dtype=jnp.int32)
+    local_step_arr = jnp.array(local_step_list, dtype=jnp.int32)
+
+    N = prob.Gxm.shape[0]
+
+    # Pre-broadcast spatial fields to (1, N) for later (T, N) ops
+    dBz = prob.dBz[None, :]    # (1, N)
+    Gxm = prob.Gxm[None, :]
+    Gzm = prob.Gzm[None, :]
+    B1s = prob.B1s[None, :]
+    w_in = prob.w_in[None, :]  # (1, N) for signal sums
+    w_out = prob.w_out[None, :]
+
+    def loss(ctrl_flat):
+        ctrl = ctrl_flat.reshape((n_total, control_dim))
+        gate_raw = ctrl[:, 4] if control_dim >= 5 else legacy_gate
+
+        b1x = ctrl[:, 0:1]  # (T, 1)
+        b1y = ctrl[:, 1:2]
+        ux  = ctrl[:, 2:3]
+        uz  = ctrl[:, 3:4]
+
+        # ── resolve gating ──
+        rf_gate = jnp.clip(gate_raw, 0.0, 1.0)
+        default_gate = jnp.where(is_free, 0.0, 1.0)
+        rf_gate = jnp.where(control_dim >= 5, rf_gate, default_gate)
+        sig_gate = 1.0 - rf_gate   # (T,)
+
+        # ── build 4×4 affine matrices for every (timestep, spatial-point) ──
+        # Shapes: scalars are (T,1), fields are (1,N), products broadcast to (T,N)
+        gdt2 = gdt[:, None]   # (T, 1)
+        e1 = E1[:, None] * jnp.ones((1, N))   # (T, N)
+        e2 = E2[:, None] * jnp.ones((1, N))
+
+        # off-resonance frequency
+        omega = dBz + ux * Gxm + uz * Gzm   # (T, N)
+
+        # ── free-precession matrix ──
+        th_f = gdt2 * omega
+        cf = jnp.cos(th_f) * e2
+        sf = jnp.sin(th_f) * e2
+        z = jnp.zeros_like(cf)
+        o = jnp.ones_like(cf)
+
+        # A_f: rows = [[cf, -sf, 0, 0], [sf, cf, 0, 0], [0, 0, e1, 1-e1], [0,0,0,1]]
+        row0_f = jnp.stack([cf, -sf, z, z], axis=-1)
+        row1_f = jnp.stack([sf, cf, z, z], axis=-1)
+        row2_f = jnp.stack([z, z, e1, 1.0 - e1], axis=-1)
+        row3   = jnp.stack([z, z, z, o], axis=-1)
+        A_f = jnp.stack([row0_f, row1_f, row2_f, row3], axis=-2)  # (T,N,4,4)
+
+        # ── Rodrigues rotation matrix ──
+        bx = b1x * B1s           # (T, N)
+        by = b1y * B1s
+        bz = omega
+        Bm = jnp.sqrt(bx*bx + by*by + bz*bz + 1e-30)
+        invBm = 1.0 / Bm
+        nx, ny, nz_ = bx * invBm, by * invBm, bz * invBm
+        th = gdt2 * Bm
+        cv = jnp.cos(th)
+        sv = jnp.sin(th)
+        omc = 1.0 - cv
+
+        R00 = cv + nx*nx*omc;  R01 = nx*ny*omc - nz_*sv; R02 = nx*nz_*omc + ny*sv
+        R10 = ny*nx*omc + nz_*sv; R11 = cv + ny*ny*omc;  R12 = ny*nz_*omc - nx*sv
+        R20 = nz_*nx*omc - ny*sv; R21 = nz_*ny*omc + nx*sv; R22 = cv + nz_*nz_*omc
+
+        row0_r = jnp.stack([e2*R00, e2*R01, e2*R02, z], axis=-1)
+        row1_r = jnp.stack([e2*R10, e2*R11, e2*R12, z], axis=-1)
+        row2_r = jnp.stack([e1*R20, e1*R21, e1*R22, 1.0 - e1], axis=-1)
+        A_r = jnp.stack([row0_r, row1_r, row2_r, row3], axis=-2)
+
+        # ── gated blend: A = sig_gate·A_f + rf_gate·A_r ──
+        sg = sig_gate[:, None, None, None]  # (T, 1, 1, 1)
+        rg = rf_gate[:, None, None, None]
+        A = sg * A_f + rg * A_r             # (T, N, 4, 4)
+
+        # ── associative scan: prefix[t] = A_t @ … @ A_0 ──
+        def compose(a, b):
+            return jnp.matmul(b, a)          # b applied after a
+
+        prefix = jax.lax.associative_scan(compose, A, axis=0)  # (T, N, 4, 4)
+
+        # ── magnetisation at every timestep ──
+        init = jnp.array([0.0, 0.0, 1.0, 1.0], dtype=jnp.float32)
+        M_all = jnp.einsum('tnij,j->tni', prefix, init)   # (T, N, 4)
+        Mx = M_all[:, :, 0]   # (T, N)
+        My = M_all[:, :, 1]
+
+        # ── signal accumulation (fully parallel over T) ──
+        Sx     = jnp.sum(w_in * Mx, axis=1)         # (T,)
+        Sy     = jnp.sum(w_in * My, axis=1)
+        Sx_out = jnp.sum(w_out * Mx, axis=1)
+        Sy_out = jnp.sum(w_out * My, axis=1)
+        power_out_steps = jnp.sum(w_out * (Mx*Mx + My*My), axis=1)
+
+        J_in  = jnp.sum(sig_gate * (Sx*Sx + Sy*Sy))
+        J_out = jnp.sum(sig_gate * (Sx_out*Sx_out + Sy_out*Sy_out))
+        power_out = jnp.sum(sig_gate * power_out_steps)
+
+        # ── penalty terms (already vectorised, same as original) ──
+        rf_power = jnp.sum((ctrl[:, 0]**2 + ctrl[:, 1]**2) * dt_arr)
+        rf_xy = ctrl[:, :2]
+        prev1 = jnp.concatenate([rf_xy[:1], rf_xy[:-1]], axis=0)
+        prev2 = jnp.concatenate([rf_xy[:1], rf_xy[:1], rf_xy[:-2]], axis=0)
+        valid_second = local_step_arr >= 2
+        same1 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]])
+        same2 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:1], seg_id_arr[:-2]])
+        valid_second = valid_second & same1 & same2
+        rf_d2 = rf_xy - 2.0 * prev1 + prev2
+        rf_d2 = jnp.where(valid_second[:, None], rf_d2, 0.0)
+        rf_smooth = jnp.sum(rf_d2 * rf_d2 * dt_arr[:, None])
+        prev_gate = jnp.concatenate([gate_raw[:1], gate_raw[:-1]])
+        valid_gate = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]])
+        gd = jnp.where(valid_gate, gate_raw - prev_gate, 0.0)
+        gate_switch = jnp.sum(gd * gd * dt_arr)
+        gate_binary = jnp.sum(gate_raw * (1.0 - gate_raw) * dt_arr)
+
+        J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary = \
+            _normalized_objective_terms(
+                prob, J_in, J_out, power_out, rf_power, rf_smooth,
+                gate_switch, gate_binary, dt_arr,
+            )
+
+        J = (J_in
+             - lam_out * J_out
+             - lam_pow * power_out
+             - rf_pen * rf_power
+             - rf_smooth_pen * rf_smooth
+             - gate_switch_pen * gate_switch
+             - gate_binary_pen * gate_binary)
+        return -J
+
+    return jax.jit(jax.value_and_grad(loss))
+
+
 def run_demo():
     from mri_opt import SearchConfig, default_bounds_for_steps, flatten_ctrl_list, optimize_masked_controls
 
