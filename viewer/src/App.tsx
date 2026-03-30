@@ -399,7 +399,6 @@ export default function App() {
   // ── Main viewer ───────────────────────────────────────────────────────────
 
   const scenarios = Object.keys(data.fixed);
-  const isGrape   = scen === "GRAPE" || mode === "grape";
   const resetIsos = () => { setIsos(makeIsos(data, pulse!)); setNCI(DEFAULT_ISOS.length); };
   const clearIsos = () => { setIsos([]); setNCI(0); };
 
@@ -417,7 +416,7 @@ export default function App() {
           {scenarios.map(k => <option key={k}>{k}</option>)}
         </select>
 
-        {isGrape && gIters.length > 0 && (
+        {gIters.length > 0 && (
           <>
             <input
               type="range" min={0} max={gIters.length - 1} value={gIdx}
