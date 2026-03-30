@@ -106,8 +106,15 @@ def optimize_scenario_worker(task):
     base_rf_smooth_pen = 4.0
     prob_jax = problem_np_to_jax(objective_prob_np)
 
+    # Use associative-scan path on GPU (12x faster); sequential scan on CPU
+    try:
+        on_gpu = jax.devices()[0].platform == "gpu"
+    except Exception:
+        on_gpu = False
+    vg_builder = make_value_and_grad_full_fast if on_gpu else make_value_and_grad_full
+
     def vg_factory(rf_smooth_mul):
-        vg = make_value_and_grad_full(
+        vg = vg_builder(
             prob_jax,
             seg_meta,
             lam_out=12.0,
