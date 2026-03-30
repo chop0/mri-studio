@@ -11,6 +11,7 @@ import ax.xz.mri.util.MathUtil;
 import javafx.beans.Observable;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
+import javafx.scene.Node;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
@@ -38,16 +39,23 @@ public class GeometryViewPane extends CanvasPane {
 
     public GeometryViewPane(AppState s) {
         super(s);
-        buildToolbar();
+
+        // Z-range slider on right edge
+        zRangeSlider.setOrientation(Orientation.VERTICAL);
+        zRangeSlider.setPrefWidth(20);
+        zRangeSlider.valueProperty().bindBidirectional(s.crossSection.halfHeight);
+        setRight(zRangeSlider);
+
         installMouseHandlers();
+        updateStatus();
         onAttached();
     }
 
     @Override public String getPaneId()    { return "geometry-view"; }
     @Override public String getPaneTitle() { return "Geometry"; }
 
-    private void buildToolbar() {
-        // Shading controls in a local toolbar
+    @Override
+    protected Node[] headerControls() {
         var shadeCb = new ComboBox<String>();
         shadeCb.getItems().addAll("Off", "|M\u22a5|", "Signal");
         shadeCb.setValue("Off");
@@ -61,17 +69,7 @@ public class GeometryViewPane extends CanvasPane {
         var showMpChk = new CheckBox("|M\u22a5| proj");
         showMpChk.selectedProperty().bindBidirectional(appState.crossSection.showMpProj);
 
-        var toolbar = new HBox(6,
-            new Label("Shade:"), shadeCb, showMpChk);
-        toolbar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-        toolbar.setPadding(new Insets(2, 4, 2, 4));
-        setTop(toolbar);
-
-        // Z-range slider on right edge
-        zRangeSlider.setOrientation(Orientation.VERTICAL);
-        zRangeSlider.setPrefWidth(20);
-        zRangeSlider.valueProperty().bindBidirectional(appState.crossSection.halfHeight);
-        setRight(zRangeSlider);
+        return new Node[]{ new Label("Shade:"), shadeCb, showMpChk };
     }
 
     @Override
@@ -111,6 +109,17 @@ public class GeometryViewPane extends CanvasPane {
         });
         canvas.setOnMouseReleased(e -> dragging[0] = null);
 
+        canvas.setOnMouseMoved(e -> {
+            var data = appState.document.blochData.get();
+            if (data != null) {
+                var rz = screenToRZ(e.getX(), e.getY());
+                long visible = appState.isochromats.isochromats.stream().filter(Isochromat::visible).count();
+                setStatus(String.format("r=%.1f z=%.1f mm    %d points (%d visible)",
+                    rz[0], rz[1],
+                    appState.isochromats.isochromats.size(), visible));
+            }
+        });
+
         canvas.setOnContextMenuRequested(e -> {
             var menu = new ContextMenu();
             var iso  = findIsochromat(e.getX(), e.getY());
@@ -130,7 +139,7 @@ public class GeometryViewPane extends CanvasPane {
             var clear = new MenuItem("Clear all points");
             clear.setOnAction(ae -> appState.isochromats.clear());
             menu.getItems().addAll(add, new SeparatorMenuItem(), reset, clear);
-            menu.show(canvas, e.getScreenX(), e.getScreenY());
+            showContextMenu(menu, e.getScreenX(), e.getScreenY());
         });
 
         canvas.setOnScroll(e -> {
@@ -138,6 +147,12 @@ public class GeometryViewPane extends CanvasPane {
             h *= (e.getDeltaY() > 0 ? 0.85 : 1.18);
             appState.crossSection.halfHeight.set(MathUtil.clamp(h, 5, 300));
         });
+    }
+
+    private void updateStatus() {
+        long visible = appState.isochromats.isochromats.stream().filter(Isochromat::visible).count();
+        setStatus(String.format("%d points (%d visible)",
+            appState.isochromats.isochromats.size(), visible));
     }
 
     @Override
@@ -271,6 +286,9 @@ public class GeometryViewPane extends CanvasPane {
             g.fillText(iso.name(), px + 6, py + 3);
             g.setGlobalAlpha(1);
         }
+
+        // Update status after paint
+        updateStatus();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

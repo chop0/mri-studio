@@ -1,18 +1,23 @@
 package ax.xz.mri;
 
 import ax.xz.mri.ui.StudioWorkbench;
+import ax.xz.mri.ui.aerofx.AeroFX;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 
 /**
  * MRI Studio — entry point.
- * Uses the default Modena (light) theme with minimal CSS overrides.
+ * Uses AeroFX win7.css as the user-agent stylesheet (replaces Modena).
+ * The CSS includes all necessary lookup color definitions.
  */
 public class MriStudioApp extends Application {
 
     @Override
     public void start(Stage stage) {
+        // Replace Modena entirely with AeroFX + our Modena-compat definitions
+        AeroFX.style();
+
         var workbench = new StudioWorkbench();
         var scene     = new Scene(workbench, 1400, 900);
 
@@ -23,7 +28,6 @@ public class MriStudioApp extends Application {
         stage.setScene(scene);
         stage.show();
 
-        // Support launching with a file argument: ./gradlew run --args="path/to/bloch_data.json"
         var params = getParameters().getUnnamed();
         if (!params.isEmpty()) {
             var f = new java.io.File(params.get(0));

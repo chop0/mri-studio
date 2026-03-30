@@ -1,10 +1,14 @@
 package ax.xz.mri.ui.pane;
 
+import ax.xz.mri.model.simulation.Isochromat;
 import ax.xz.mri.state.AppState;
 import ax.xz.mri.ui.framework.CanvasPane;
 import ax.xz.mri.ui.theme.StudioTheme;
 import javafx.beans.Observable;
+import javafx.scene.Node;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.MenuItem;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
@@ -28,11 +32,20 @@ public class AnglePlotsPane extends CanvasPane {
     public AnglePlotsPane(AppState s) {
         super(s);
         installMouseHandlers();
+
+        // Bind status bar to cursor + isochromat count
+        appState.viewport.tC.addListener((obs, o, n) -> updateStatus());
+        appState.isochromats.isochromats.addListener((Observable obs) -> updateStatus());
+        updateStatus();
+
         onAttached();
     }
 
     @Override public String getPaneId()    { return "angle-plots"; }
     @Override public String getPaneTitle() { return "Angle Plots"; }
+
+    @Override
+    protected Node[] headerControls() { return null; }
 
     @Override
     protected Observable[] getRedrawTriggers() {
@@ -45,13 +58,34 @@ public class AnglePlotsPane extends CanvasPane {
     @Override
     protected void installMouseHandlers() {
         canvas.setOnMouseClicked(e -> {
-            double tMin = appState.viewport.tS.get();
-            double tMax = Math.max(appState.viewport.tE.get(), tMin + 1);
-            double pad_l = 40;
-            double pW    = canvas.getWidth() - pad_l - 8;
-            double t     = tMin + (e.getX() - pad_l) / pW * (tMax - tMin);
-            appState.viewport.tC.set(Math.max(tMin, Math.min(tMax, t)));
+            if (e.isPrimaryButtonDown() || e.getButton().name().equals("PRIMARY")) {
+                moveCursorFromX(e.getX());
+            }
         });
+
+        canvas.setOnContextMenuRequested(e -> {
+            var menu = new ContextMenu();
+            var setCursor = new MenuItem("Set cursor here");
+            setCursor.setOnAction(ae -> moveCursorFromX(e.getX()));
+            menu.getItems().add(setCursor);
+            showContextMenu(menu, e.getScreenX(), e.getScreenY());
+        });
+    }
+
+    private void moveCursorFromX(double mouseX) {
+        double tMin = appState.viewport.tS.get();
+        double tMax = Math.max(appState.viewport.tE.get(), tMin + 1);
+        double pad_l = 40;
+        double pW    = canvas.getWidth() - pad_l - 8;
+        double t     = tMin + (mouseX - pad_l) / pW * (tMax - tMin);
+        appState.viewport.tC.set(Math.max(tMin, Math.min(tMax, t)));
+    }
+
+    private void updateStatus() {
+        long visible = appState.isochromats.isochromats.stream()
+            .filter(iso -> iso.visible() && iso.trajectory() != null).count();
+        setStatus(String.format("cursor: %.1f \u03bcs | %d traces visible",
+            appState.viewport.tC.get(), visible));
     }
 
     @Override

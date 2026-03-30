@@ -8,7 +8,10 @@ import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.util.MathUtil;
 import javafx.beans.Observable;
+import javafx.scene.Node;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.MenuItem;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.paint.Color;
@@ -35,11 +38,22 @@ public class PhaseMapsPane extends CanvasPane {
         canvasR.setOnResized(this::scheduleRedraw);
         installCursorDrag(canvasZ);
         installCursorDrag(canvasR);
+        installContextMenu(canvasZ);
+        installContextMenu(canvasR);
+
+        // Bind status bar to cursor position
+        appState.viewport.tC.addListener((obs, o, n) ->
+            setStatus(String.format("cursor: %.1f \u03bcs", n.doubleValue())));
+        setStatus(String.format("cursor: %.1f \u03bcs", appState.viewport.tC.get()));
+
         onAttached();
     }
 
     @Override public String getPaneId()    { return "phase-maps"; }
     @Override public String getPaneTitle() { return "Phase Maps"; }
+
+    @Override
+    protected Node[] headerControls() { return null; }
 
     @Override
     protected Observable[] getRedrawTriggers() {
@@ -149,8 +163,18 @@ public class PhaseMapsPane extends CanvasPane {
     }
 
     private void installCursorDrag(ResizableCanvas cv) {
-        cv.setOnMousePressed(e  -> moveCursor(cv, e.getX()));
+        cv.setOnMousePressed(e  -> { if (e.isPrimaryButtonDown()) moveCursor(cv, e.getX()); });
         cv.setOnMouseDragged(e  -> moveCursor(cv, e.getX()));
+    }
+
+    private void installContextMenu(ResizableCanvas cv) {
+        cv.setOnContextMenuRequested(e -> {
+            var menu = new ContextMenu();
+            var setCursor = new MenuItem("Set cursor here");
+            setCursor.setOnAction(ae -> moveCursor(cv, e.getX()));
+            menu.getItems().add(setCursor);
+            showContextMenu(menu, e.getScreenX(), e.getScreenY());
+        });
     }
 
     private void moveCursor(ResizableCanvas cv, double mouseX) {

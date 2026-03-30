@@ -7,6 +7,7 @@ import ax.xz.mri.ui.theme.StudioTheme;
 import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
@@ -24,32 +25,40 @@ public class PointsOfInterestPane extends StudioPane {
     public PointsOfInterestPane(AppState s) {
         super(s);
         buildLayout();
-        appState.isochromats.isochromats.addListener((ListChangeListener<Isochromat>) c -> rebuildList());
+        appState.isochromats.isochromats.addListener((ListChangeListener<Isochromat>) c -> {
+            rebuildList();
+            updateStatus();
+        });
         rebuildList();
+        updateStatus();
         onAttached();
     }
 
     @Override public String getPaneId()    { return "points-of-interest"; }
     @Override public String getPaneTitle() { return "Points of Interest"; }
 
-    private void buildLayout() {
-        // Toolbar
+    @Override
+    protected Node[] headerControls() {
         var btnDefaults = new Button("Defaults");
         var btnClear    = new Button("Clear");
         btnDefaults.setOnAction(e -> appState.isochromats.resetToDefaults());
         btnClear.setOnAction(e    -> appState.isochromats.clear());
+        return new Node[]{ btnDefaults, btnClear };
+    }
 
-        var toolbar = new HBox(4, btnDefaults, btnClear);
-        toolbar.setPadding(new Insets(3, 4, 3, 4));
-
+    private void buildLayout() {
         listBox.setSpacing(0);
 
         var scroll = new ScrollPane(listBox);
         scroll.setFitToWidth(true);
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
 
-        setTop(toolbar);
         setCenter(scroll);
+    }
+
+    private void updateStatus() {
+        long visible = appState.isochromats.isochromats.stream().filter(Isochromat::visible).count();
+        setStatus(String.format("%d visible / %d total", visible, appState.isochromats.isochromats.size()));
     }
 
     private void rebuildList() {

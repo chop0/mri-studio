@@ -1,8 +1,13 @@
 package ax.xz.mri.ui.framework;
 
 import javafx.scene.canvas.Canvas;
+import javafx.stage.Screen;
 
-/** A Canvas that follows its parent's size and notifies a listener when resized. */
+/**
+ * A Canvas that follows its parent's size and renders at the screen's native
+ * DPI (Retina/HiDPI aware). The logical size for layout purposes matches the
+ * parent, but the backing pixel buffer is scaled up for crisp rendering.
+ */
 public class ResizableCanvas extends Canvas {
     private Runnable onResized;
 

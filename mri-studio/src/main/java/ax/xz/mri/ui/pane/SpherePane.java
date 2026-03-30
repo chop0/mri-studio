@@ -5,10 +5,13 @@ import ax.xz.mri.ui.canvas.Projection;
 import ax.xz.mri.ui.framework.CanvasPane;
 import ax.xz.mri.ui.theme.StudioTheme;
 import javafx.beans.Observable;
+import javafx.scene.Node;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.*;
 import javafx.scene.paint.Color;
 
 import static ax.xz.mri.ui.canvas.Projection.project;
+import static ax.xz.mri.ui.theme.StudioTheme.*;
 
 /**
  * Bloch sphere visualisation with drag-to-rotate and scroll-to-zoom.
@@ -25,6 +28,41 @@ public class SpherePane extends CanvasPane {
     @Override public String getPaneId()    { return "sphere"; }
     @Override public String getPaneTitle() { return "Bloch Sphere"; }
 
+    // ── Header toolbar ───────────────────────────────────────────────────────
+
+    @Override
+    protected Node[] headerControls() {
+        Button front = new Button("Front");
+        front.setOnAction(e -> setCameraPreset(0, 0));
+
+        Button top = new Button("Top");
+        top.setOnAction(e -> setCameraPreset(0, Math.PI / 2));
+
+        Button iso = new Button("ISO");
+        iso.setOnAction(e -> setCameraPreset(0.6, 0.5));
+
+        Button reset = new Button("Reset");
+        reset.setOnAction(e -> {
+            appState.camera.theta.set(0.6);
+            appState.camera.phi.set(0.3);
+            appState.camera.zoom.set(1.0);
+        });
+
+        for (Button b : new Button[]{ front, top, iso, reset }) {
+            b.setFont(UI_8);
+            b.setPadding(new javafx.geometry.Insets(1, 5, 1, 5));
+        }
+
+        return new Node[]{ front, top, iso, reset };
+    }
+
+    private void setCameraPreset(double theta, double phi) {
+        appState.camera.theta.set(theta);
+        appState.camera.phi.set(phi);
+    }
+
+    // ── Redraw triggers ──────────────────────────────────────────────────────
+
     @Override
     protected Observable[] getRedrawTriggers() {
         return new Observable[]{
@@ -39,6 +77,8 @@ public class SpherePane extends CanvasPane {
         };
     }
 
+    // ── Mouse handlers ───────────────────────────────────────────────────────
+
     @Override
     protected void installMouseHandlers() {
         final double[] drag = new double[2];
@@ -49,7 +89,62 @@ public class SpherePane extends CanvasPane {
             drag[0] = e.getX(); drag[1] = e.getY();
         });
         canvas.setOnScroll(e -> appState.camera.addZoom(e.getDeltaY() > 0 ? 1.1 : 0.91));
+
+        // Status bar: show camera state and cursor time on mouse move
+        canvas.setOnMouseMoved(e -> {
+            double theta = appState.camera.theta.get();
+            double phi   = appState.camera.phi.get();
+            double zoom  = appState.camera.zoom.get();
+            double tC    = appState.viewport.tC.get();
+            setStatus(String.format(
+                "\u03b8=%.1f\u00b0 \u03c6=%.1f\u00b0 zoom=%.0f%% | cursor: %.1f \u00b5s",
+                Math.toDegrees(theta), Math.toDegrees(phi), zoom * 100, tC
+            ));
+        });
+
+        // Right-click context menu
+        canvas.setOnContextMenuRequested(e -> {
+            ContextMenu menu = buildContextMenu();
+            showContextMenu(menu, e.getScreenX(), e.getScreenY());
+            e.consume();
+        });
     }
+
+    // ── Context menu ─────────────────────────────────────────────────────────
+
+    private ContextMenu buildContextMenu() {
+        MenuItem resetItem = new MenuItem("Reset View");
+        resetItem.setOnAction(e -> {
+            appState.camera.theta.set(0.6);
+            appState.camera.phi.set(0.3);
+            appState.camera.zoom.set(1.0);
+        });
+
+        MenuItem frontItem = new MenuItem("Front View");
+        frontItem.setOnAction(e -> setCameraPreset(0, 0));
+
+        MenuItem topItem = new MenuItem("Top View");
+        topItem.setOnAction(e -> setCameraPreset(0, Math.PI / 2));
+
+        MenuItem isoItem = new MenuItem("ISO View");
+        isoItem.setOnAction(e -> setCameraPreset(0.6, 0.5));
+
+        CheckMenuItem showMpItem = new CheckMenuItem("Show |M\u22a5| Projection");
+        showMpItem.setSelected(appState.crossSection.showMpProj.get());
+        showMpItem.setOnAction(e -> appState.crossSection.showMpProj.set(showMpItem.isSelected()));
+
+        return new ContextMenu(
+            resetItem,
+            new SeparatorMenuItem(),
+            frontItem,
+            topItem,
+            isoItem,
+            new SeparatorMenuItem(),
+            showMpItem
+        );
+    }
+
+    // ── Rendering ────────────────────────────────────────────────────────────
 
     @Override
     protected void paint(GraphicsContext g, double w, double h) {

@@ -13,6 +13,11 @@ import java.util.List;
 
 /** Manages the observable list of isochromats and triggers re-simulation when the pulse changes. */
 public class IsochromatState {
+    /** Default spatial positions matching the JS viewer. */
+    private static final double[][] DEFAULT_POSITIONS = {
+        {0, 0}, {0, 2}, {0, 4}, {0, 10}, {15, 0},
+    };
+
     public final ObservableList<Isochromat> isochromats = FXCollections.observableArrayList();
 
     private BlochData            data;
@@ -35,11 +40,14 @@ public class IsochromatState {
             addIsochromat(0, 0, "centre");
             return;
         }
-        for (var def : defs) {
+        for (int i = 0; i < defs.size(); i++) {
+            var def = defs.get(i);
             Color colour;
             try { colour = Color.web(def.colour()); }
             catch (Exception e) { colour = nextColour(); }
-            var iso = new Isochromat(0, 0, colour, def.inSlice(), def.name(), null);
+            double r = i < DEFAULT_POSITIONS.length ? DEFAULT_POSITIONS[i][0] : 0;
+            double z = i < DEFAULT_POSITIONS.length ? DEFAULT_POSITIONS[i][1] : 0;
+            var iso = new Isochromat(r, z, colour, def.inSlice(), def.name(), null);
             isochromats.add(resimulate(iso));
         }
     }

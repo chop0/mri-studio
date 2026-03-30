@@ -9,4 +9,5 @@ module ax.xz.mri {
     opens ax.xz.mri.model.scenario to com.fasterxml.jackson.databind;
 
     exports ax.xz.mri;
+    exports ax.xz.mri.ui.aerofx.skin to javafx.controls;
 }

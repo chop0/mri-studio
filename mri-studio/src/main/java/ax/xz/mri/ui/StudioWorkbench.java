@@ -4,47 +4,37 @@ import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.service.io.BlochDataReader;
 import ax.xz.mri.state.AppState;
 import ax.xz.mri.ui.pane.*;
+import javafx.beans.Observable;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.*;
+import javafx.scene.text.Font;
 
 import java.io.File;
 
 /**
- * Main application window: menu bar, toolbar, and SplitPane layout of all panes.
- * Layout (roughly):
- *   +-----------------------------------------------------+
- *   | MenuBar                                              |
- *   | ToolBar (scenario, iteration)                        |
- *   +---------------------------+--------------------------+
- *   |                           | GeometryViewPane          |
- *   |  SpherePane (large)       +-------------------------+
- *   |                           | PointsOfInterestPane     |
- *   +---------------------------+--------------------------+
- *   | TimelinePane                                         |
- *   +---------------------------+--------------------------+
- *   | PhaseMapsPane             | AnglePlotsPane            |
- *   +---------------------------+--------------------------+
+ * Main application window: menu bar, toolbar, split-pane layout, and global status bar.
  */
 public class StudioWorkbench extends BorderPane {
 
     private final AppState state = new AppState();
+    private final Label globalStatus = new Label("Ready");
 
     public StudioWorkbench() {
         setTop(buildTop());
         setCenter(buildMain());
+        setBottom(buildGlobalStatusBar());
         installDropTarget();
     }
 
     // ── Top bar ──────────────────────────────────────────────────────────────
 
     private VBox buildTop() {
-        var menuBar = buildMenuBar();
-        var toolBar = buildToolBar();
-        return new VBox(menuBar, toolBar);
+        return new VBox(buildMenuBar(), buildToolBar());
     }
 
     private MenuBar buildMenuBar() {
@@ -71,7 +61,7 @@ public class StudioWorkbench extends BorderPane {
         // Scenario selector
         var scenarioBox = new ComboBox<String>();
         scenarioBox.setPromptText("scenario");
-        scenarioBox.setPrefWidth(130);
+        scenarioBox.setPrefWidth(140);
         state.document.blochData.addListener((obs, old, data) -> {
             scenarioBox.getItems().clear();
             if (data != null) {
@@ -85,15 +75,24 @@ public class StudioWorkbench extends BorderPane {
             if (v != null) state.document.currentScenario.set(v);
         });
 
-        // Iteration slider
+        // Iteration controls — hidden when ≤1 iteration
         var iterSlider = new Slider(0, 1, 0);
         iterSlider.setPrefWidth(120);
-        iterSlider.setMajorTickUnit(1); iterSlider.setSnapToTicks(true);
+        iterSlider.setMajorTickUnit(1);
+        iterSlider.setSnapToTicks(true);
         var iterLabel = new Label("0");
-        state.document.iterationKeys.addListener((javafx.collections.ListChangeListener<String>) c -> {
+
+        var iterBox = new HBox(4, new Label("Iter:"), iterSlider, iterLabel);
+        iterBox.setAlignment(Pos.CENTER_LEFT);
+        iterBox.setVisible(false);
+        iterBox.setManaged(false);
+
+        state.document.iterationKeys.addListener((ListChangeListener<String>) c -> {
             int n = state.document.iterationKeys.size();
             iterSlider.setMax(Math.max(0, n - 1));
             iterSlider.setDisable(n <= 1);
+            iterBox.setVisible(n > 0);
+            iterBox.setManaged(n > 0);
         });
         iterSlider.valueProperty().addListener((obs, old, v) -> {
             int idx = (int) Math.round(v.doubleValue());
@@ -104,28 +103,55 @@ public class StudioWorkbench extends BorderPane {
 
         var bar = new HBox(6,
             new Label("Scenario:"), scenarioBox,
-            new Label("Iter:"), iterSlider, iterLabel);
+            new Separator(Orientation.VERTICAL),
+            iterBox);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(3, 6, 3, 6));
         return bar;
     }
 
+    // ── Global status bar ─────────────────────────────────────────────────────
+
+    private HBox buildGlobalStatusBar() {
+        globalStatus.setFont(Font.font(Font.getDefault().getFamily(), 10));
+
+        // Update status when data/scenario/cursor changes
+        state.document.blochData.addListener((obs, o, n) -> updateGlobalStatus());
+        state.document.currentScenario.addListener((obs, o, n) -> updateGlobalStatus());
+        state.viewport.tC.addListener((Observable obs) -> updateGlobalStatus());
+
+        var bar = new HBox(globalStatus);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setPadding(new Insets(2, 6, 2, 6));
+        return bar;
+    }
+
+    private void updateGlobalStatus() {
+        var data = state.document.blochData.get();
+        if (data == null) {
+            globalStatus.setText("No file loaded. Drag bloch_data.json here or use File > Open.");
+            return;
+        }
+        var scenario = state.document.currentScenario.get();
+        double tC = state.viewport.tC.get();
+        globalStatus.setText(String.format("Scenario: %s | cursor: %.1f \u00b5s | %d isochromats",
+            scenario != null ? scenario : "\u2014", tC,
+            state.isochromats.isochromats.size()));
+    }
+
     // ── Main layout ──────────────────────────────────────────────────────────
 
     private SplitPane buildMain() {
-        // Right side of top half: geometry over points list
         var geometryView = new GeometryViewPane(state);
         var pointsList   = new PointsOfInterestPane(state);
         var rightTop     = new SplitPane(geometryView, pointsList);
         rightTop.setOrientation(Orientation.VERTICAL);
         rightTop.setDividerPositions(0.65);
 
-        // Top half: sphere | right panel
         var sphere    = new SpherePane(state);
         var topSplit  = new SplitPane(sphere, rightTop);
         topSplit.setDividerPositions(0.58);
 
-        // Bottom area
         var timeline    = new TimelinePane(state);
         var phaseMaps   = new PhaseMapsPane(state);
         var anglePlots  = new AnglePlotsPane(state);
@@ -135,7 +161,6 @@ public class StudioWorkbench extends BorderPane {
         bottomSplit.setOrientation(Orientation.VERTICAL);
         bottomSplit.setDividerPositions(0.35);
 
-        // Main vertical split
         var main = new SplitPane(topSplit, bottomSplit);
         main.setOrientation(Orientation.VERTICAL);
         main.setDividerPositions(0.55);
@@ -149,6 +174,7 @@ public class StudioWorkbench extends BorderPane {
             BlochData data = BlochDataReader.read(file);
             state.document.blochData.set(data);
             state.isochromats.resetToDefaults();
+            updateGlobalStatus();
         } catch (Exception ex) {
             new Alert(Alert.AlertType.ERROR, "Failed to load: " + ex.getMessage()).showAndWait();
         }

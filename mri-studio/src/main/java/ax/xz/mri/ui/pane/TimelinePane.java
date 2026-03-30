@@ -6,7 +6,12 @@ import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.util.MathUtil;
 import javafx.beans.Observable;
 import javafx.scene.Cursor;
+import javafx.scene.Node;
 import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.Button;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
@@ -37,6 +42,20 @@ public class TimelinePane extends CanvasPane {
 
     @Override public String getPaneId()    { return "timeline"; }
     @Override public String getPaneTitle() { return "Timeline"; }
+
+    @Override
+    protected Node[] headerControls() {
+        var fitBtn = new Button("Fit");
+        fitBtn.setOnAction(e -> fitToData());
+
+        var zoomInBtn = new Button("Zoom In");
+        zoomInBtn.setOnAction(e -> zoomAroundCentre(0.5));
+
+        var zoomOutBtn = new Button("Zoom Out");
+        zoomOutBtn.setOnAction(e -> zoomAroundCentre(2.0));
+
+        return new Node[]{ fitBtn, zoomInBtn, zoomOutBtn };
+    }
 
     @Override
     protected Observable[] getRedrawTriggers() {
@@ -101,7 +120,10 @@ public class TimelinePane extends CanvasPane {
             updateCursor(e.getX());
         });
         canvas.setOnMouseReleased(e -> { dragMode = 0; canvas.setCursor(Cursor.DEFAULT); });
-        canvas.setOnMouseMoved(e -> updateCursor(e.getX()));
+        canvas.setOnMouseMoved(e -> {
+            updateCursor(e.getX());
+            updateStatusBar(e.getX());
+        });
         canvas.setOnScroll(e -> {
             double vS = appState.viewport.vS.get(), vE = appState.viewport.vE.get();
             double factor = e.getDeltaY() > 0 ? 0.8 : 1.25;
@@ -113,6 +135,27 @@ public class TimelinePane extends CanvasPane {
             ne = MathUtil.clamp(ne, ns + 1, max);
             appState.viewport.vS.set(ns);
             appState.viewport.vE.set(ne);
+        });
+        canvas.setOnContextMenuRequested(e -> {
+            double clickedTime = pixToTime(e.getX());
+
+            var setCursorItem = new MenuItem("Set cursor here");
+            setCursorItem.setOnAction(a -> appState.viewport.tC.set(
+                MathUtil.clamp(clickedTime, appState.viewport.vS.get(), appState.viewport.vE.get())));
+
+            var fitItem = new MenuItem("Fit to data");
+            fitItem.setOnAction(a -> fitToData());
+
+            var resetZoomItem = new MenuItem("Reset zoom");
+            resetZoomItem.setOnAction(a -> fitToData());
+
+            var menu = new ContextMenu(
+                setCursorItem,
+                new SeparatorMenuItem(),
+                fitItem,
+                resetZoomItem
+            );
+            showContextMenu(menu, e.getScreenX(), e.getScreenY());
         });
     }
 
@@ -128,6 +171,31 @@ public class TimelinePane extends CanvasPane {
             canvas.setCursor(Cursor.CLOSED_HAND);
         else
             canvas.setCursor(Cursor.OPEN_HAND);
+    }
+
+    private void updateStatusBar(double x) {
+        double cursorTime = pixToTime(x);
+        double tS = appState.viewport.tS.get();
+        double tE = appState.viewport.tE.get();
+        setStatus(String.format("tS=%.1f tE=%.1f \u00b5s | cursor: %.1f \u00b5s", tS, tE, cursorTime));
+    }
+
+    private void fitToData() {
+        double max = appState.viewport.maxTime.get();
+        appState.viewport.vS.set(0);
+        appState.viewport.vE.set(max);
+    }
+
+    private void zoomAroundCentre(double factor) {
+        double vS = appState.viewport.vS.get();
+        double vE = appState.viewport.vE.get();
+        double centre = (vS + vE) / 2.0;
+        double halfSpan = (vE - vS) / 2.0 * factor;
+        double max = appState.viewport.maxTime.get();
+        double ns = MathUtil.clamp(centre - halfSpan, 0, max);
+        double ne = MathUtil.clamp(centre + halfSpan, ns + 1, max);
+        appState.viewport.vS.set(ns);
+        appState.viewport.vE.set(ne);
     }
 
     @Override
