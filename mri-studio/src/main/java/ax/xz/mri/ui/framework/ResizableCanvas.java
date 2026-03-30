@@ -1,12 +1,11 @@
 package ax.xz.mri.ui.framework;
 
 import javafx.scene.canvas.Canvas;
-import javafx.stage.Screen;
 
 /**
- * A Canvas that follows its parent's size and renders at the screen's native
- * DPI (Retina/HiDPI aware). The logical size for layout purposes matches the
- * parent, but the backing pixel buffer is scaled up for crisp rendering.
+ * A Canvas that follows its parent's size and exposes a resize callback.
+ * JavaFX manages backing-buffer scaling internally, so this class stays honest
+ * about what it does instead of pretending to implement custom HiDPI logic.
  */
 public class ResizableCanvas extends Canvas {
     private Runnable onResized;

@@ -1,8 +1,164 @@
-/* MRI Studio — minimal overrides on default Modena light theme */
+/* MRI Studio workbench chrome */
+
+.root {
+    -fx-accent: #0078d4;
+    -fx-focus-color: #0078d4;
+    -fx-faint-focus-color: rgba(0, 120, 212, 0.15);
+}
+
+.studio-shell {
+    -fx-background-color: linear-gradient(to bottom, #f3f5f7, #e7ebef);
+}
+
+.menu-bar {
+    -fx-background-color: linear-gradient(to bottom, #f8fafc, #edf1f5);
+    -fx-border-color: transparent transparent #c8d0da transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.shell-tool-strip {
+    -fx-background-color: linear-gradient(to bottom, #eef2f6, #e1e7ee);
+    -fx-border-color: transparent transparent #c8d0da transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-alignment: center-left;
+}
+
+.shell-tool-strip .label {
+    -fx-text-fill: #334155;
+    -fx-font-size: 11px;
+}
+
+.shell-iteration-count {
+    -fx-text-fill: #64748b;
+    -fx-font-size: 10px;
+}
+
+.shell-iteration-slider .track {
+    -fx-pref-height: 4;
+    -fx-background-color: linear-gradient(to right, #cbd5e1, #94a3b8);
+}
+
+.shell-iteration-slider .thumb {
+    -fx-pref-width: 10;
+    -fx-pref-height: 14;
+    -fx-background-color: #0f6cbd;
+}
+
+.shell-status-bar {
+    -fx-background-color: linear-gradient(to bottom, #eef2f5, #dde4eb);
+    -fx-border-color: #c8d0da transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+.shell-status-bar .label {
+    -fx-text-fill: #425466;
+    -fx-font-size: 11px;
+}
+
+.workbench-pane {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #c8d0da;
+    -fx-border-width: 1;
+}
+
+.workbench-pane:active {
+    -fx-border-color: #4b9ed8;
+    -fx-effect: dropshadow(gaussian, rgba(0, 120, 212, 0.16), 10, 0.15, 0, 0);
+}
+
+.pane-header {
+    -fx-background-color: linear-gradient(to bottom, #f6f8fb, #e7edf3);
+    -fx-border-color: transparent transparent #d6dde6 transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-min-height: 28px;
+}
+
+.pane-title {
+    -fx-text-fill: #1f2937;
+    -fx-font-weight: 700;
+    -fx-font-size: 12px;
+}
+
+.pane-tool-strip {
+    -fx-alignment: center-left;
+}
+
+.pane-status-bar {
+    -fx-background-color: linear-gradient(to bottom, #f7f9fb, #eef2f6);
+    -fx-border-color: #e2e8f0 transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-min-height: 20px;
+}
+
+.pane-status-bar .label {
+    -fx-text-fill: #64748b;
+    -fx-font-size: 10px;
+}
+
+.pane-menu-button {
+    -fx-padding: 2 7 2 7;
+    -fx-background-radius: 4;
+}
+
+.visibility-eye-button {
+    -fx-padding: 1 4 1 4;
+    -fx-background-color: transparent;
+    -fx-text-fill: #334155;
+    -fx-font-size: 13px;
+}
+
+.visibility-eye-button:hover {
+    -fx-background-color: rgba(0, 120, 212, 0.10);
+}
+
+.dock-slot {
+    -fx-background-color: #ffffff;
+}
+
+.floating-placeholder {
+    -fx-background-color: linear-gradient(to bottom, #f8fafc, #eef2f7);
+    -fx-border-color: #cbd5e1;
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+    -fx-padding: 20;
+}
+
 .split-pane {
     -fx-padding: 0;
+    -fx-background-color: #e5eaf0;
 }
 
 .split-pane > .split-pane-divider {
     -fx-padding: 0 2 0 2;
+    -fx-background-color: #d3dae3;
+}
+
+.tab-pane {
+    -fx-background-color: #ffffff;
+}
+
+.table-view {
+    -fx-background-color: #ffffff;
+    -fx-border-color: transparent;
+}
+
+.table-view .column-header-background {
+    -fx-background-color: linear-gradient(to bottom, #f6f8fb, #e8edf3);
+}
+
+.table-view .column-header,
+.table-view .filler {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent transparent #dce3ea transparent;
+}
+
+.table-row-cell:selected {
+    -fx-background-color: rgba(0, 120, 212, 0.14);
+}
+
+.button,
+.combo-box-base,
+.slider .thumb,
+.check-box > .box {
+    -fx-background-radius: 4;
 }

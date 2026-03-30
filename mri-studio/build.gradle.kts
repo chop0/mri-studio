@@ -24,6 +24,7 @@ javafx {
 
 dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
 }
 
 application {
@@ -33,4 +34,8 @@ application {
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
