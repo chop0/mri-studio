@@ -283,7 +283,6 @@ def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, r
 
         Sx = jnp.sum(prob.w_in * Mx)
         Sy = jnp.sum(prob.w_in * My)
-        Sz = jnp.sum(prob.w_in * Mz)
         power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
         rf_power = jnp.sum(ctrl[:, 0] * ctrl[:, 0] + ctrl[:, 1] * ctrl[:, 1]) * dt32
         J = 2.0 * (Sx * Sx + Sy * Sy) + running - lam_out * power_out - rf_pen * rf_power
@@ -323,6 +322,35 @@ def simulate_numpy(ctrl, prob: ProblemNP, n_free, dt):
             sig[k] = np.abs(np.sum(prob.w_in * (Mx + 1j * My)))
             k += 1
     return sig, Mx, My, Mz
+
+
+def simulate_numpy_full(ctrl_list, segments, prob: ProblemNP):
+    """Simulate from thermal equilibrium through variable-dt segments.
+    ctrl_list: list of (n_steps, 4) arrays, one per segment.
+    segments: list of {"dt", "n_free", "n_pulse"} dicts.
+    """
+    Mx = np.zeros_like(prob.dBz)
+    My = np.zeros_like(prob.dBz)
+    Mz = np.ones_like(prob.dBz)
+    omega_free = GAMMA * prob.dBz
+    for si, (ctrl_seg, seg) in enumerate(zip(ctrl_list, segments)):
+        dt_s = seg["dt"]
+        nf = seg["n_free"]
+        E2 = np.exp(-dt_s / T2)
+        E1 = np.exp(-dt_s / T1)
+        for j in range(ctrl_seg.shape[0]):
+            b1x, b1y, ux, uz = ctrl_seg[j]
+            if j < nf:
+                Mx, My, Mz = z_step_numpy(
+                    Mx, My, Mz,
+                    omega_free + GAMMA * (ux * prob.Gxm + uz * prob.Gzm),
+                    dt_s, E1, E2)
+            else:
+                Mx, My, Mz = rodrigues_numpy(
+                    b1x * prob.B1s, b1y * prob.B1s,
+                    prob.dBz + ux * prob.Gxm + uz * prob.Gzm,
+                    Mx, My, Mz, dt_s, E1, E2)
+    return Mx, My, Mz
 
 
 def metrics(ctrl, prob: ProblemNP, n_free, dt):
@@ -366,6 +394,150 @@ def optimize_lbfgs(prob_jax: ProblemJAX, ctrl0, n_seg, n_free, n_pulse, dt, lam_
         method="L-BFGS-B",
         jac=True,
         bounds=bounds,
+        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
+        callback=cb,
+    )
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Full-sequence optimisation (variable-dt, including excitation)
+# ---------------------------------------------------------------------------
+
+def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
+    """
+    Build JIT-compiled value+grad for variable-dt multi-segment optimisation.
+    Starts from thermal equilibrium; excitation is part of the optimised controls.
+
+    segments: list of {"dt": float, "n_free": int, "n_pulse": int}
+    """
+    # Build per-step metadata arrays
+    gamma_dt_list = []
+    E1_list = []
+    E2_list = []
+    is_free_list = []
+    seg_end_list = []
+
+    for seg in segments:
+        dt_s = seg["dt"]
+        nf = seg["n_free"]
+        ns = nf + seg["n_pulse"]
+        for j in range(ns):
+            gamma_dt_list.append(GAMMA * dt_s)
+            E1_list.append(np.exp(-dt_s / T1))
+            E2_list.append(np.exp(-dt_s / T2))
+            is_free_list.append(j < nf)
+            seg_end_list.append(j == ns - 1)
+
+    n_total = len(gamma_dt_list)
+    gamma_dt_arr = jnp.array(gamma_dt_list, dtype=jnp.float32)
+    E1_arr = jnp.array(E1_list, dtype=jnp.float32)
+    E2_arr = jnp.array(E2_list, dtype=jnp.float32)
+    is_free_arr = jnp.array(is_free_list, dtype=jnp.bool_)
+    seg_end_arr = jnp.array(seg_end_list, dtype=jnp.bool_)
+    # Per-step dt for RF power penalty
+    dt_list = []
+    for seg in segments:
+        ns = seg["n_free"] + seg["n_pulse"]
+        dt_list.extend([seg["dt"]] * ns)
+    dt_arr = jnp.array(dt_list, dtype=jnp.float32)
+
+    N = prob.Gxm.shape[0]  # number of spatial points (flattened)
+
+    def loss(ctrl_flat):
+        ctrl = ctrl_flat.reshape((n_total, 4))
+
+        def body(carry, xs):
+            Mx, My, Mz, running = carry
+            u, gdt, e1, e2, free, seg_e = xs
+            b1x, b1y, ux, uz = u
+
+            # Free precession (z-rotation only)
+            th_free = gdt * (prob.dBz + ux * prob.Gxm + uz * prob.Gzm)
+            c_f = jnp.cos(th_free)
+            s_f = jnp.sin(th_free)
+            Mx_f = (Mx * c_f - My * s_f) * e2
+            My_f = (Mx * s_f + My * c_f) * e2
+            Mz_f = 1.0 + (Mz - 1.0) * e1
+
+            # Rodrigues rotation (full 3D)
+            bx = b1x * prob.B1s
+            by = b1y * prob.B1s
+            bz = prob.dBz + ux * prob.Gxm + uz * prob.Gzm
+            Bm = jnp.sqrt(bx * bx + by * by + bz * bz + 1e-30)
+            invBm = 1.0 / Bm
+            nx = bx * invBm
+            ny = by * invBm
+            nz = bz * invBm
+            th = gdt * Bm
+            cv = jnp.cos(th)
+            sv = jnp.sin(th)
+            omc = 1.0 - cv
+            ndM = nx * Mx + ny * My + nz * Mz
+            cx = ny * Mz - nz * My
+            cy = nz * Mx - nx * Mz
+            cz = nx * My - ny * Mx
+            Mx_r = (Mx * cv + cx * sv + nx * ndM * omc) * e2
+            My_r = (My * cv + cy * sv + ny * ndM * omc) * e2
+            Mz_r = 1.0 + (Mz * cv + cz * sv + nz * ndM * omc - 1.0) * e1
+
+            Mx_n = jnp.where(free, Mx_f, Mx_r)
+            My_n = jnp.where(free, My_f, My_r)
+            Mz_n = jnp.where(free, Mz_f, Mz_r)
+
+            Sx = jnp.sum(prob.w_in * Mx_n)
+            Sy = jnp.sum(prob.w_in * My_n)
+            running = running + jnp.where(seg_e, Sx * Sx + Sy * Sy, 0.0)
+
+            return (Mx_n, My_n, Mz_n, running), 0.0
+
+        # Start from thermal equilibrium
+        Mx0 = jnp.zeros(N, dtype=jnp.float32)
+        My0 = jnp.zeros(N, dtype=jnp.float32)
+        Mz0 = jnp.ones(N, dtype=jnp.float32)
+
+        (Mx, My, Mz, running), _ = jax.lax.scan(
+            body,
+            (Mx0, My0, Mz0, jnp.float32(0.0)),
+            (ctrl, gamma_dt_arr, E1_arr, E2_arr, is_free_arr, seg_end_arr),
+        )
+
+        Sx = jnp.sum(prob.w_in * Mx)
+        Sy = jnp.sum(prob.w_in * My)
+        power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
+        rf_power = jnp.sum((ctrl[:, 0] ** 2 + ctrl[:, 1] ** 2) * dt_arr)
+        J = 2.0 * (Sx * Sx + Sy * Sy) + running - lam_out * power_out - rf_pen * rf_power
+        return -J
+
+    return jax.jit(jax.value_and_grad(loss))
+
+
+def optimize_lbfgs_full(prob_jax, segments, ctrl0_list, lam_out=200.0,
+                        rf_pen=5e7, maxiter=100, callback_every=10):
+    """
+    Full-sequence L-BFGS-B optimisation with variable-dt segments.
+    ctrl0_list: list of np arrays, one per segment, each (n_steps, 4).
+    """
+    value_and_grad = make_value_and_grad_full(prob_jax, segments, lam_out, rf_pen)
+
+    x0 = np.concatenate([c.ravel() for c in ctrl0_list]).astype(np.float32)
+    n_total = sum(s["n_free"] + s["n_pulse"] for s in segments)
+    bounds = [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX),
+              (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total
+    counter = {"n": 0}
+    t0 = time.time()
+
+    def fg(x):
+        v, g = value_and_grad(jnp.asarray(x, dtype=jnp.float32))
+        return float(v), np.asarray(g, dtype=np.float64)
+
+    def cb(xk):
+        counter["n"] += 1
+        if callback_every > 0 and counter["n"] % callback_every == 0:
+            print(f"iter={counter['n']:4d}  elapsed={time.time() - t0:7.2f}s")
+
+    res = minimize(
+        fg, x0, method="L-BFGS-B", jac=True, bounds=bounds,
         options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
         callback=cb,
     )

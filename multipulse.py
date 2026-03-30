@@ -20,7 +20,8 @@ from mri_fast import (
     ProblemNP, ProblemJAX,
     compute_B0, build_cpmg_warm,
     excite_sinc_numpy, rodrigues_numpy, z_step_numpy,
-    make_value_and_grad,
+    make_value_and_grad, make_value_and_grad_full,
+    optimize_lbfgs_full, simulate_numpy_full,
 )
 
 
@@ -193,9 +194,27 @@ def run():
     print(f"\nGrid: {Nx}×{Nz} (non-uniform z)")
     print(f"In-slice weighted: {int(np.sum(mask2d))}  S_max: {prob_np.s_max:.0f}")
 
+    # --- Build excitation pulse (used for warm start and export) ---
+    dt_exc = 2e-6
+    T_exc = 400e-6
+    N_exc = int(T_exc / dt_exc)
+    N_reph = N_exc // 2
+    t_exc_arr = np.linspace(-T_exc / 2, T_exc / 2, N_exc)
+    rf_exc = np.sinc(t_exc_arr / (T_exc / 2)) * (0.54 + 0.46 * np.cos(2 * np.pi * t_exc_arr / T_exc))
+    rf_exc *= (np.pi / 2) / (GAMMA * np.sum(rf_exc) * dt_exc)
+    exc_steps = np.zeros((N_exc + N_reph, 4), dtype=np.float32)
+    exc_steps[:N_exc, 0] = rf_exc          # B1x during RF
+    exc_steps[:N_exc, 3] = GZ_MAX          # Gz during RF
+    exc_steps[N_exc:, 3] = -GZ_MAX         # -Gz during rephase
+
+    # Segment metadata (excitation + refocusing segments)
+    seg_meta = [{"dt": dt_exc, "n_free": 0, "n_pulse": N_exc + N_reph}]
+    for _ in range(n_seg):
+        seg_meta.append({"dt": dt, "n_free": n_free, "n_pulse": n_pulse})
+
     # --- Compile ---
     print("\nCompiling...")
-    vg = make_value_and_grad(prob_jax, n_seg, n_free, n_pulse, dt, 20000.0, 5e5)
+    vg = make_value_and_grad(prob_jax, n_seg, n_free, n_pulse, dt, 200.0, 5e7)
     ctrl0 = build_cpmg_warm(n_seg, n_free, n_pulse, dt)
     _ = vg(jnp.asarray(ctrl0.ravel(), dtype=jnp.float32))
     jax.block_until_ready(_)
@@ -229,6 +248,102 @@ def run():
 
     ctrl_opt = ctrl
 
+    # =================================================================
+    # Full-sequence GRAPE (optimises excitation + refocusing jointly)
+    # =================================================================
+    import sys
+    run_full = True
+
+    if run_full:
+        print("\n" + "=" * 65)
+        print("  Full-sequence GRAPE (excitation + refocusing)")
+        print("=" * 65)
+
+        # Geometry-only masks (no excitation threshold — excitation is optimised)
+        X_g, Z_g = np.meshgrid(x_arr, z_arr, indexing="ij")
+        geom_in_full = (np.abs(Z_g) < sw_half).astype(np.float32)
+        geom_out_full = (np.abs(Z_g) >= sw_half).astype(np.float32)
+        s_max_full = float(np.sum(geom_in_full))
+        print(f"Geometry-only mask: {int(s_max_full)} in-slice voxels")
+
+        flat_f = lambda a: jnp.asarray(a.ravel(), dtype=jnp.float32)
+        prob_jax_full = ProblemJAX(
+            flat_f(np.zeros_like(prob_np.dBz)),  # Mx0 — unused, starts from eq
+            flat_f(np.zeros_like(prob_np.dBz)),  # My0
+            flat_f(np.ones_like(prob_np.dBz)),   # Mz0
+            flat_f(prob_np.dBz), flat_f(prob_np.Gxm), flat_f(prob_np.Gzm),
+            flat_f(prob_np.B1s), flat_f(geom_in_full), flat_f(geom_out_full),
+            flat_f(GAMMA * prob_np.dBz), s_max_full, Nx, Nz,
+        )
+        prob_np_full = ProblemNP(
+            np.zeros_like(prob_np.dBz), np.zeros_like(prob_np.dBz),
+            np.ones_like(prob_np.dBz),
+            prob_np.dBz, prob_np.Gxm, prob_np.Gzm, prob_np.B1s,
+            geom_in_full, geom_out_full, s_max_full,
+        )
+
+        # Warm start: sinc excitation + best refocusing-only GRAPE result
+        ctrl_full_init = [exc_steps.copy()] + [ctrl_opt[si].copy() for si in range(n_seg)]
+        n_total_full = sum(s["n_free"] + s["n_pulse"] for s in seg_meta)
+        print(f"Total steps: {n_total_full}, variables: {n_total_full * 4}")
+
+        # Compile
+        t_full = time.time()
+        print("Compiling full-sequence value+grad...")
+        vg_full = make_value_and_grad_full(
+            prob_jax_full, seg_meta, lam_out=500.0, rf_pen=5e7)
+        x0_full = np.concatenate([c.ravel() for c in ctrl_full_init]).astype(np.float32)
+        _ = vg_full(jnp.asarray(x0_full))
+        jax.block_until_ready(_)
+        print(f"Compiled: {time.time() - t_full:.1f}s")
+
+        # Optimise with snapshots
+        bounds_full = [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX),
+                       (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total_full
+
+        def fg_full(xv):
+            v, g = vg_full(jnp.asarray(xv, dtype=jnp.float32))
+            return float(v), np.asarray(g, dtype=np.float64)
+
+        ctrl_f = x0_full.copy()
+        snapshots_full = {}
+        total_full = 0
+        snap_every_full = 25
+
+        # Split flat controls back into per-segment list
+        def split_ctrl(flat_c):
+            out = []
+            idx = 0
+            for seg in seg_meta:
+                ns = seg["n_free"] + seg["n_pulse"]
+                out.append(flat_c[idx:idx + ns * 4].reshape(ns, 4).astype(np.float32))
+                idx += ns * 4
+            return out
+
+        snapshots_full[0] = split_ctrl(ctrl_f)
+
+        for chunk in range(20):
+            res = minimize(fg_full, ctrl_f, method="L-BFGS-B", jac=True,
+                           bounds=bounds_full,
+                           options={"maxiter": snap_every_full, "ftol": 1e-12, "gtol": 1e-8})
+            ctrl_f = res.x.astype(np.float32)
+            total_full += res.nit
+            ctrl_list_f = split_ctrl(ctrl_f)
+            snapshots_full[total_full] = ctrl_list_f
+
+            Mx_ff, My_ff, Mz_ff = simulate_numpy_full(ctrl_list_f, seg_meta, prob_np_full)
+            m_ff = full_metrics(Mx_ff, My_ff, Mz_ff, geom_in_full, s_max_full)
+            print(f"  iter {total_full:4d}  coh={m_ff['coh']:.3f}  φ_std={m_ff['phi_std']:.1f}°  "
+                  f"θ_std={m_ff['theta_std']:.1f}°  sig={m_ff['sig']:.3f}  [{time.time()-t0:.0f}s]")
+            if res.nit < snap_every_full // 2:
+                print("  Converged")
+                break
+
+        ctrl_full_opt = ctrl_list_f
+    else:
+        ctrl_full_opt = None
+        snapshots_full = {}
+
     # --- Final metrics ---
     sig_opt, Mx_opt, My_opt, Mz_opt = simulate_numpy(ctrl_opt, prob_np, n_free, dt)
     m_opt = full_metrics(Mx_opt, My_opt, Mz_opt, prob_np.w_in, prob_np.s_max)
@@ -250,7 +365,13 @@ def run():
 
     print(f"\n{'':>20s} {'coh':>6s} {'sig':>6s} {'φ_std':>7s} {'θ_std':>7s}")
     print("-" * 50)
-    for nm, m in [("GRAPE", m_opt), ("Selective CPMG", m_cpmg), ("Basic CPMG", m_basic), ("Free", m_free)]:
+    results = [("GRAPE", m_opt), ("Selective CPMG", m_cpmg), ("Basic CPMG", m_basic), ("Free", m_free)]
+    if ctrl_full_opt is not None:
+        # Full GRAPE metrics (same masks for fair comparison)
+        Mx_fg, My_fg, Mz_fg = simulate_numpy_full(ctrl_full_opt, seg_meta, prob_np_full)
+        m_full = full_metrics(Mx_fg, My_fg, Mz_fg, prob_np.w_in, prob_np.s_max)
+        results.insert(0, ("Full GRAPE", m_full))
+    for nm, m in results:
         print(f"  {nm:18s} {m['coh']:6.3f} {m['sig']:6.3f} {m['phi_std']:6.1f}° {m['theta_std']:6.1f}°")
 
     # --- Plots ---
@@ -392,24 +513,6 @@ def run():
     B1s_f = 1 + 0.12 * (Rf / (FOV_X / 2)) ** 2 + 0.08 * (Zf / (FOV_Z / 2)) ** 2
     Mx0_f, My0_f, Mz0_f = excite_sinc_numpy(dBzfg, Gzm_f, B1s_f)
 
-    # Build excitation segment (matches excite_sinc_numpy internals)
-    dt_exc = 2e-6
-    T_exc = 400e-6
-    N_exc = int(T_exc / dt_exc)
-    N_reph = N_exc // 2
-    t_exc = np.linspace(-T_exc / 2, T_exc / 2, N_exc)
-    rf_exc = np.sinc(t_exc / (T_exc / 2)) * (0.54 + 0.46 * np.cos(2 * np.pi * t_exc / T_exc))
-    rf_exc *= (np.pi / 2) / (GAMMA * np.sum(rf_exc) * dt_exc)
-    exc_steps = np.zeros((N_exc + N_reph, 4), dtype=np.float32)
-    exc_steps[:N_exc, 0] = rf_exc          # B1x during RF
-    exc_steps[:N_exc, 3] = GZ_MAX          # Gz during RF
-    exc_steps[N_exc:, 3] = -GZ_MAX         # -Gz during rephase
-
-    # Segments metadata: excitation + n_seg refocusing segments
-    seg_meta = [{"dt": dt_exc, "n_free": 0, "n_pulse": N_exc + N_reph}]
-    for _ in range(n_seg):
-        seg_meta.append({"dt": dt, "n_free": n_free, "n_pulse": n_pulse})
-
     field_data = {
         "B0n": B0n, "gamma": GAMMA, "T1": T1, "T2": T2,
         "FOV_X": FOV_X, "FOV_Z": FOV_Z, "slice_half": sw_half,
@@ -455,6 +558,22 @@ def run():
             trajs.append([i, [v for pt in t for v in pt]])
         return trajs
 
+    def make_trajs_full(ctrl_list):
+        """Make trajectories from a list of per-segment control arrays."""
+        segs = []
+        for si, seg_m in enumerate(seg_meta):
+            segs.append({"dt": seg_m["dt"], "n_free": seg_m["n_free"],
+                         "steps": ctrl_list[si]})
+        trajs = []
+        for i, (_, xp, zp, _, _) in enumerate(iso_specs):
+            t = trace_isochromat(xp, zp, segs, B0n)
+            trajs.append([i, [v for pt in t for v in pt]])
+        return trajs
+
+    def export_ctrl_full(ctrl_list):
+        """Export a list of per-segment control arrays."""
+        return [export_seg(c) for c in ctrl_list]
+
     # Fixed scenarios
     precomp = {}
     for scen_name, c3d in [("GRAPE", ctrl_opt), ("Selective CPMG", ctrl0), ("Basic CPMG", ctrl_basic), ("Free", ctrl_free)]:
@@ -466,6 +585,15 @@ def run():
     for it, csnap in sorted(snapshots.items()):
         grape_iters[str(it)] = make_trajs(csnap)
         grape_pulses[str(it)] = export_ctrl(csnap)
+
+    # Full GRAPE (if run)
+    full_grape_iters = {}
+    full_grape_pulses = {}
+    if ctrl_full_opt is not None:
+        precomp["Full GRAPE"] = make_trajs_full(ctrl_full_opt)
+        for it, csnap_f in sorted(snapshots_full.items()):
+            full_grape_iters[str(it)] = make_trajs_full(csnap_f)
+            full_grape_pulses[str(it)] = export_ctrl_full(csnap_f)
 
     output = {
         "iso": [[n, c, ins] for n, _, _, c, ins in iso_specs],
@@ -481,6 +609,10 @@ def run():
         },
         "multi_segment": True,
     }
+    if ctrl_full_opt is not None:
+        output["pulses"]["Full GRAPE"] = export_ctrl_full(ctrl_full_opt)
+        output["pulses"]["grape_full"] = full_grape_pulses
+        output["grape_full"] = full_grape_iters
 
     out_json = json.dumps(output, separators=(",", ":"))
     json_path = "bloch_data.json"
