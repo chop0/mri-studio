@@ -286,10 +286,10 @@ def run():
     bounds_full = default_bounds_for_steps(total_steps)
 
     print("\nCompiling objectives...")
-    vg_refocus = make_value_and_grad_full(prob_jax, seg_meta, lam_out=200.0, rf_pen=5e7)
+    vg_refocus = make_value_and_grad_full(prob_jax, seg_meta, lam_out=10000.0, rf_pen=5e5)
     _ = vg_refocus(jnp.asarray(flatten_ctrl_list(base_selective), dtype=jnp.float32))
     jax.block_until_ready(_)
-    vg_geom = make_value_and_grad_full(prob_jax_full, seg_meta, lam_out=500.0, rf_pen=5e7)
+    vg_geom = make_value_and_grad_full(prob_jax_full, seg_meta, lam_out=10000.0, rf_pen=5e5)
     _ = vg_geom(jnp.asarray(flatten_ctrl_list(base_selective), dtype=jnp.float32))
     jax.block_until_ready(_)
     print(f"Compiled: {time.time() - t0:.1f}s")
@@ -311,8 +311,8 @@ def run():
             "base": base_selective,
             "free_mask": mask_all,
             "objective": vg_geom,
-            "snapshot_every": 25,
-            "maxiter": 500,
+            "snapshot_every": 100,
+            "maxiter": 1200,
             "log_metrics_prob": prob_np_full,
             "log_metrics_w": geom_in_full,
             "log_metrics_smax": s_max_full,
