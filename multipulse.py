@@ -31,6 +31,7 @@ from mri_opt import (
     default_bounds_for_steps,
     flatten_ctrl_list,
     flatten_mask_list,
+    optimize_annealed,
     optimize_masked_controls,
     split_ctrl_flat,
 )
@@ -101,23 +102,33 @@ def optimize_scenario_worker(task):
         stop_flag,
     ) = task
 
-    value_and_grad = make_value_and_grad_full(
-        problem_np_to_jax(objective_prob_np),
-        seg_meta,
-        lam_out=12.0,
-        lam_pow=1.5,
-        rf_pen=0.05,
-        rf_smooth_pen=4.0,
-        gate_switch_pen=1.5,
-        gate_binary_pen=0.15,
-    )
+    base_rf_smooth_pen = 4.0
+    prob_jax = problem_np_to_jax(objective_prob_np)
+
+    def vg_factory(rf_smooth_mul):
+        vg = make_value_and_grad_full(
+            prob_jax,
+            seg_meta,
+            lam_out=12.0,
+            lam_pow=1.5,
+            rf_pen=0.05,
+            rf_smooth_pen=base_rf_smooth_pen * rf_smooth_mul,
+            gate_switch_pen=1.5,
+            gate_binary_pen=0.15,
+        )
+        return vg
+
     ctrl0_flat = flatten_ctrl_list(base)
     free_mask_flat = flatten_mask_list(free_mask)
-    _ = value_and_grad(jnp.asarray(ctrl0_flat, dtype=jnp.float32))
+    # Warm up JIT with the first stage's objective
+    first_mul = (search.anneal_schedule[0].rf_smooth_mul
+                 if search and search.anneal_schedule else 10.0)
+    warmup_vg = vg_factory(first_mul)
+    _ = warmup_vg(jnp.asarray(ctrl0_flat, dtype=jnp.float32))
     jax.block_until_ready(_)
 
-    res = optimize_masked_controls(
-        value_and_grad=value_and_grad,
+    res = optimize_annealed(
+        vg_factory=vg_factory,
         ctrl0_flat=ctrl0_flat,
         free_mask_flat=free_mask_flat,
         bounds_full=bounds_full,
@@ -572,7 +583,12 @@ def run():
         opt_tasks = []
         opt_results = []
 
-        opt_workers = min(len(optimized_specs), max(os.cpu_count() or 1, 1))
+        # Use 1 worker on GPU to avoid VRAM exhaustion; scale to CPU count otherwise
+        try:
+            on_gpu = jax.devices()[0].platform == "gpu"
+        except Exception:
+            on_gpu = False
+        opt_workers = 1 if on_gpu else min(len(optimized_specs), max(os.cpu_count() or 1, 1))
         if optimized_specs:
             print(f"\nOptimizing scenarios with {opt_workers} worker(s)...")
             for spec in optimized_specs:
@@ -883,4 +899,9 @@ def run():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method("spawn")
+    except RuntimeError:
+        pass  # already set (e.g. Python 3.14+ defaults to spawn)
     run()
