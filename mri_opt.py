@@ -7,6 +7,7 @@ import numpy as np
 from scipy.optimize import minimize
 from tqdm import tqdm
 
+from jax_lbfgs import minimize_lbfgsb
 from mri_fast import B1_MAX, GX_MAX, GZ_MAX
 
 
@@ -218,6 +219,101 @@ def optimize_masked_controls(
     )
 
 
+def optimize_masked_controls_jax(
+    value_and_grad,
+    ctrl0_flat,
+    free_mask_flat,
+    bounds_full,
+    config: SearchConfig | None = None,
+    progress_fn: Callable[[int, np.ndarray, float], None] | None = None,
+    stop_requested_fn: Callable[[], bool] | None = None,
+    show_progress_bar: bool = True,
+):
+    """Like optimize_masked_controls but uses pure-JAX L-BFGS-B (no scipy)."""
+    config = config or SearchConfig()
+    ctrl0_flat = np.asarray(ctrl0_flat, dtype=np.float32)
+    free_mask_flat = np.asarray(free_mask_flat, dtype=bool).ravel()
+    snapshots = {0: ctrl0_flat.copy()}
+
+    if ctrl0_flat.shape != free_mask_flat.shape:
+        raise ValueError("ctrl0_flat and free_mask_flat must have the same shape")
+
+    free_idx = np.flatnonzero(free_mask_flat)
+    if free_idx.size == 0:
+        return MaskedOptimizationResult(
+            x_full=ctrl0_flat.copy(), nit=0, nfev=0, success=True,
+            message="No free variables.", snapshots=snapshots, best_value=float("nan"),
+        )
+
+    scales_full = np.array(
+        [max(abs(lo), abs(hi), 1e-12) for lo, hi in bounds_full], dtype=np.float32,
+    )
+    scale_free_np = scales_full[free_idx]
+    x0_norm = (ctrl0_flat[free_idx] / scale_free_np).astype(np.float32)
+
+    lb = jnp.array([bounds_full[i][0] / scales_full[i] for i in free_idx], dtype=jnp.float32)
+    ub = jnp.array([bounds_full[i][1] / scales_full[i] for i in free_idx], dtype=jnp.float32)
+
+    # On-device merge + value_and_grad + grad extract
+    frozen_jax = jnp.asarray(ctrl0_flat, dtype=jnp.float32)
+    free_idx_jax = jnp.asarray(free_idx, dtype=jnp.int32)
+    scale_free_jax = jnp.asarray(scale_free_np, dtype=jnp.float32)
+
+    @jax.jit
+    def fg_jax(x_free_norm):
+        x_full = frozen_jax.at[free_idx_jax].set(x_free_norm * scale_free_jax)
+        val, grad_full = value_and_grad(x_full)
+        return val, grad_full[free_idx_jax] * scale_free_jax
+
+    snapshot_every = max(config.snapshot_every, 1)
+    print_every = max(config.print_every, 1)
+    best_value = float("inf")
+    best_x_norm = jnp.array(x0_norm)
+
+    bar = tqdm(total=config.opt_steps, desc="L-BFGS-B", unit="iter", leave=True) if show_progress_bar else None
+
+    def cb(nit, x_norm, val):
+        nonlocal best_value, best_x_norm
+        if val < best_value:
+            best_value = val
+            best_x_norm = x_norm
+        if bar is not None:
+            bar.update(1)
+            bar.set_postfix(score=-best_value)
+        need_snap = nit % snapshot_every == 0
+        need_prog = progress_fn is not None and (print_every <= 1 or nit % print_every == 0)
+        if need_snap or need_prog:
+            x_full = ctrl0_flat.copy()
+            x_full[free_idx] = np.asarray(x_norm, dtype=np.float32) * scale_free_np
+            if need_snap:
+                snapshots[nit] = x_full.copy()
+            if need_prog:
+                progress_fn(nit, x_full, best_value)
+        if stop_requested_fn is not None and stop_requested_fn():
+            return True
+        return False
+
+    try:
+        x_best, best_val, nit = minimize_lbfgsb(
+            fg_jax, jnp.array(x0_norm), (lb, ub),
+            maxiter=config.opt_steps, history_size=20, gtol=1e-8, callback=cb,
+        )
+    finally:
+        if bar is not None:
+            bar.close()
+
+    best_x_full = ctrl0_flat.copy()
+    best_x_full[free_idx] = np.asarray(best_x_norm, dtype=np.float32) * scale_free_np
+    snapshots[nit] = best_x_full.copy()
+
+    return MaskedOptimizationResult(
+        x_full=best_x_full.astype(np.float32),
+        nit=nit, nfev=nit, success=True,
+        message=f"Completed {nit} iterations",
+        snapshots=snapshots, best_value=best_value,
+    )
+
+
 def optimize_annealed(
     vg_factory: Callable[[float], Callable],
     ctrl0_flat: np.ndarray,
@@ -264,7 +360,7 @@ def optimize_annealed(
             if progress_fn is not None:
                 progress_fn(_offset + nit, best_x, bv)
 
-        res = optimize_masked_controls(
+        res = optimize_masked_controls_jax(
             value_and_grad=value_and_grad,
             ctrl0_flat=current_ctrl,
             free_mask_flat=free_mask_flat,
