@@ -68,6 +68,8 @@ export interface PhaseMapData {
   ticks?: number[];
 }
 
+export type CrossSectionShadeMode = "mp" | "signal";
+
 // ── Shared draw-state passed to every canvas renderer ────────────────────────
 
 export interface DrawState {
@@ -81,5 +83,6 @@ export interface DrawState {
   vE: number;      // viewport end   (μs)
   tC: number;      // cursor time   (μs)
   showMp: boolean;
+  xsShadeMode: CrossSectionShadeMode;
   xsH: number;     // cross-section half-height (mm)
 }

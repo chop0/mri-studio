@@ -27,6 +27,28 @@ T1 = 300e-3
 T2 = 100e-3
 
 
+def _normalized_objective_terms(
+    prob: ProblemJAX,
+    J_in,
+    J_out,
+    power_out,
+    rf_power,
+    rf_smooth,
+    dt_arr,
+):
+    signal_ref = jnp.float32(max(prob.s_max * prob.s_max, 1.0))
+    power_ref = jnp.float32(max(prob.s_max, 1.0))
+    rf_time_ref = jnp.maximum(jnp.sum(dt_arr), jnp.float32(1e-12))
+    rf_power_ref = jnp.float32(B1_MAX * B1_MAX) * rf_time_ref
+    return (
+        J_in / signal_ref,
+        J_out / signal_ref,
+        power_out / power_ref,
+        rf_power / rf_power_ref,
+        rf_smooth / rf_power_ref,
+    )
+
+
 @dataclass
 class ProblemNP:
     Mx0: np.ndarray
@@ -160,6 +182,16 @@ def build_cpmg_warm(n_seg, n_free, n_pulse, dt):
     return ctrl
 
 
+def outside_slice_weights(z, slice_half, power=2.0):
+    slice_half = max(float(slice_half), 1e-9)
+    dist = np.maximum(np.abs(z) - slice_half, 0.0) / slice_half
+    weights = np.where(dist > 0.0, 1.0 + dist ** power, 0.0).astype(np.float32)
+    outside = weights > 0.0
+    if np.any(outside):
+        weights[outside] /= np.mean(weights[outside], dtype=np.float64)
+    return weights
+
+
 def make_problem(nx=20, nz=80, sw=0.010):
     x = np.linspace(-FOV_X / 2, FOV_X / 2, nx, dtype=np.float32)
     z = np.linspace(-FOV_Z / 2, FOV_Z / 2, nz, dtype=np.float32)
@@ -172,7 +204,7 @@ def make_problem(nx=20, nz=80, sw=0.010):
     B1s = 1 + 0.12 * (X / FOV_X * 2) ** 2 + 0.08 * (Z / FOV_Z * 2) ** 2
     mask_in = np.abs(Z) < sw / 2
     w_in = mask_in.astype(np.float32)
-    w_out = (~mask_in).astype(np.float32)
+    w_out = outside_slice_weights(Z, sw / 2)
     s_max = float(np.sum(w_in))
     Mx0, My0, Mz0 = excite_sinc_numpy(dBz, Gzm, B1s)
 
@@ -207,11 +239,12 @@ def make_problem(nx=20, nz=80, sw=0.010):
     return prob_np, prob_jax
 
 
-def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, rf_pen):
+def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, lam_pow, rf_pen, rf_smooth_pen=0.0):
     n_steps = n_free + n_pulse
     n_total = n_seg * n_steps
     gamma_dt = jnp.float32(GAMMA * dt)
     dt32 = jnp.float32(dt)
+    dt_arr = jnp.full((n_total,), dt32, dtype=jnp.float32)
     E2 = jnp.float32(np.exp(-dt / T2))
     E1 = jnp.float32(np.exp(-dt / T1))
 
@@ -249,7 +282,7 @@ def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, r
         ctrl = ctrl_flat.reshape((n_total, 4))
 
         def body(carry, xs):
-            Mx, My, Mz, running = carry
+            Mx, My, Mz, running_in, running_out = carry
             idx, u = xs
             b1x, b1y, ux, uz = u
             is_free = (idx % n_steps) < n_free
@@ -270,21 +303,34 @@ def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, r
 
             Sx = jnp.sum(prob.w_in * Mx_n)
             Sy = jnp.sum(prob.w_in * My_n)
+            Sx_out = jnp.sum(prob.w_out * Mx_n)
+            Sy_out = jnp.sum(prob.w_out * My_n)
             end_seg = ((idx + 1) % n_steps) == 0
-            running = running + jnp.where(end_seg, Sx * Sx + Sy * Sy, 0.0)
-            return (Mx_n, My_n, Mz_n, running), 0.0
+            running_in = running_in + jnp.where(end_seg, Sx * Sx + Sy * Sy, 0.0)
+            running_out = running_out + jnp.where(end_seg, Sx_out * Sx_out + Sy_out * Sy_out, 0.0)
+            return (Mx_n, My_n, Mz_n, running_in, running_out), 0.0
 
-        (Mx, My, Mz, running), _ = jax.lax.scan(
+        (Mx, My, Mz, running_in, running_out), _ = jax.lax.scan(
             body,
-            (prob.Mx0, prob.My0, prob.Mz0, jnp.float32(0.0)),
+            (prob.Mx0, prob.My0, prob.Mz0, jnp.float32(0.0), jnp.float32(0.0)),
             (jnp.arange(n_total), ctrl),
         )
 
         Sx = jnp.sum(prob.w_in * Mx)
         Sy = jnp.sum(prob.w_in * My)
+        Sx_out = jnp.sum(prob.w_out * Mx)
+        Sy_out = jnp.sum(prob.w_out * My)
         power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
-        rf_power = jnp.sum(ctrl[:, 0] * ctrl[:, 0] + ctrl[:, 1] * ctrl[:, 1]) * dt32
-        J = 2.0 * (Sx * Sx + Sy * Sy) + running - lam_out * power_out - rf_pen * rf_power
+        rf_power = jnp.sum((ctrl[:, 0] * ctrl[:, 0] + ctrl[:, 1] * ctrl[:, 1]) * dt_arr)
+        rf_xy = ctrl[:, :2].reshape((n_seg, n_steps, 2))
+        rf_second_diff = rf_xy[:, 2:, :] - 2.0 * rf_xy[:, 1:-1, :] + rf_xy[:, :-2, :]
+        rf_smooth = jnp.sum(rf_second_diff * rf_second_diff) * dt32
+        J_in = 2.0 * (Sx * Sx + Sy * Sy) + running_in
+        J_out = 2.0 * (Sx_out * Sx_out + Sy_out * Sy_out) + running_out
+        J_in, J_out, power_out, rf_power, rf_smooth = _normalized_objective_terms(
+            prob, J_in, J_out, power_out, rf_power, rf_smooth, dt_arr
+        )
+        J = J_in - lam_out * J_out - lam_pow * power_out - rf_pen * rf_power - rf_smooth_pen * rf_smooth
         return -J
 
     return jax.jit(jax.value_and_grad(loss))
@@ -373,7 +419,7 @@ def metrics(ctrl, prob: ProblemNP, n_free, dt):
 # Full-sequence objective (variable-dt, including excitation)
 # ---------------------------------------------------------------------------
 
-def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
+def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth_pen=0.0):
     """
     Build JIT-compiled value+grad for variable-dt multi-segment optimisation.
     Starts from thermal equilibrium; excitation is part of the optimised controls.
@@ -410,6 +456,14 @@ def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
         ns = seg["n_free"] + seg["n_pulse"]
         dt_list.extend([seg["dt"]] * ns)
     dt_arr = jnp.array(dt_list, dtype=jnp.float32)
+    seg_id_list = []
+    local_step_list = []
+    for si, seg in enumerate(segments):
+        ns = seg["n_free"] + seg["n_pulse"]
+        seg_id_list.extend([si] * ns)
+        local_step_list.extend(list(range(ns)))
+    seg_id_arr = jnp.array(seg_id_list, dtype=jnp.int32)
+    local_step_arr = jnp.array(local_step_list, dtype=jnp.int32)
 
     N = prob.Gxm.shape[0]  # number of spatial points (flattened)
 
@@ -417,7 +471,7 @@ def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
         ctrl = ctrl_flat.reshape((n_total, 4))
 
         def body(carry, xs):
-            Mx, My, Mz, running = carry
+            Mx, My, Mz, running_in, running_out = carry
             u, gdt, e1, e2, free, seg_e = xs
             b1x, b1y, ux, uz = u
 
@@ -456,26 +510,46 @@ def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
 
             Sx = jnp.sum(prob.w_in * Mx_n)
             Sy = jnp.sum(prob.w_in * My_n)
-            running = running + jnp.where(seg_e, Sx * Sx + Sy * Sy, 0.0)
+            Sx_out = jnp.sum(prob.w_out * Mx_n)
+            Sy_out = jnp.sum(prob.w_out * My_n)
+            running_in = running_in + jnp.where(seg_e, Sx * Sx + Sy * Sy, 0.0)
+            running_out = running_out + jnp.where(seg_e, Sx_out * Sx_out + Sy_out * Sy_out, 0.0)
 
-            return (Mx_n, My_n, Mz_n, running), 0.0
+            return (Mx_n, My_n, Mz_n, running_in, running_out), 0.0
 
         # Start from thermal equilibrium
         Mx0 = jnp.zeros(N, dtype=jnp.float32)
         My0 = jnp.zeros(N, dtype=jnp.float32)
         Mz0 = jnp.ones(N, dtype=jnp.float32)
 
-        (Mx, My, Mz, running), _ = jax.lax.scan(
+        (Mx, My, Mz, running_in, running_out), _ = jax.lax.scan(
             body,
-            (Mx0, My0, Mz0, jnp.float32(0.0)),
+            (Mx0, My0, Mz0, jnp.float32(0.0), jnp.float32(0.0)),
             (ctrl, gamma_dt_arr, E1_arr, E2_arr, is_free_arr, seg_end_arr),
         )
 
         Sx = jnp.sum(prob.w_in * Mx)
         Sy = jnp.sum(prob.w_in * My)
+        Sx_out = jnp.sum(prob.w_out * Mx)
+        Sy_out = jnp.sum(prob.w_out * My)
         power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
         rf_power = jnp.sum((ctrl[:, 0] ** 2 + ctrl[:, 1] ** 2) * dt_arr)
-        J = 2.0 * (Sx * Sx + Sy * Sy) + running - lam_out * power_out - rf_pen * rf_power
+        rf_xy = ctrl[:, :2]
+        prev1 = jnp.concatenate([rf_xy[:1], rf_xy[:-1]], axis=0)
+        prev2 = jnp.concatenate([rf_xy[:1], rf_xy[:1], rf_xy[:-2]], axis=0)
+        valid_second = local_step_arr >= 2
+        same_seg_prev1 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]], axis=0)
+        same_seg_prev2 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:1], seg_id_arr[:-2]], axis=0)
+        valid_second = valid_second & same_seg_prev1 & same_seg_prev2
+        rf_second_diff = rf_xy - 2.0 * prev1 + prev2
+        rf_second_diff = jnp.where(valid_second[:, None], rf_second_diff, 0.0)
+        rf_smooth = jnp.sum(rf_second_diff * rf_second_diff * dt_arr[:, None])
+        J_in = 2.0 * (Sx * Sx + Sy * Sy) + running_in
+        J_out = 2.0 * (Sx_out * Sx_out + Sy_out * Sy_out) + running_out
+        J_in, J_out, power_out, rf_power, rf_smooth = _normalized_objective_terms(
+            prob, J_in, J_out, power_out, rf_power, rf_smooth, dt_arr
+        )
+        J = J_in - lam_out * J_out - lam_pow * power_out - rf_pen * rf_power - rf_smooth_pen * rf_smooth
         return -J
 
     return jax.jit(jax.value_and_grad(loss))
@@ -493,7 +567,7 @@ def run_demo():
     ctrl0 = build_cpmg_warm(n_seg, n_free, n_pulse, dt)
 
     t = time.time()
-    value_and_grad = make_value_and_grad(fine_jax, n_seg, n_free, n_pulse, dt, 200.0, 5e7)
+    value_and_grad = make_value_and_grad(fine_jax, n_seg, n_free, n_pulse, dt, 200.0, 2.0, 5e7)
     _ = value_and_grad(jnp.asarray(ctrl0.ravel(), dtype=jnp.float32))
     jax.block_until_ready(_)
     compile_time = time.time() - t

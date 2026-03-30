@@ -34,8 +34,7 @@ export function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** Convert HSV-like (phase hue + |M⊥| brightness) to an rgb() string. */
-export function hue2rgb(phaseDeg: number, brightness: number): string {
+export function hue2rgbBytes(phaseDeg: number, brightness: number): [number, number, number] {
   const hh = (((phaseDeg % 360) + 360) % 360) / 60;
   const hi = hh | 0;
   const f  = hh - hi;
@@ -49,5 +48,11 @@ export function hue2rgb(phaseDeg: number, brightness: number): string {
     case 4: r = f; g = 0; b = 1; break;
     default: r = 1; g = 0; b = q;
   }
-  return `rgb(${~~(r * brightness * 255)},${~~(g * brightness * 255)},${~~(b * brightness * 255)})`;
+  return [~~(r * brightness * 255), ~~(g * brightness * 255), ~~(b * brightness * 255)];
+}
+
+/** Convert HSV-like (phase hue + |M⊥| brightness) to an rgb() string. */
+export function hue2rgb(phaseDeg: number, brightness: number): string {
+  const [r, g, b] = hue2rgbBytes(phaseDeg, brightness);
+  return `rgb(${r},${g},${b})`;
 }

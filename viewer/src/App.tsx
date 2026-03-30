@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { COLORS, BG, BG2, GR, TX, TX2, AC, CUR } from "./constants";
-import { BlochData, CamState, DrawState, Isochromat, PhaseMapData, PulseSegment } from "./types";
+import { BlochData, CamState, CrossSectionShadeMode, DrawState, Isochromat, PhaseMapData, PulseSegment } from "./types";
 import { clamp } from "./canvas";
 import { sim, getPulse, compPhaseZ, compPhaseR } from "./physics";
 import { drawSphere }       from "./draw/sphere";
@@ -78,6 +78,7 @@ export default function App() {
   const [cam,      setCam]      = useState<CamState>({ th: 0.72, ph: 0.38, zm: 1 });
   const [isos,     setIsos]     = useState<Isochromat[]>([]);
   const [showMp,   setShowMp]   = useState(false);
+  const [xsShadeMode, setXsShadeMode] = useState<CrossSectionShadeMode>("mp");
   const [xsH,      setXsH]      = useState(20);
   const [nCI,      setNCI]      = useState(0);
   const [pmZ,      setPmZ]      = useState<PhaseMapData | null>(null);
@@ -120,7 +121,7 @@ export default function App() {
   }, [data, pulse]);
 
   // Redraw all canvases on every render
-  const state: DrawState = { D: data, pulse, isos, cam, tS, tE, vS, vE, tC, showMp, xsH };
+  const state: DrawState = { D: data, pulse, isos, cam, tS, tE, vS, vE, tC, showMp, xsShadeMode, xsH };
   useEffect(() => {
     drawSphere(canvases.sphere.current, state);
     drawTimeline(canvases.tl.current, state);
@@ -441,6 +442,16 @@ export default function App() {
             <span className="font-bold" style={{ color: CUR }}>iter {iterNums[gIdx]}</span>
           </>
         )}
+
+        <select
+          className="px-2 py-1 rounded border text-xs"
+          style={{ background: BG2, borderColor: GR, color: TX }}
+          value={xsShadeMode}
+          onChange={e => setXsShadeMode(e.target.value as CrossSectionShadeMode)}
+        >
+          <option value="mp">Cross-section: |M⊥|</option>
+          <option value="signal">Cross-section: Signal Projection</option>
+        </select>
 
         <label className="ml-auto flex items-center gap-1 cursor-pointer" style={{ color: TX2 }}>
           <input type="checkbox" checked={showMp} onChange={e => setShowMp(e.target.checked)} className="accent-blue-500" />

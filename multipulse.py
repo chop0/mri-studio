@@ -7,16 +7,21 @@ Exports GRAPE iteration snapshots for the Bloch viewer.
 
 import time
 import json
+import os
 from dataclasses import dataclass
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Manager
 
 import numpy as np
 import jax
 import jax.numpy as jnp
+from tqdm import tqdm
 
 from mri_fast import (
     GAMMA, T1, T2, FOV_X, FOV_Z, GX_MAX, GZ_MAX, B1_MAX,
     ProblemNP, ProblemJAX,
     compute_B0, build_cpmg_warm,
+    outside_slice_weights,
     excite_sinc_numpy, rodrigues_numpy, z_step_numpy,
     make_value_and_grad_full,
 )
@@ -35,11 +40,96 @@ class ScenarioSpec:
     name: str
     base: list[np.ndarray]
     free_mask: list[np.ndarray]
-    objective: object | None = None
+    objective_kind: str | None = None
     search: SearchConfig | None = None
     log_metrics_prob: ProblemNP | None = None
     log_metrics_w: np.ndarray | None = None
     log_metrics_smax: float | None = None
+
+
+def problem_np_to_jax(prob_np: ProblemNP) -> ProblemJAX:
+    flat = lambda a: jnp.asarray(a.ravel(), dtype=jnp.float32)
+    nx, nz = prob_np.dBz.shape
+    return ProblemJAX(
+        flat(prob_np.Mx0),
+        flat(prob_np.My0),
+        flat(prob_np.Mz0),
+        flat(prob_np.dBz),
+        flat(prob_np.Gxm),
+        flat(prob_np.Gzm),
+        flat(prob_np.B1s),
+        flat(prob_np.w_in),
+        flat(prob_np.w_out),
+        flat(GAMMA * prob_np.dBz),
+        prob_np.s_max,
+        nx,
+        nz,
+    )
+
+
+def optimize_scenario_worker(task):
+    (
+        name,
+        base,
+        free_mask,
+        seg_meta,
+        bounds_full,
+        search,
+        objective_prob_np,
+        eval_prob_np,
+        eval_w,
+        eval_smax,
+        progress_queue,
+    ) = task
+
+    value_and_grad = make_value_and_grad_full(
+        problem_np_to_jax(objective_prob_np),
+        seg_meta,
+        lam_out=12.0,
+        lam_pow=1.5,
+        rf_pen=0.05,
+        rf_smooth_pen=4.0,
+    )
+    ctrl0_flat = flatten_ctrl_list(base)
+    free_mask_flat = flatten_mask_list(free_mask)
+    _ = value_and_grad(jnp.asarray(ctrl0_flat, dtype=jnp.float32))
+    jax.block_until_ready(_)
+
+    res = optimize_masked_controls(
+        value_and_grad=value_and_grad,
+        ctrl0_flat=ctrl0_flat,
+        free_mask_flat=free_mask_flat,
+        bounds_full=bounds_full,
+        config=search,
+        progress_fn=(
+            None
+            if progress_queue is None
+            else lambda nit, _best_x, best_value: progress_queue.put(
+                ("progress", name, int(nit), float(best_value))
+            )
+        ),
+        show_progress_bar=progress_queue is None,
+    )
+    ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
+    snapshots = {
+        int(it): split_ctrl_flat(flat_ctrl, seg_meta)
+        for it, flat_ctrl in sorted(res.snapshots.items())
+    }
+    sig_eval, Mx_eval, My_eval, Mz_eval = simulate_numpy_full_signal(ctrl_list, seg_meta, eval_prob_np)
+    m_eval = full_metrics(Mx_eval, My_eval, Mz_eval, eval_w, eval_smax)
+    if progress_queue is not None:
+        progress_queue.put(("done", name, int(res.nit), float(res.best_value)))
+    return {
+        "name": name,
+        "message": str(res.message),
+        "ctrl_list": ctrl_list,
+        "snapshots": snapshots,
+        "sig": sig_eval,
+        "Mx": Mx_eval,
+        "My": My_eval,
+        "Mz": Mz_eval,
+        "metrics": m_eval,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +157,7 @@ def make_problem_dense(Nx=12, sw_half=0.004, exc_threshold=0.3):
 
     geom_in = np.abs(Z) < sw_half
     w_in = ((Mp0 > exc_threshold) & geom_in).astype(np.float32)
-    w_out = (~geom_in).astype(np.float32)
+    w_out = outside_slice_weights(Z, sw_half)
     s_max = float(np.sum(w_in))
 
     prob_np = ProblemNP(
@@ -270,7 +360,7 @@ def run():
 
     X_g, Z_g = np.meshgrid(x_arr, z_arr, indexing="ij")
     geom_in_full = (np.abs(Z_g) < sw_half).astype(np.float32)
-    geom_out_full = (np.abs(Z_g) >= sw_half).astype(np.float32)
+    geom_out_full = outside_slice_weights(Z_g, sw_half)
     s_max_full = float(np.sum(geom_in_full))
 
     flat_f = lambda a: jnp.asarray(a.ravel(), dtype=jnp.float32)
@@ -300,26 +390,17 @@ def run():
 
     total_steps = sum(seg["n_free"] + seg["n_pulse"] for seg in seg_meta)
     bounds_full = default_bounds_for_steps(total_steps)
-    print("\nCompiling objectives...")
-    vg_refocus = make_value_and_grad_full(prob_jax, seg_meta, lam_out=10000.0, rf_pen=5e5)
-    _ = vg_refocus(jnp.asarray(flatten_ctrl_list(base_selective), dtype=jnp.float32))
-    jax.block_until_ready(_)
-    vg_geom = make_value_and_grad_full(prob_jax_full, seg_meta, lam_out=10000.0, rf_pen=5e5)
-    _ = vg_geom(jnp.asarray(flatten_ctrl_list(base_selective), dtype=jnp.float32))
-    jax.block_until_ready(_)
-    print(f"Compiled: {time.time() - t0:.1f}s")
 
     scenario_specs = [
         ScenarioSpec(
             name="GRAPE",
             base=base_selective,
             free_mask=mask_refocus,
-            objective=vg_refocus,
+            objective_kind="selective",
             search=SearchConfig(
-                opt_steps=1200,
-                snapshot_every=25,
-                print_every=25,
-                metric_every=100,
+                opt_steps=5000,
+                snapshot_every=100,
+                print_every=0,
             ),
             log_metrics_prob=prob_np,
             log_metrics_w=prob_np.w_in,
@@ -329,12 +410,11 @@ def run():
             name="Full GRAPE",
             base=base_selective,
             free_mask=mask_all,
-            objective=vg_geom,
+            objective_kind="full",
             search=SearchConfig(
-                opt_steps=1200,
-                snapshot_every=25,
-                print_every=25,
-                metric_every=100,
+                opt_steps=5000,
+                snapshot_every=100,
+                print_every=0,
             ),
             log_metrics_prob=prob_np_full,
             log_metrics_w=geom_in_full,
@@ -346,49 +426,115 @@ def run():
     ]
 
     scenario_results = {}
-    for spec in scenario_specs:
-        name = spec.name
-        base_flat = flatten_ctrl_list(spec.base)
-        free_mask_flat = flatten_mask_list(spec.free_mask)
-        n_free_vars = int(np.count_nonzero(free_mask_flat))
-        print(f"\n--- {name} ({n_free_vars} free variables) ---")
-        if spec.objective is not None and spec.search is not None:
-            def progress(step, x_best_flat, _best_value):
-                if step % max(spec.search.metric_every, 1) != 0:
-                    print(f"  step {step:4d}  objective={_best_value:.3f}  [{time.time()-t0:.0f}s]")
-                    return
-                ctrl_prog = split_ctrl_flat(x_best_flat, seg_meta)
-                _, Mx_prog, My_prog, Mz_prog = simulate_numpy_full_signal(
-                    ctrl_prog, seg_meta, spec.log_metrics_prob
-                )
-                m_prog = full_metrics(Mx_prog, My_prog, Mz_prog, spec.log_metrics_w, spec.log_metrics_smax)
-                print(f"  step {step:4d}  objective={_best_value:.3f}  coh={m_prog['coh']:.3f}  "
-                      f"φ_std={m_prog['phi_std']:.1f}°  θ_std={m_prog['theta_std']:.1f}°  "
-                      f"sig={m_prog['sig']:.3f}  [{time.time()-t0:.0f}s]")
+    optimized_specs = [spec for spec in scenario_specs if spec.objective_kind is not None and spec.search is not None]
+    static_specs = [spec for spec in scenario_specs if spec.objective_kind is None or spec.search is None]
 
-            res = optimize_masked_controls(
-                value_and_grad=spec.objective,
-                ctrl0_flat=base_flat,
-                free_mask_flat=free_mask_flat,
-                bounds_full=bounds_full,
-                config=spec.search,
-                progress_fn=progress,
-            )
-            ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
-            snapshots = {
-                int(it): split_ctrl_flat(flat_ctrl, seg_meta)
-                for it, flat_ctrl in sorted(res.snapshots.items())
-            }
-            log_metrics_prob = spec.log_metrics_prob
-            sig_log, Mx_log, My_log, Mz_log = simulate_numpy_full_signal(ctrl_list, seg_meta, log_metrics_prob)
-            m_log = full_metrics(Mx_log, My_log, Mz_log, spec.log_metrics_w, spec.log_metrics_smax)
-            print(f"  status: {res.message}")
+    opt_workers = min(len(optimized_specs), max(os.cpu_count() or 1, 1))
+    if optimized_specs:
+        print(f"\nOptimizing scenarios with {opt_workers} worker(s)...")
+        opt_tasks = []
+        for spec in optimized_specs:
+            n_free_vars = int(np.count_nonzero(flatten_mask_list(spec.free_mask)))
+            print(f"\n--- {spec.name} ({n_free_vars} free variables) ---")
+            opt_tasks.append({
+                "name": spec.name,
+                "task": (
+                    spec.name,
+                    spec.base,
+                    spec.free_mask,
+                    seg_meta,
+                    bounds_full,
+                    spec.search,
+                    spec.log_metrics_prob,
+                    prob_np,
+                    prob_np.w_in,
+                    prob_np.s_max,
+                ),
+                "opt_steps": spec.search.opt_steps,
+            })
+
+        if opt_workers > 1 and len(opt_tasks) > 1:
+            progress_bars = {}
+            with Manager() as manager:
+                progress_queue = manager.Queue()
+                with tqdm(total=0, position=0, bar_format="{desc}", leave=True) as progress_header:
+                    progress_header.set_description_str("Worker progress:")
+                    for pos, task_info in enumerate(opt_tasks, start=1):
+                        progress_bars[task_info["name"]] = tqdm(
+                            total=task_info["opt_steps"],
+                            desc=task_info["name"],
+                            unit="iter",
+                            position=pos,
+                            leave=True,
+                        )
+
+                    with ProcessPoolExecutor(max_workers=min(opt_workers, len(opt_tasks))) as pool:
+                        futures = [
+                            pool.submit(optimize_scenario_worker, (*task_info["task"], progress_queue))
+                            for task_info in opt_tasks
+                        ]
+                        pending = set(futures)
+                        opt_results = []
+
+                        while pending:
+                            while not progress_queue.empty():
+                                event, scenario_name, nit, best_value = progress_queue.get()
+                                bar = progress_bars[scenario_name]
+                                completed = min(max(int(nit), 0), int(bar.total))
+                                delta = completed - bar.n
+                                if delta > 0:
+                                    bar.update(delta)
+                                if np.isfinite(best_value):
+                                    bar.set_postfix(score=float(-best_value))
+                                if event == "done" and bar.n < bar.total:
+                                    bar.update(bar.total - bar.n)
+
+                            done_now = {future for future in pending if future.done()}
+                            for future in done_now:
+                                opt_results.append(future.result())
+                            pending -= done_now
+
+                            if pending:
+                                time.sleep(0.1)
+
+                        while not progress_queue.empty():
+                            event, scenario_name, nit, best_value = progress_queue.get()
+                            bar = progress_bars[scenario_name]
+                            completed = min(max(int(nit), 0), int(bar.total))
+                            delta = completed - bar.n
+                            if delta > 0:
+                                bar.update(delta)
+                            if np.isfinite(best_value):
+                                bar.set_postfix(score=float(-best_value))
+                            if event == "done" and bar.n < bar.total:
+                                bar.update(bar.total - bar.n)
+
+                    for bar in progress_bars.values():
+                        if bar.n < bar.total:
+                            bar.update(bar.total - bar.n)
+                        bar.close()
         else:
-            ctrl_list = [seg.copy() for seg in spec.base]
-            snapshots = {0: [seg.copy() for seg in ctrl_list]}
-            sig_log, Mx_log, My_log, Mz_log = simulate_numpy_full_signal(ctrl_list, seg_meta, prob_np)
-            m_log = full_metrics(Mx_log, My_log, Mz_log, prob_np.w_in, prob_np.s_max)
-            print("  Fully constrained; optimisation skipped.")
+            opt_results = [optimize_scenario_worker((*task_info["task"], None)) for task_info in opt_tasks]
+
+        for result in opt_results:
+            print(f"  {result['name']} status: {result['message']}")
+            scenario_results[result["name"]] = {
+                "ctrl_list": result["ctrl_list"],
+                "snapshots": result["snapshots"],
+                "sig": result["sig"],
+                "Mx": result["Mx"],
+                "My": result["My"],
+                "Mz": result["Mz"],
+                "metrics": result["metrics"],
+            }
+
+    for spec in static_specs:
+        name = spec.name
+        n_free_vars = int(np.count_nonzero(flatten_mask_list(spec.free_mask)))
+        print(f"\n--- {name} ({n_free_vars} free variables) ---")
+        ctrl_list = [seg.copy() for seg in spec.base]
+        snapshots = {0: [seg.copy() for seg in ctrl_list]}
+        print("  Fully constrained; optimisation skipped.")
 
         sig_eval, Mx_eval, My_eval, Mz_eval = simulate_numpy_full_signal(ctrl_list, seg_meta, prob_np)
         m_eval = full_metrics(Mx_eval, My_eval, Mz_eval, prob_np.w_in, prob_np.s_max)
