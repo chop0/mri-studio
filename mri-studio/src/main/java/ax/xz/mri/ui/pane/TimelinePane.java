@@ -1,7 +1,5 @@
 package ax.xz.mri.ui.pane;
 
-import ax.xz.mri.model.field.FieldMap;
-import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.state.AppState;
 import ax.xz.mri.ui.framework.CanvasPane;
 import ax.xz.mri.ui.theme.StudioTheme;
@@ -13,12 +11,11 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
 import java.util.ArrayList;
-import java.util.List;
 
 import static ax.xz.mri.ui.theme.StudioTheme.*;
 
 /**
- * Waveform timeline: |B₁|, Gz, Gx, and signal tracks with draggable window handles.
+ * Waveform timeline: |B1|, Gz, Gx, and signal tracks with draggable window handles.
  * Port of {@code drawTimeline()} from draw/timeline.ts.
  */
 public class TimelinePane extends CanvasPane {
@@ -28,9 +25,9 @@ public class TimelinePane extends CanvasPane {
 
     private static final double PAD_L = 40, PAD_R = 6, PAD_T = 2, PAD_B = 12;
 
-    // Drag state: 0=none, 1=tS, 2=tE, 3=tC, 4=pan
+    // Drag state: 0=none, 1=tS, 2=tE, 3=tC, 4=pan, 5=window body
     private int    dragMode = 0;
-    private double dragStartX, dragStartVS, dragStartVE;
+    private double dragStartX, dragStartVS, dragStartVE, dragStartTS, dragStartTE;
 
     public TimelinePane(AppState s) {
         super(s);
@@ -62,9 +59,16 @@ public class TimelinePane extends CanvasPane {
             if (Math.abs(x - tC) < 6)       dragMode = 3;
             else if (Math.abs(x - tS) < 6)  dragMode = 1;
             else if (Math.abs(x - tE) < 6)  dragMode = 2;
-            else                             { dragMode = 4; dragStartX = x;
-                                              dragStartVS = appState.viewport.vS.get();
-                                              dragStartVE = appState.viewport.vE.get(); }
+            else if (x > tS + 6 && x < tE - 6) {
+                // Inside the blue window body — drag the whole window
+                dragMode = 5;
+                dragStartX  = x;
+                dragStartTS = appState.viewport.tS.get();
+                dragStartTE = appState.viewport.tE.get();
+            }
+            else { dragMode = 4; dragStartX = x;
+                   dragStartVS = appState.viewport.vS.get();
+                   dragStartVE = appState.viewport.vE.get(); }
         });
         canvas.setOnMouseDragged(e -> {
             double t = pixToTime(e.getX());
@@ -84,6 +88,15 @@ public class TimelinePane extends CanvasPane {
                     appState.viewport.vS.set(ns);
                     appState.viewport.vE.set(ns + span);
                 }
+                case 5 -> {
+                    double span  = dragStartTE - dragStartTS;
+                    double delta = pixToTime(e.getX()) - pixToTime(dragStartX);
+                    double ns    = dragStartTS + delta;
+                    ns = MathUtil.clamp(ns, appState.viewport.vS.get(),
+                        appState.viewport.vE.get() - span);
+                    appState.viewport.tS.set(ns);
+                    appState.viewport.tE.set(ns + span);
+                }
             }
             updateCursor(e.getX());
         });
@@ -91,7 +104,6 @@ public class TimelinePane extends CanvasPane {
         canvas.setOnMouseMoved(e -> updateCursor(e.getX()));
         canvas.setOnScroll(e -> {
             double vS = appState.viewport.vS.get(), vE = appState.viewport.vE.get();
-            double span = vE - vS;
             double factor = e.getDeltaY() > 0 ? 0.8 : 1.25;
             double centre = pixToTime(e.getX());
             double ns = centre - (centre - vS) * factor;
@@ -112,6 +124,8 @@ public class TimelinePane extends CanvasPane {
             canvas.setCursor(Cursor.H_RESIZE);
         else if (Math.abs(x - tC) < 6)
             canvas.setCursor(Cursor.H_RESIZE);
+        else if (x > tS + 6 && x < tE - 6)
+            canvas.setCursor(Cursor.CLOSED_HAND);
         else
             canvas.setCursor(Cursor.OPEN_HAND);
     }
@@ -158,8 +172,8 @@ public class TimelinePane extends CanvasPane {
         if (sigTrace != null)
             for (var pt : sigTrace.points()) sigMax = Math.max(sigMax, pt.signal());
 
-        String[] labels = {"|B₁|", "Gz", "Gx", "Sig"};
-        Color[]  colours= {Color.web("#f59e0b"), Color.web("#3b82f6"), Color.web("#ef4444"), Color.web("#22c55e")};
+        String[] labels = {"|B\u2081|", "Gz", "Gx", "Sig"};
+        Color[]  colours= {Color.web("#e07000"), Color.web("#1565c0"), Color.web("#d32f2f"), Color.web("#2e7d32")};
         boolean[] centred = {false, true, true, false};
         double[]  maxVals = {250e-6, 0.035, 0.035, sigMax};
 
@@ -173,15 +187,15 @@ public class TimelinePane extends CanvasPane {
             g.setFill(ti % 2 == 1 ? BG2 : BG);
             g.fillRect(PAD_L, y0, pW, tH);
 
-            g.setStroke(withAlpha(GR, 1)); g.setLineWidth(0.5);
+            g.setStroke(GR); g.setLineWidth(0.5);
             g.strokeLine(PAD_L, y0 + tH, PAD_L + pW, y0 + tH);
 
-            g.setFill(TX2); g.setFont(MONO_BOLD_7); g.setTextAlign(TextAlignment.RIGHT);
+            g.setFill(TX2); g.setFont(UI_BOLD_7); g.setTextAlign(TextAlignment.RIGHT);
             g.fillText(labels[ti], PAD_L - 4, y0 + tH / 2 + 3);
             g.setTextAlign(TextAlignment.LEFT);
 
             if (centred[ti]) {
-                g.setStroke(Color.color(1, 1, 1, 0.04)); g.setLineWidth(0.5);
+                g.setStroke(Color.color(0, 0, 0, 0.06)); g.setLineWidth(0.5);
                 g.strokeLine(PAD_L, y0 + tH / 2, PAD_L + pW, y0 + tH / 2);
             }
 
@@ -190,7 +204,7 @@ public class TimelinePane extends CanvasPane {
                 if (rf.t1() < vS || rf.t0() > vE) continue;
                 double xF = Math.max(PAD_L, tPx(rf.t0()));
                 double xE = Math.min(PAD_L + pW, tPx(rf.t1()));
-                g.setFill(Color.color(1, 1, 1, 0.02));
+                g.setFill(Color.color(0, 0, 0, 0.03));
                 g.fillRect(xF, y0, xE - xF, tH);
             }
 
@@ -199,13 +213,13 @@ public class TimelinePane extends CanvasPane {
                 double t0 = segBounds.get(si).t0();
                 if (t0 < vS || t0 > vE) continue;
                 double xD = tPx(t0);
-                g.setStroke(Color.color(1, 1, 1, 0.06)); g.setLineWidth(0.5);
+                g.setStroke(Color.color(0, 0, 0, 0.08)); g.setLineWidth(0.5);
                 g.strokeLine(xD, y0, xD, y0 + tH);
             }
 
             // Waveform path (clipped)
             g.save(); g.beginPath(); g.rect(PAD_L, y0, pW, tH); g.clip();
-            g.beginPath(); g.setStroke(colours[ti]); g.setLineWidth(1.2); g.setGlobalAlpha(0.8);
+            g.beginPath(); g.setStroke(colours[ti]); g.setLineWidth(1.2); g.setGlobalAlpha(0.85);
             boolean started = false;
             if (ti == 3) { // signal
                 if (sigTrace != null) for (var pt : sigTrace.points()) {
@@ -242,7 +256,7 @@ public class TimelinePane extends CanvasPane {
         // Time-window highlight
         double xS = MathUtil.clamp(tPx(appState.viewport.tS.get()), PAD_L, PAD_L + pW);
         double xE = MathUtil.clamp(tPx(appState.viewport.tE.get()), PAD_L, PAD_L + pW);
-        g.setFill(AC); g.setGlobalAlpha(0.06);
+        g.setFill(AC); g.setGlobalAlpha(0.08);
         g.fillRect(xS, PAD_T, xE - xS, pH);
         g.setGlobalAlpha(1);
         for (double xh : new double[]{xS, xE}) {
@@ -258,7 +272,7 @@ public class TimelinePane extends CanvasPane {
         g.setGlobalAlpha(1);
 
         // Segment index labels
-        g.setFont(MONO_BOLD_7); g.setTextAlign(TextAlignment.CENTER);
+        g.setFont(UI_BOLD_7); g.setTextAlign(TextAlignment.CENTER);
         g.setFill(TX2); g.setGlobalAlpha(0.3);
         for (int si = 0; si < segBounds.size(); si++) {
             var sb = segBounds.get(si);
@@ -269,7 +283,7 @@ public class TimelinePane extends CanvasPane {
 
         // Time axis ticks
         int tickStep = niceTick(vSpan);
-        g.setFill(TX2); g.setFont(MONO_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.4);
+        g.setFill(TX2); g.setFont(UI_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.6);
         for (double t = Math.ceil(vS / tickStep) * tickStep; t <= vE; t += tickStep) {
             double px = tPx(t);
             if (px > PAD_L + 4 && px < PAD_L + pW - 4) {

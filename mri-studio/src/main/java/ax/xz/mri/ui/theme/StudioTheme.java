@@ -4,34 +4,45 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 
-/** Dark-theme colour constants and font definitions. Mirrors constants.ts. */
+/** Light-theme colour constants and font definitions for canvas rendering. */
 public final class StudioTheme {
     private StudioTheme() {}
 
-    // ── Colours ───────────────────────────────────────────────────────────────
-    public static final Color BG  = Color.web("#0b0b12");
-    public static final Color BG2 = Color.web("#101018");
-    public static final Color GR  = Color.web("#1a1a28");
-    public static final Color TX  = Color.web("#94a3b8");
-    public static final Color TX2 = Color.web("#4a5568");
-    public static final Color AC  = Color.web("#3b82f6");
-    public static final Color CUR = Color.web("#f59e0b");
+    // ── Canvas background colours ─────────────────────────────────────────────
+    public static final Color BG  = Color.web("#ffffff");
+    public static final Color BG2 = Color.web("#f5f5f5");
+    public static final Color GR  = Color.web("#d0d0d0");
+    public static final Color TX  = Color.web("#1a1a1a");
+    public static final Color TX2 = Color.web("#707070");
+    public static final Color AC  = Color.web("#0078d4");
+    public static final Color CUR = Color.web("#e06000");
 
     /** Palette for isochromats; cycles when more than 10 are defined. */
     public static final Color[] ISOCHROMAT_COLOURS = {
-        Color.web("#ef4444"), Color.web("#f59e0b"), Color.web("#22c55e"),
-        Color.web("#3b82f6"), Color.web("#a855f7"), Color.web("#ec4899"),
-        Color.web("#14b8a6"), Color.web("#f97316"), Color.web("#6366f1"),
-        Color.web("#84cc16"),
+        Color.web("#d32f2f"), Color.web("#e07000"), Color.web("#2e7d32"),
+        Color.web("#1565c0"), Color.web("#7b1fa2"), Color.web("#c2185b"),
+        Color.web("#00897b"), Color.web("#ef6c00"), Color.web("#4527a0"),
+        Color.web("#558b2f"),
     };
 
-    // ── Fonts ─────────────────────────────────────────────────────────────────
-    public static final Font MONO_7       = Font.font("monospace", 7);
-    public static final Font MONO_8       = Font.font("monospace", 8);
-    public static final Font MONO_10      = Font.font("monospace", 10);
-    public static final Font MONO_BOLD_7  = Font.font("monospace", FontWeight.BOLD, 7);
-    public static final Font MONO_BOLD_9  = Font.font("monospace", FontWeight.BOLD, 9);
-    public static final Font MONO_BOLD_10 = Font.font("monospace", FontWeight.BOLD, 10);
+    // ── Fonts (system default) ────────────────────────────────────────────────
+    private static final String FONT_FAMILY = Font.getDefault().getFamily();
+
+    public static final Font UI_7       = Font.font(FONT_FAMILY, 7);
+    public static final Font UI_8       = Font.font(FONT_FAMILY, 8);
+    public static final Font UI_9       = Font.font(FONT_FAMILY, 9);
+    public static final Font UI_10      = Font.font(FONT_FAMILY, 10);
+    public static final Font UI_BOLD_7  = Font.font(FONT_FAMILY, FontWeight.BOLD, 7);
+    public static final Font UI_BOLD_9  = Font.font(FONT_FAMILY, FontWeight.BOLD, 9);
+    public static final Font UI_BOLD_10 = Font.font(FONT_FAMILY, FontWeight.BOLD, 10);
+
+    // Aliases so existing canvas code compiles without mass-rename
+    public static final Font MONO_7       = UI_7;
+    public static final Font MONO_8       = UI_8;
+    public static final Font MONO_10      = UI_10;
+    public static final Font MONO_BOLD_7  = UI_BOLD_7;
+    public static final Font MONO_BOLD_9  = UI_BOLD_9;
+    public static final Font MONO_BOLD_10 = UI_BOLD_10;
 
     // ── Helper ────────────────────────────────────────────────────────────────
 

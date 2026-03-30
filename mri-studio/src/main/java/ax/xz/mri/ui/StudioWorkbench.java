@@ -3,41 +3,37 @@ package ax.xz.mri.ui;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.service.io.BlochDataReader;
 import ax.xz.mri.state.AppState;
-import ax.xz.mri.state.CrossSectionState.ShadeMode;
 import ax.xz.mri.ui.pane.*;
-import ax.xz.mri.ui.theme.StudioTheme;
 import javafx.geometry.Insets;
 import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.*;
-import javafx.scene.paint.Color;
 
 import java.io.File;
-import java.util.List;
 
 /**
- * Main application window: menu bar, toolbar, and SplitPane layout of all six panes.
+ * Main application window: menu bar, toolbar, and SplitPane layout of all panes.
  * Layout (roughly):
- *   ┌─────────────────────────────────────────────────────┐
- *   │ MenuBar                                              │
- *   │ ToolBar                                              │
- *   ├──────────────────────────┬──────────────────────────┤
- *   │                          │ CrossSectionPane          │
- *   │  SpherePane (large)      ├──────────────────────────┤
- *   │                          │ IsochromatListPane        │
- *   ├──────────────────────────┴──────────────────────────┤
- *   │ TimelinePane                                         │
- *   ├──────────────────────────┬──────────────────────────┤
- *   │ PhaseMapsPane            │ AnglePlotsPane            │
- *   └──────────────────────────┴──────────────────────────┘
+ *   +-----------------------------------------------------+
+ *   | MenuBar                                              |
+ *   | ToolBar (scenario, iteration)                        |
+ *   +---------------------------+--------------------------+
+ *   |                           | GeometryViewPane          |
+ *   |  SpherePane (large)       +-------------------------+
+ *   |                           | PointsOfInterestPane     |
+ *   +---------------------------+--------------------------+
+ *   | TimelinePane                                         |
+ *   +---------------------------+--------------------------+
+ *   | PhaseMapsPane             | AnglePlotsPane            |
+ *   +---------------------------+--------------------------+
  */
 public class StudioWorkbench extends BorderPane {
 
     private final AppState state = new AppState();
 
     public StudioWorkbench() {
-        setBackground(new Background(new BackgroundFill(StudioTheme.BG, null, null)));
         setTop(buildTop());
         setCenter(buildMain());
         installDropTarget();
@@ -52,7 +48,7 @@ public class StudioWorkbench extends BorderPane {
     }
 
     private MenuBar buildMenuBar() {
-        var open = new MenuItem("Open…");
+        var open = new MenuItem("Open\u2026");
         open.setOnAction(e -> {
             var fc = new javafx.stage.FileChooser();
             fc.setTitle("Open bloch_data.json");
@@ -68,9 +64,7 @@ public class StudioWorkbench extends BorderPane {
         resetLayout.setDisable(true);
         var viewMenu = new Menu("View", null, resetLayout);
 
-        var bar = new MenuBar(fileMenu, viewMenu);
-        bar.setStyle("-fx-background-color: #0d0d18; -fx-border-color: #1a1a28; -fx-border-width: 0 0 1 0;");
-        return bar;
+        return new MenuBar(fileMenu, viewMenu);
     }
 
     private HBox buildToolBar() {
@@ -96,8 +90,6 @@ public class StudioWorkbench extends BorderPane {
         iterSlider.setPrefWidth(120);
         iterSlider.setMajorTickUnit(1); iterSlider.setSnapToTicks(true);
         var iterLabel = new Label("0");
-        iterLabel.setTextFill(StudioTheme.TX2);
-        iterLabel.setFont(StudioTheme.MONO_8);
         state.document.iterationKeys.addListener((javafx.collections.ListChangeListener<String>) c -> {
             int n = state.document.iterationKeys.size();
             iterSlider.setMax(Math.max(0, n - 1));
@@ -106,47 +98,25 @@ public class StudioWorkbench extends BorderPane {
         iterSlider.valueProperty().addListener((obs, old, v) -> {
             int idx = (int) Math.round(v.doubleValue());
             state.document.iterationIndex.set(idx);
-            iterLabel.setText(state.document.iterationKeys.isEmpty() ? "—"
+            iterLabel.setText(state.document.iterationKeys.isEmpty() ? "\u2014"
                 : state.document.iterationKeys.get(Math.min(idx, state.document.iterationKeys.size() - 1)));
         });
 
-        // Shade mode
-        var shadeCb = new ComboBox<String>();
-        shadeCb.getItems().addAll("|M⊥|", "Signal");
-        shadeCb.setValue("|M⊥|");
-        shadeCb.setOnAction(e -> state.crossSection.shadeMode.set(
-            "Signal".equals(shadeCb.getValue()) ? ShadeMode.SIGNAL : ShadeMode.MP));
-
-        // Show |M⊥| projection
-        var showMpChk = new CheckBox("|M⊥|");
-        showMpChk.setTextFill(StudioTheme.TX2);
-        showMpChk.selectedProperty().bindBidirectional(state.crossSection.showMpProj);
-
-        style(scenarioBox); style(shadeCb);
-        style(iterSlider);
-
         var bar = new HBox(6,
-            label("Scenario:"), scenarioBox,
-            label("Iter:"), iterSlider, iterLabel,
-            new Separator(Orientation.VERTICAL),
-            label("Shade:"), shadeCb,
-            showMpChk);
-        bar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+            new Label("Scenario:"), scenarioBox,
+            new Label("Iter:"), iterSlider, iterLabel);
+        bar.setAlignment(Pos.CENTER_LEFT);
         bar.setPadding(new Insets(3, 6, 3, 6));
-        bar.setBackground(new Background(new BackgroundFill(
-            Color.web("#0d0d18"), null, null)));
-        bar.setBorder(new Border(new BorderStroke(Color.web("#1a1a28"),
-            BorderStrokeStyle.SOLID, null, new BorderWidths(0, 0, 1, 0))));
         return bar;
     }
 
     // ── Main layout ──────────────────────────────────────────────────────────
 
     private SplitPane buildMain() {
-        // Right side of top half: cross-section over iso list
-        var crossSection = new CrossSectionPane(state);
-        var isoList      = new IsochromatListPane(state);
-        var rightTop     = new SplitPane(crossSection, isoList);
+        // Right side of top half: geometry over points list
+        var geometryView = new GeometryViewPane(state);
+        var pointsList   = new PointsOfInterestPane(state);
+        var rightTop     = new SplitPane(geometryView, pointsList);
         rightTop.setOrientation(Orientation.VERTICAL);
         rightTop.setDividerPositions(0.65);
 
@@ -194,27 +164,5 @@ public class StudioWorkbench extends BorderPane {
             if (!files.isEmpty()) loadFile(files.get(0));
             e.setDropCompleted(true); e.consume();
         });
-    }
-
-    // ── Styling helpers ───────────────────────────────────────────────────────
-
-    private static Label label(String text) {
-        var l = new Label(text);
-        l.setTextFill(StudioTheme.TX2);
-        l.setFont(StudioTheme.MONO_8);
-        return l;
-    }
-
-    private static void style(Control c) {
-        c.setStyle("""
-            -fx-background-color: #101018;
-            -fx-text-fill: #94a3b8;
-            -fx-font-family: monospace;
-            -fx-font-size: 9px;
-            -fx-background-radius: 0;
-            -fx-border-radius: 0;
-            -fx-border-color: #1a1a28;
-            -fx-border-width: 1;
-            """);
     }
 }

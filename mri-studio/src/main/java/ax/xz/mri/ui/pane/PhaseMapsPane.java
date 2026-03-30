@@ -11,12 +11,13 @@ import javafx.beans.Observable;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
 import static ax.xz.mri.ui.theme.StudioTheme.*;
 
 /**
- * Two side-by-side phase heatmaps: φ(z, t) and φ(r, t).
+ * Two side-by-side phase heatmaps: phi(z, t) and phi(r, t).
  * Port of {@code drawPhaseMap()} from draw/phaseMap.ts.
  */
 public class PhaseMapsPane extends CanvasPane {
@@ -26,7 +27,6 @@ public class PhaseMapsPane extends CanvasPane {
 
     public PhaseMapsPane(AppState s) {
         super(s);
-        // Replace single-canvas layout with two-canvas HBox
         var box = new HBox(canvasZ, canvasR);
         HBox.setHgrow(canvasZ, Priority.ALWAYS);
         HBox.setHgrow(canvasR, Priority.ALWAYS);
@@ -50,19 +50,18 @@ public class PhaseMapsPane extends CanvasPane {
         };
     }
 
-    // The parent CanvasPane's own canvas isn't used; paint() dispatches to helpers.
     @Override
     protected void paint(GraphicsContext g, double w, double h) {
-        // parent canvas is hidden; drawing happens in the two sub-canvases below
+        // parent canvas unused; drawing happens in sub-canvases
     }
 
     @Override
     protected void scheduleRedraw() {
         super.scheduleRedraw();
         drawPhaseMap(canvasZ, appState.computed.phaseMapZ.get(),
-            "φ(z, t)", new double[]{-6, -3, 0, 3, 6}, true);
+            "\u03c6(z, t)", new double[]{-6, -3, 0, 3, 6}, true);
         drawPhaseMap(canvasR, appState.computed.phaseMapR.get(),
-            "φ(r, t)", new double[]{0, 10, 20, 30}, false);
+            "\u03c6(r, t)", new double[]{0, 10, 20, 30}, false);
     }
 
     private void drawPhaseMap(ResizableCanvas cv, PhaseMapData pm, String title,
@@ -81,17 +80,17 @@ public class PhaseMapsPane extends CanvasPane {
         double pH    = h - pad_t - pad_b;
 
         // Title
-        g.setFill(TX); g.setFont(MONO_BOLD_9); g.setTextAlign(TextAlignment.CENTER);
+        g.setFill(TX); g.setFont(UI_BOLD_9); g.setTextAlign(TextAlignment.CENTER);
         g.fillText(title, pad_l + pW / 2, pad_t - 3);
         g.setTextAlign(TextAlignment.LEFT);
 
         // Y-axis labels + grid
-        g.setFont(MONO_8); g.setTextAlign(TextAlignment.RIGHT); g.setFill(TX);
+        g.setFont(UI_8); g.setTextAlign(TextAlignment.RIGHT); g.setFill(TX);
         double yMin = pm.yArr()[0], yMax = pm.yArr()[pm.nY() - 1];
         for (double v : ticks) {
             double y = pad_t + pH * (1 - (v - yMin) / (yMax - yMin));
             g.fillText(String.valueOf((int) v), pad_l - 3, y + 2);
-            g.setStroke(withAlpha(TX, 0.04)); g.setLineWidth(0.3);
+            g.setStroke(Color.color(0, 0, 0, 0.06)); g.setLineWidth(0.3);
             g.strokeLine(pad_l, y, pad_l + pW, y);
         }
         g.setTextAlign(TextAlignment.LEFT);
@@ -118,11 +117,11 @@ public class PhaseMapsPane extends CanvasPane {
             double sh = (f.sliceHalf != null ? f.sliceHalf : 0.005) * 1e3;
             for (double zv : new double[]{-sh, sh}) {
                 double y = pad_t + pH * (1 - (zv - yMin) / (yMax - yMin));
-                g.setStroke(withAlpha(javafx.scene.paint.Color.web("#22c55e"), 0.3));
+                g.setStroke(Color.web("#2e7d32")); g.setGlobalAlpha(0.4);
                 g.setLineWidth(0.5); g.setLineDashes(3, 3);
                 g.strokeLine(pad_l, y, pad_l + pW, y);
             }
-            g.setLineDashes();
+            g.setLineDashes(); g.setGlobalAlpha(1);
         }
 
         // Cursor + triangle handle
@@ -137,12 +136,12 @@ public class PhaseMapsPane extends CanvasPane {
 
         // X-axis ticks
         int tickStep = niceTick(tSpan);
-        g.setFill(TX2); g.setFont(MONO_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.5);
+        g.setFill(TX2); g.setFont(UI_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.6);
         for (double t = Math.ceil(tMin / tickStep) * tickStep; t <= tMax; t += tickStep) {
             double px = pad_l + (t - tMin) / tSpan * pW;
             if (px > pad_l + 4 && px < pad_l + pW - 4) {
                 String lbl = tSpan > 2000
-                    ? String.format("%.0fms", t / 1000) : (int) t + "μs";
+                    ? String.format("%.0fms", t / 1000) : (int) t + "\u03bcs";
                 g.fillText(lbl, px, h - 2);
             }
         }

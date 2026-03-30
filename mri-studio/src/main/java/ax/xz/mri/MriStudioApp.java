@@ -1,6 +1,5 @@
 package ax.xz.mri;
 
-import atlantafx.base.theme.CupertinoDark;
 import ax.xz.mri.ui.StudioWorkbench;
 import javafx.application.Application;
 import javafx.scene.Scene;
@@ -8,14 +7,12 @@ import javafx.stage.Stage;
 
 /**
  * MRI Studio — entry point.
- * Applies the CupertinoDark AtlantaFX theme, then loads the main workbench.
+ * Uses the default Modena (light) theme with minimal CSS overrides.
  */
 public class MriStudioApp extends Application {
 
     @Override
     public void start(Stage stage) {
-        Application.setUserAgentStylesheet(new CupertinoDark().getUserAgentStylesheet());
-
         var workbench = new StudioWorkbench();
         var scene     = new Scene(workbench, 1400, 900);
 

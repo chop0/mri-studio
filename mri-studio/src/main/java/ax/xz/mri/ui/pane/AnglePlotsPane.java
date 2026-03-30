@@ -1,7 +1,5 @@
 package ax.xz.mri.ui.pane;
 
-import ax.xz.mri.model.simulation.MagnetisationState;
-import ax.xz.mri.model.simulation.Trajectory;
 import ax.xz.mri.state.AppState;
 import ax.xz.mri.ui.framework.CanvasPane;
 import ax.xz.mri.ui.theme.StudioTheme;
@@ -13,7 +11,7 @@ import javafx.scene.text.TextAlignment;
 import static ax.xz.mri.ui.theme.StudioTheme.*;
 
 /**
- * Three time-domain plots: Phase φ, Polar θ, |M⊥|.
+ * Three time-domain plots: Phase phi, Polar theta, |M⊥|.
  * Port of {@code drawPlots()} from draw/plots.ts.
  */
 public class AnglePlotsPane extends CanvasPane {
@@ -22,8 +20,8 @@ public class AnglePlotsPane extends CanvasPane {
                    int fn /* 0=phase, 1=polar, 2=mPerp */) {}
 
     private static final PlotDef[] PLOTS = {
-        new PlotDef("Phase φ",  "°",  -180, 180, new double[]{-180, -90, 0, 90, 180}, 0),
-        new PlotDef("Polar θ",  "°",     0, 180, new double[]{0, 45, 90, 135, 180},   1),
+        new PlotDef("Phase \u03c6",  "\u00b0",  -180, 180, new double[]{-180, -90, 0, 90, 180}, 0),
+        new PlotDef("Polar \u03b8",  "\u00b0",     0, 180, new double[]{0, 45, 90, 135, 180},   1),
         new PlotDef("|M\u22a5|", "",      0,   1, new double[]{0, 0.25, 0.5, 0.75, 1}, 2),
     };
 
@@ -79,23 +77,23 @@ public class AnglePlotsPane extends CanvasPane {
             g.setTextAlign(TextAlignment.RIGHT);
             for (double v : plot.ticks()) {
                 double y = oy + pH - (v - plot.min()) / (plot.max() - plot.min()) * pH;
-                g.setStroke(withAlpha(GR, v == 0 ? 0.5 : 0.2));
+                g.setStroke(Color.color(0, 0, 0, v == 0 ? 0.15 : 0.06));
                 g.setLineWidth(v == 0 ? 0.6 : 0.3);
                 g.strokeLine(ox, y, ox + pW, y);
-                g.setFill(TX); g.setFont(MONO_8);
-                String lbl = "°".equals(plot.unit()) ? (int) v + "°"
+                g.setFill(TX); g.setFont(UI_8);
+                String lbl = "\u00b0".equals(plot.unit()) ? (int) v + "\u00b0"
                              : (v % 1 != 0 ? String.format("%.2f", v) : String.valueOf((int) v));
                 g.fillText(lbl, ox - 4, y + 3);
             }
             g.setTextAlign(TextAlignment.LEFT);
 
             // Axis frame
-            g.setStroke(Color.color(1, 1, 1, 0.1)); g.setLineWidth(0.5);
+            g.setStroke(Color.color(0, 0, 0, 0.15)); g.setLineWidth(0.5);
             g.beginPath(); g.moveTo(ox, oy); g.lineTo(ox, oy + pH); g.lineTo(ox + pW, oy + pH); g.stroke();
 
             // X ticks
             int xTickStep = niceTick(tSpan);
-            g.setFill(TX2); g.setFont(MONO_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.5);
+            g.setFill(TX2); g.setFont(UI_7); g.setTextAlign(TextAlignment.CENTER); g.setGlobalAlpha(0.6);
             for (double t = Math.ceil(tMin / xTickStep) * xTickStep; t <= tMax; t += xTickStep) {
                 double px = ox + (t - tMin) / tSpan * pW;
                 if (px > ox + 4 && px < ox + pW - 4) {
@@ -103,13 +101,13 @@ public class AnglePlotsPane extends CanvasPane {
                         ? String.format("%.0f", t / 1000) + (t % 1000 != 0 ? String.format(".%01.0f", (t % 1000) / 100) : "")
                         : String.valueOf((int) t);
                     g.fillText(lbl, px, oy + pH + 10);
-                    g.setStroke(Color.color(1, 1, 1, 0.04)); g.setLineWidth(0.3);
+                    g.setStroke(Color.color(0, 0, 0, 0.04)); g.setLineWidth(0.3);
                     g.strokeLine(px, oy, px, oy + pH);
                 }
             }
             if (pi == 2) {
                 g.setTextAlign(TextAlignment.RIGHT);
-                g.fillText(tSpan > 2000 ? "ms" : "μs", ox + pW, oy + pH + 10);
+                g.fillText(tSpan > 2000 ? "ms" : "\u03bcs", ox + pW, oy + pH + 10);
                 g.setTextAlign(TextAlignment.LEFT);
             }
             g.setGlobalAlpha(1);
@@ -121,7 +119,7 @@ public class AnglePlotsPane extends CanvasPane {
             g.setGlobalAlpha(1);
 
             // Title
-            g.setFill(TX); g.setFont(MONO_BOLD_10); g.setTextAlign(TextAlignment.CENTER);
+            g.setFill(TX); g.setFont(UI_BOLD_10); g.setTextAlign(TextAlignment.CENTER);
             g.fillText(plot.title(), ox + pW / 2, oy - 3);
             g.setTextAlign(TextAlignment.LEFT);
 
@@ -129,7 +127,7 @@ public class AnglePlotsPane extends CanvasPane {
             g.save(); g.beginPath(); g.rect(ox, oy - 1, pW, pH + 2); g.clip();
             for (var iso : vis) {
                 var traj = iso.trajectory();
-                g.setStroke(iso.colour()); g.setLineWidth(1.2); g.setGlobalAlpha(0.8);
+                g.setStroke(iso.colour()); g.setLineWidth(1.2); g.setGlobalAlpha(0.85);
                 g.beginPath();
                 boolean started = false;
                 for (int i = 0; i < traj.pointCount(); i += 5) {

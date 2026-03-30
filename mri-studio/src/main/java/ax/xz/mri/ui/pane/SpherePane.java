@@ -1,6 +1,5 @@
 package ax.xz.mri.ui.pane;
 
-import ax.xz.mri.model.simulation.Isochromat;
 import ax.xz.mri.state.AppState;
 import ax.xz.mri.ui.canvas.Projection;
 import ax.xz.mri.ui.framework.CanvasPane;
@@ -63,12 +62,9 @@ public class SpherePane extends CanvasPane {
         g.fillRect(0, 0, w, h);
 
         // ── Wireframe rings ──────────────────────────────────────────────────
-        // Three great circles: equator (xy), xz, yz planes
-        double[][] ringMx = { null, null, null };  // dummy
-        // We'll define rings as lambdas via arrays-of-samples approach
-        drawRing(g, theta, phi, scale, cx, cy, 'e');  // equator
-        drawRing(g, theta, phi, scale, cx, cy, 'x');  // xz
-        drawRing(g, theta, phi, scale, cx, cy, 'y');  // yz
+        drawRing(g, theta, phi, scale, cx, cy, 'e');
+        drawRing(g, theta, phi, scale, cx, cy, 'x');
+        drawRing(g, theta, phi, scale, cx, cy, 'y');
 
         // ── Axis arrows ──────────────────────────────────────────────────────
         double[][] axes = {
@@ -77,7 +73,7 @@ public class SpherePane extends CanvasPane {
             {0, 0, 1.15},
         };
         String[] labels = { "Mx", "My", "Mz" };
-        Color[]  colors = { Color.web("#ef4444"), Color.web("#22c55e"), Color.web("#3b82f6") };
+        Color[]  colors = { Color.web("#d32f2f"), Color.web("#2e7d32"), Color.web("#1565c0") };
 
         double[] p0 = project(0, 0, 0, theta, phi, scale, cx, cy);
         for (int i = 0; i < 3; i++) {
@@ -85,12 +81,12 @@ public class SpherePane extends CanvasPane {
             double depth = (1 + p1[2]) / 2.0;
             g.setStroke(colors[i]);
             g.setLineWidth(0.5 + 0.5 * depth);
-            g.setGlobalAlpha(0.15 + 0.35 * depth);
+            g.setGlobalAlpha(0.25 + 0.55 * depth);
             g.strokeLine(p0[0], p0[1], p1[0], p1[1]);
             g.setFill(colors[i]);
-            g.setFont(javafx.scene.text.Font.font("monospace",
+            g.setFont(javafx.scene.text.Font.font(StudioTheme.UI_9.getFamily(),
                 javafx.scene.text.FontWeight.SEMI_BOLD, 10 + depth));
-            g.setGlobalAlpha(0.35 + 0.4 * depth);
+            g.setGlobalAlpha(0.4 + 0.5 * depth);
             g.fillText(labels[i], p1[0] + 4, p1[1] - 3);
             g.setGlobalAlpha(1);
         }
@@ -106,7 +102,6 @@ public class SpherePane extends CanvasPane {
             var traj = iso.trajectory();
             int n    = traj.pointCount();
 
-            // Collect visible window points
             int wStart = -1, wEnd = -1;
             for (int i = 0; i < n; i++) {
                 double t = traj.tAt(i);
@@ -117,12 +112,10 @@ public class SpherePane extends CanvasPane {
             }
             if (wStart < 0 || wEnd <= wStart) continue;
 
-            // Draw contiguous sub-segments (RF vs free have different line styles)
             int ss = wStart;
             for (int i = wStart + 1; i <= wEnd + 1; i++) {
                 boolean segEnd = (i > wEnd || traj.isRfAt(i) != traj.isRfAt(i - 1));
                 if (!segEnd) continue;
-                // draw segment [ss, i)
                 if (i - ss >= 2) {
                     boolean isPulse = traj.isRfAt(ss);
                     double  sumDepth = 0;
@@ -161,7 +154,7 @@ public class SpherePane extends CanvasPane {
             g.setFill(iso.colour());
             g.setGlobalAlpha(fade);
             g.fillOval(pS[0] - r, pS[1] - r, 2 * r, 2 * r);
-            g.setStroke(Color.color(0, 0, 0, 0.4));
+            g.setStroke(Color.color(1, 1, 1, 0.6));
             g.setLineWidth(1);
             g.setGlobalAlpha(0.7 * fade);
             g.strokeOval(pS[0] - r, pS[1] - r, 2 * r, 2 * r);
@@ -179,9 +172,9 @@ public class SpherePane extends CanvasPane {
                 double pr = 2 + 4 * mPerp;
                 g.strokeOval(pA[0] - pr, pA[1] - pr, 2 * pr, 2 * pr);
                 g.setFill(iso.colour());
-                g.setFont(StudioTheme.MONO_8);
-                g.setGlobalAlpha(0.45);
-                g.fillText(String.format("|M⊥|=%.2f", mPerp), pA[0] + 8, pA[1] + 3);
+                g.setFont(StudioTheme.UI_8);
+                g.setGlobalAlpha(0.55);
+                g.fillText(String.format("|M\u22a5|=%.2f", mPerp), pA[0] + 8, pA[1] + 3);
                 g.setGlobalAlpha(1);
             }
         }
@@ -210,8 +203,8 @@ public class SpherePane extends CanvasPane {
                 }
             }
             g.setStroke(pass == 1
-                ? Color.color(1, 1, 1, 0.10)
-                : Color.color(1, 1, 1, 0.03));
+                ? Color.color(0, 0, 0, 0.18)
+                : Color.color(0, 0, 0, 0.06));
             g.setLineWidth(pass == 1 ? 0.6 : 0.4);
             g.stroke();
         }
