@@ -2,9 +2,9 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { COLORS, BG, BG2, GR, TX, TX2, AC, CUR } from "./constants";
-import { BlochData, CamState, CrossSectionShadeMode, DrawState, Isochromat, PhaseMapData, PulseSegment } from "./types";
+import { BlochData, CamState, CrossSectionShadeMode, DrawState, Isochromat, PhaseMapData, PulseSegment, SignalTracePoint } from "./types";
 import { clamp } from "./canvas";
-import { sim, getPulse, compPhaseZ, compPhaseR } from "./physics";
+import { sim, getPulse, compPhaseZ, compPhaseR, compSignalTrace, rfGateAtTime } from "./physics";
 import { drawSphere }       from "./draw/sphere";
 import { drawTimeline }     from "./draw/timeline";
 import { drawPlots }        from "./draw/plots";
@@ -83,6 +83,7 @@ export default function App() {
   const [nCI,      setNCI]      = useState(0);
   const [pmZ,      setPmZ]      = useState<PhaseMapData | null>(null);
   const [pmR,      setPmR]      = useState<PhaseMapData | null>(null);
+  const [signalTrace, setSignalTrace] = useState<SignalTracePoint[] | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const canvases = {
@@ -109,6 +110,12 @@ export default function App() {
     () => getPulse(data, scen, iterKeys[gIdx] ?? null),
     [data, scen, gIdx, iterKeys]
   );
+  const currentRfGate = useMemo(
+    () => rfGateAtTime(data, pulse, tC),
+    [data, pulse, tC]
+  );
+  const xsShadeModeEffective = xsShadeMode === "signal" && currentRfGate >= 0.5 ? "mp" : xsShadeMode;
+  const xsSignalProjectionBlocked = xsShadeMode === "signal" && currentRfGate >= 0.5;
 
   R.current = { data, pulse, isos, setIsos, cam, setCam, tS, setTS, tE, setTE, vS, setVS, vE, setVE, tC, setTC, mt, xsH, setXsH, showMp, nCI, setNCI };
 
@@ -118,10 +125,11 @@ export default function App() {
     setIsos(prev => prev.map(o => ({ ...o, t: sim(data, o.r, o.z, pulse) })));
     setPmZ(compPhaseZ(data, pulse));
     setPmR(compPhaseR(data, pulse));
+    setSignalTrace(compSignalTrace(data, pulse));
   }, [data, pulse]);
 
   // Redraw all canvases on every render
-  const state: DrawState = { D: data, pulse, isos, cam, tS, tE, vS, vE, tC, showMp, xsShadeMode, xsH };
+  const state: DrawState = { D: data, pulse, isos, cam, tS, tE, vS, vE, tC, showMp, xsShadeMode: xsShadeModeEffective, xsH, signalTrace };
   useEffect(() => {
     drawSphere(canvases.sphere.current, state);
     drawTimeline(canvases.tl.current, state);
@@ -204,7 +212,7 @@ export default function App() {
       else if (drag.type === "P") {
         const span = drag.oE - drag.oS;
         const ns = clamp(drag.oS + dx, vS, vE - span);
-        setTS(ns); setTE(ns + span);
+        setTS(ns); setTE(ns + span); setTC(clamp(drag.oTC + dx, ns, ns + span));
       }
     };
 
@@ -226,15 +234,18 @@ export default function App() {
       e.preventDefault();
       const rr = cv.getBoundingClientRect();
       const fx = (e.clientX - rr.left - PAD_L) / (rr.width - PAD_L - PAD_R);
-      const { vS, vE, mt, setVS, setVE, setTS, setTE } = R.current;
+      const { vS, vE, mt, tS, tE, setVS, setVE, setTS, setTE, tC, setTC } = R.current;
       const vSpan = vE - vS;
       const f     = e.deltaY > 0 ? 1.3 : 1 / 1.3;
       const ns    = clamp(vSpan * f, 100, mt);
       const ctr   = vS + fx * vSpan;
       const nS    = clamp(ctr - fx * ns, 0, mt - ns);
+      const nextTS = clamp(tS, nS, nS + ns);
+      const nextTE = clamp(tE, nextTS + 10, nS + ns);
       setVS(nS); setVE(nS + ns);
-      setTS(s => clamp(s, nS, nS + ns));
-      setTE(s => clamp(s, nS + 10, nS + ns));
+      setTS(nextTS);
+      setTE(nextTE);
+      setTC(tC >= nextTS && tC <= nextTE ? tC : (nextTS + nextTE) / 2);
     };
 
     cv.addEventListener("pointerdown", onDown);
@@ -250,6 +261,10 @@ export default function App() {
       cv.removeEventListener("wheel", onWheel);
     };
   }, [!!data]);
+
+  useEffect(() => {
+    setTC(tc => (tc >= tS && tc <= tE ? tc : (tS + tE) / 2));
+  }, [tS, tE]);
 
   // Phase maps: drag cursor
   useEffect(() => {
@@ -464,6 +479,11 @@ export default function App() {
         <canvas ref={canvases.sphere} className="w-full rounded-lg cursor-grab" style={{ height: 360, border: `1px solid ${GR}` }} />
 
         <div className="flex flex-col gap-1" style={{ height: 360 }}>
+          {xsSignalProjectionBlocked && (
+            <p className="text-[8px]" style={{ color: "#f59e0b" }}>
+              Signal projection is only defined during free precession. Showing |M⊥| at the current cursor.
+            </p>
+          )}
           <div className="flex gap-1">
             <input
               type="range" min={2} max={125} value={xsH}

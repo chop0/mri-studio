@@ -4,8 +4,28 @@ import { DrawState } from "../types";
 
 interface SegmentBounds {
   t0: number;  // segment start (μs)
-  tF: number;  // end of free-precession region (μs)
   tE: number;  // segment end (μs)
+}
+
+interface RfWindow {
+  t0: number;
+  t1: number;
+}
+
+interface WaveTrack {
+  label: string;
+  max: number;
+  color: string;
+  centred: boolean;
+  fn: (u: number[]) => number;
+}
+
+interface SignalTrack {
+  label: string;
+  max: number;
+  color: string;
+  centred: boolean;
+  signal: true;
 }
 
 function niceTick(span: number) {
@@ -20,10 +40,25 @@ export function drawTimeline(canvas: HTMLCanvasElement | null, state: DrawState)
 
   // Build segment boundary table
   const segBounds: SegmentBounds[] = [];
+  const rfWindows: RfWindow[] = [];
   let tAcc = 0;
-  for (const seg of segments) {
+  for (let si = 0; si < segments.length && si < state.pulse.length; si++) {
+    const seg = segments[si];
+    const steps = state.pulse[si];
     const nTotal = seg.n_free + seg.n_pulse;
-    segBounds.push({ t0: tAcc, tF: tAcc + seg.n_free * seg.dt * 1e6, tE: tAcc + nTotal * seg.dt * 1e6 });
+    segBounds.push({ t0: tAcc, tE: tAcc + nTotal * seg.dt * 1e6 });
+    let rfStart: number | null = null;
+    let tStep = tAcc;
+    for (const step of steps) {
+      const rfOn = step[4] >= 0.5;
+      if (rfOn && rfStart === null) rfStart = tStep;
+      if (!rfOn && rfStart !== null) {
+        rfWindows.push({ t0: rfStart, t1: tStep });
+        rfStart = null;
+      }
+      tStep += seg.dt * 1e6;
+    }
+    if (rfStart !== null) rfWindows.push({ t0: rfStart, t1: tStep });
     tAcc += nTotal * seg.dt * 1e6;
   }
 
@@ -39,15 +74,20 @@ export function drawTimeline(canvas: HTMLCanvasElement | null, state: DrawState)
   const tPx   = (t: number) => pad.l + (t - vS) / vSpan * pW;
 
   // Waveform tracks: |B₁|, Gz, Gx
-  const tracks = [
+  const tracks: WaveTrack[] = [
     { label: "|B₁|", max: 250e-6, fn: (u: number[]) => Math.sqrt(u[0] ** 2 + u[1] ** 2), color: "#f59e0b", fill: true,  centred: false },
     { label: "Gz",   max: 0.035,  fn: (u: number[]) => u[3],                               color: "#3b82f6", fill: false, centred: true  },
     { label: "Gx",   max: 0.035,  fn: (u: number[]) => u[2],                               color: "#ef4444", fill: false, centred: true  },
+  ].map(({ fill: _fill, ...track }) => track);
+  const signalMax = Math.max(...(state.signalTrace?.map(p => p.sig) ?? [1]), 1e-6);
+  const allTracks: Array<WaveTrack | SignalTrack> = [
+    ...tracks,
+    { label: "Sig", max: signalMax, color: "#22c55e", centred: false, signal: true },
   ];
 
-  const tH = pH / tracks.length;
+  const tH = pH / allTracks.length;
 
-  tracks.forEach((track, ti) => {
+  allTracks.forEach((track, ti) => {
     const y0 = pad.t + ti * tH;
 
     // Background stripe
@@ -69,18 +109,18 @@ export function drawTimeline(canvas: HTMLCanvasElement | null, state: DrawState)
       x.beginPath(); x.moveTo(pad.l, y0 + tH / 2); x.lineTo(pad.l + pW, y0 + tH / 2); x.stroke();
     }
 
-    // Segment shading (RF region slightly lighter)
-    segBounds.forEach((sb, si) => {
-      if (sb.tE < vS || sb.t0 > vE) return;
-      const xF = Math.max(pad.l, tPx(sb.tF));
-      const xE = Math.min(pad.l + pW, tPx(sb.tE));
+    rfWindows.forEach(rf => {
+      if (rf.t1 < vS || rf.t0 > vE) return;
+      const xF = Math.max(pad.l, tPx(rf.t0));
+      const xE = Math.min(pad.l + pW, tPx(rf.t1));
       x.fillStyle = "rgba(255,255,255,.02)";
       x.fillRect(xF, y0, xE - xF, tH);
-      if (si > 0) {
-        const xD = tPx(sb.t0);
-        x.strokeStyle = "rgba(255,255,255,.06)"; x.lineWidth = 0.5;
-        x.beginPath(); x.moveTo(xD, y0); x.lineTo(xD, y0 + tH); x.stroke();
-      }
+    });
+    segBounds.forEach((sb, si) => {
+      if (si === 0 || sb.t0 < vS || sb.t0 > vE) return;
+      const xD = tPx(sb.t0);
+      x.strokeStyle = "rgba(255,255,255,.06)"; x.lineWidth = 0.5;
+      x.beginPath(); x.moveTo(xD, y0); x.lineTo(xD, y0 + tH); x.stroke();
     });
 
     // Waveform path
@@ -88,20 +128,30 @@ export function drawTimeline(canvas: HTMLCanvasElement | null, state: DrawState)
     x.beginPath(); x.rect(pad.l, y0, pW, tH); x.clip();
     x.beginPath(); x.strokeStyle = track.color; x.lineWidth = 1.2; x.globalAlpha = 0.8;
     let started = false;
-    for (let si = 0; si < segments.length && si < state.pulse!.length; si++) {
-      const seg   = segments[si];
-      const steps = state.pulse![si];
-      let t       = segBounds[si].t0;
-      for (const step of steps) {
-        if (t >= vS - vSpan * 0.01 && t <= vE + vSpan * 0.01) {
-          const v   = track.fn(step);
-          const px  = tPx(t);
-          const py  = track.centred
-            ? y0 + tH / 2 - (v / track.max) * tH / 2
-            : y0 + tH - (v / track.max) * tH * 0.85;
+    if ("signal" in track) {
+      for (const pt of state.signalTrace ?? []) {
+        if (pt.t >= vS - vSpan * 0.01 && pt.t <= vE + vSpan * 0.01) {
+          const px = tPx(pt.t);
+          const py = y0 + tH - (pt.sig / track.max) * tH * 0.85;
           if (!started) { x.moveTo(px, py); started = true; } else x.lineTo(px, py);
         }
-        t += seg.dt * 1e6;
+      }
+    } else {
+      for (let si = 0; si < segments.length && si < state.pulse!.length; si++) {
+        const seg   = segments[si];
+        const steps = state.pulse![si];
+        let t       = segBounds[si].t0;
+        for (const step of steps) {
+          if (t >= vS - vSpan * 0.01 && t <= vE + vSpan * 0.01) {
+            const v   = track.fn(step);
+            const px  = tPx(t);
+            const py  = track.centred
+              ? y0 + tH / 2 - (v / track.max) * tH / 2
+              : y0 + tH - (v / track.max) * tH * 0.85;
+            if (!started) { x.moveTo(px, py); started = true; } else x.lineTo(px, py);
+          }
+          t += seg.dt * 1e6;
+        }
       }
     }
     x.stroke(); x.globalAlpha = 1; x.restore();

@@ -34,6 +34,8 @@ def _normalized_objective_terms(
     power_out,
     rf_power,
     rf_smooth,
+    gate_switch,
+    gate_binary,
     dt_arr,
 ):
     signal_ref = jnp.float32(max(prob.s_max * prob.s_max, 1.0))
@@ -46,6 +48,8 @@ def _normalized_objective_terms(
         power_out / power_ref,
         rf_power / rf_power_ref,
         rf_smooth / rf_power_ref,
+        gate_switch / rf_time_ref,
+        gate_binary / rf_time_ref,
     )
 
 
@@ -175,10 +179,11 @@ def build_cpmg_warm(n_seg, n_free, n_pulse, dt):
     env *= np.pi / (GAMMA * np.sum(np.abs(env)) * dt)
     env = np.clip(env, -B1_MAX, B1_MAX)
 
-    ctrl = np.zeros((n_seg, n_free + n_pulse, 4), dtype=np.float32)
+    ctrl = np.zeros((n_seg, n_free + n_pulse, 5), dtype=np.float32)
     ctrl[:, n_free:n_free + n_rf, 0] = env
     ctrl[:, n_free:n_free + n_rf, 3] = GZ_MAX
     ctrl[:, n_free + n_rf:, 3] = -GZ_MAX
+    ctrl[:, n_free:, 4] = 1.0
     return ctrl
 
 
@@ -239,12 +244,29 @@ def make_problem(nx=20, nz=80, sw=0.010):
     return prob_np, prob_jax
 
 
-def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, lam_pow, rf_pen, rf_smooth_pen=0.0):
+def make_value_and_grad(
+    prob: ProblemJAX,
+    n_seg,
+    n_free,
+    n_pulse,
+    dt,
+    lam_out,
+    lam_pow,
+    rf_pen,
+    rf_smooth_pen=0.0,
+    gate_switch_pen=0.0,
+    gate_binary_pen=0.0,
+):
     n_steps = n_free + n_pulse
     n_total = n_seg * n_steps
     gamma_dt = jnp.float32(GAMMA * dt)
     dt32 = jnp.float32(dt)
     dt_arr = jnp.full((n_total,), dt32, dtype=jnp.float32)
+    legacy_gate = jnp.concatenate([
+        jnp.zeros((n_free,), dtype=jnp.float32),
+        jnp.ones((n_pulse,), dtype=jnp.float32),
+    ])
+    legacy_gate = jnp.tile(legacy_gate, n_seg)
     E2 = jnp.float32(np.exp(-dt / T2))
     E1 = jnp.float32(np.exp(-dt / T1))
 
@@ -279,13 +301,14 @@ def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, l
         )
 
     def loss(ctrl_flat):
-        ctrl = ctrl_flat.reshape((n_total, 4))
+        ctrl_dim = 5 if ctrl_flat.shape[0] == n_total * 5 else 4
+        ctrl = ctrl_flat.reshape((n_total, ctrl_dim))
+        gate = ctrl[:, 4] if ctrl_dim >= 5 else legacy_gate
 
         def body(carry, xs):
             Mx, My, Mz, running_in, running_out = carry
-            idx, u = xs
+            idx, u, rf_gate = xs
             b1x, b1y, ux, uz = u
-            is_free = (idx % n_steps) < n_free
 
             omega = prob.omega_free + GAMMA * (ux * prob.Gxm + uz * prob.Gzm)
             Mx_f, My_f, Mz_f = z_step(Mx, My, Mz, omega)
@@ -297,40 +320,49 @@ def make_value_and_grad(prob: ProblemJAX, n_seg, n_free, n_pulse, dt, lam_out, l
                 My,
                 Mz,
             )
-            Mx_n = jnp.where(is_free, Mx_f, Mx_r)
-            My_n = jnp.where(is_free, My_f, My_r)
-            Mz_n = jnp.where(is_free, Mz_f, Mz_r)
+            rf_gate = jnp.clip(rf_gate, 0.0, 1.0)
+            sig_gate = 1.0 - rf_gate
+            Mx_n = sig_gate * Mx_f + rf_gate * Mx_r
+            My_n = sig_gate * My_f + rf_gate * My_r
+            Mz_n = sig_gate * Mz_f + rf_gate * Mz_r
 
             Sx = jnp.sum(prob.w_in * Mx_n)
             Sy = jnp.sum(prob.w_in * My_n)
             Sx_out = jnp.sum(prob.w_out * Mx_n)
             Sy_out = jnp.sum(prob.w_out * My_n)
-            end_seg = ((idx + 1) % n_steps) == 0
-            running_in = running_in + jnp.where(end_seg, Sx * Sx + Sy * Sy, 0.0)
-            running_out = running_out + jnp.where(end_seg, Sx_out * Sx_out + Sy_out * Sy_out, 0.0)
+            running_in = running_in + sig_gate * (Sx * Sx + Sy * Sy)
+            running_out = running_out + sig_gate * (Sx_out * Sx_out + Sy_out * Sy_out)
             return (Mx_n, My_n, Mz_n, running_in, running_out), 0.0
 
         (Mx, My, Mz, running_in, running_out), _ = jax.lax.scan(
             body,
             (prob.Mx0, prob.My0, prob.Mz0, jnp.float32(0.0), jnp.float32(0.0)),
-            (jnp.arange(n_total), ctrl),
+            (jnp.arange(n_total), ctrl[:, :4], gate),
         )
 
-        Sx = jnp.sum(prob.w_in * Mx)
-        Sy = jnp.sum(prob.w_in * My)
-        Sx_out = jnp.sum(prob.w_out * Mx)
-        Sy_out = jnp.sum(prob.w_out * My)
-        power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
+        power_out = jnp.float32(0.0)
         rf_power = jnp.sum((ctrl[:, 0] * ctrl[:, 0] + ctrl[:, 1] * ctrl[:, 1]) * dt_arr)
         rf_xy = ctrl[:, :2].reshape((n_seg, n_steps, 2))
         rf_second_diff = rf_xy[:, 2:, :] - 2.0 * rf_xy[:, 1:-1, :] + rf_xy[:, :-2, :]
         rf_smooth = jnp.sum(rf_second_diff * rf_second_diff) * dt32
-        J_in = 2.0 * (Sx * Sx + Sy * Sy) + running_in
-        J_out = 2.0 * (Sx_out * Sx_out + Sy_out * Sy_out) + running_out
-        J_in, J_out, power_out, rf_power, rf_smooth = _normalized_objective_terms(
-            prob, J_in, J_out, power_out, rf_power, rf_smooth, dt_arr
+        gate_seq = gate.reshape((n_seg, n_steps))
+        gate_diff = gate_seq[:, 1:] - gate_seq[:, :-1]
+        gate_switch = jnp.sum(gate_diff * gate_diff) * dt32
+        gate_binary = jnp.sum(gate_seq * (1.0 - gate_seq)) * dt32
+        J_in = running_in
+        J_out = running_out
+        J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary = _normalized_objective_terms(
+            prob, J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary, dt_arr
         )
-        J = J_in - lam_out * J_out - lam_pow * power_out - rf_pen * rf_power - rf_smooth_pen * rf_smooth
+        J = (
+            J_in
+            - lam_out * J_out
+            - lam_pow * power_out
+            - rf_pen * rf_power
+            - rf_smooth_pen * rf_smooth
+            - gate_switch_pen * gate_switch
+            - gate_binary_pen * gate_binary
+        )
         return -J
 
     return jax.jit(jax.value_and_grad(loss))
@@ -349,8 +381,9 @@ def simulate_numpy(ctrl, prob: ProblemNP, n_free, dt):
     k = 1
     for seg in range(n_seg):
         for step in range(n_steps):
-            b1x, b1y, ux, uz = ctrl[seg, step]
-            if step < n_free:
+            b1x, b1y, ux, uz = ctrl[seg, step, :4]
+            rf_gate = float(ctrl[seg, step, 4]) if ctrl.shape[-1] > 4 else (0.0 if step < n_free else 1.0)
+            if rf_gate < 0.5:
                 Mx, My, Mz = z_step_numpy(Mx, My, Mz, omega_free + GAMMA * (ux * prob.Gxm + uz * prob.Gzm), dt, E1, E2)
             else:
                 Mx, My, Mz = rodrigues_numpy(
@@ -364,7 +397,7 @@ def simulate_numpy(ctrl, prob: ProblemNP, n_free, dt):
                     E1,
                     E2,
                 )
-            sig[k] = np.abs(np.sum(prob.w_in * (Mx + 1j * My)))
+            sig[k] = (1.0 - rf_gate) * np.abs(np.sum(prob.w_in * (Mx + 1j * My)))
             k += 1
     return sig, Mx, My, Mz
 
@@ -384,8 +417,9 @@ def simulate_numpy_full(ctrl_list, segments, prob: ProblemNP):
         E2 = np.exp(-dt_s / T2)
         E1 = np.exp(-dt_s / T1)
         for j in range(ctrl_seg.shape[0]):
-            b1x, b1y, ux, uz = ctrl_seg[j]
-            if j < nf:
+            b1x, b1y, ux, uz = ctrl_seg[j, :4]
+            rf_gate = float(ctrl_seg[j, 4]) if ctrl_seg.shape[-1] > 4 else (0.0 if j < nf else 1.0)
+            if rf_gate < 0.5:
                 Mx, My, Mz = z_step_numpy(
                     Mx, My, Mz,
                     omega_free + GAMMA * (ux * prob.Gxm + uz * prob.Gzm),
@@ -419,7 +453,16 @@ def metrics(ctrl, prob: ProblemNP, n_free, dt):
 # Full-sequence objective (variable-dt, including excitation)
 # ---------------------------------------------------------------------------
 
-def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth_pen=0.0):
+def make_value_and_grad_full(
+    prob,
+    segments,
+    lam_out,
+    lam_pow,
+    rf_pen,
+    rf_smooth_pen=0.0,
+    gate_switch_pen=0.0,
+    gate_binary_pen=0.0,
+):
     """
     Build JIT-compiled value+grad for variable-dt multi-segment optimisation.
     Starts from thermal equilibrium; excitation is part of the optimised controls.
@@ -431,7 +474,7 @@ def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth
     E1_list = []
     E2_list = []
     is_free_list = []
-    seg_end_list = []
+    legacy_gate_list = []
 
     for seg in segments:
         dt_s = seg["dt"]
@@ -442,14 +485,15 @@ def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth
             E1_list.append(np.exp(-dt_s / T1))
             E2_list.append(np.exp(-dt_s / T2))
             is_free_list.append(j < nf)
-            seg_end_list.append(j == ns - 1)
+            legacy_gate_list.append(0.0 if j < nf else 1.0)
 
     n_total = len(gamma_dt_list)
+    control_dim = max(seg.get("n_ctrl", 4) for seg in segments)
     gamma_dt_arr = jnp.array(gamma_dt_list, dtype=jnp.float32)
     E1_arr = jnp.array(E1_list, dtype=jnp.float32)
     E2_arr = jnp.array(E2_list, dtype=jnp.float32)
     is_free_arr = jnp.array(is_free_list, dtype=jnp.bool_)
-    seg_end_arr = jnp.array(seg_end_list, dtype=jnp.bool_)
+    legacy_gate_arr = jnp.array(legacy_gate_list, dtype=jnp.float32)
     # Per-step dt for RF power penalty
     dt_list = []
     for seg in segments:
@@ -468,11 +512,12 @@ def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth
     N = prob.Gxm.shape[0]  # number of spatial points (flattened)
 
     def loss(ctrl_flat):
-        ctrl = ctrl_flat.reshape((n_total, 4))
+        ctrl = ctrl_flat.reshape((n_total, control_dim))
+        gate = ctrl[:, 4] if control_dim >= 5 else legacy_gate_arr
 
         def body(carry, xs):
-            Mx, My, Mz, running_in, running_out = carry
-            u, gdt, e1, e2, free, seg_e = xs
+            Mx, My, Mz, running_in, running_out, running_power_out = carry
+            u, gdt, e1, e2, free, rf_gate = xs
             b1x, b1y, ux, uz = u
 
             # Free precession (z-rotation only)
@@ -504,35 +549,37 @@ def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth
             My_r = (My * cv + cy * sv + ny * ndM * omc) * e2
             Mz_r = 1.0 + (Mz * cv + cz * sv + nz * ndM * omc - 1.0) * e1
 
-            Mx_n = jnp.where(free, Mx_f, Mx_r)
-            My_n = jnp.where(free, My_f, My_r)
-            Mz_n = jnp.where(free, Mz_f, Mz_r)
+            rf_gate = jnp.clip(rf_gate, 0.0, 1.0)
+            default_gate = jnp.where(free, 0.0, 1.0)
+            rf_gate = jnp.where(control_dim >= 5, rf_gate, default_gate)
+            sig_gate = 1.0 - rf_gate
+            Mx_n = sig_gate * Mx_f + rf_gate * Mx_r
+            My_n = sig_gate * My_f + rf_gate * My_r
+            Mz_n = sig_gate * Mz_f + rf_gate * Mz_r
 
             Sx = jnp.sum(prob.w_in * Mx_n)
             Sy = jnp.sum(prob.w_in * My_n)
             Sx_out = jnp.sum(prob.w_out * Mx_n)
             Sy_out = jnp.sum(prob.w_out * My_n)
-            running_in = running_in + jnp.where(seg_e, Sx * Sx + Sy * Sy, 0.0)
-            running_out = running_out + jnp.where(seg_e, Sx_out * Sx_out + Sy_out * Sy_out, 0.0)
+            power_out_step = jnp.sum(prob.w_out * (Mx_n * Mx_n + My_n * My_n))
+            running_in = running_in + sig_gate * (Sx * Sx + Sy * Sy)
+            running_out = running_out + sig_gate * (Sx_out * Sx_out + Sy_out * Sy_out)
+            running_power_out = running_power_out + sig_gate * power_out_step
 
-            return (Mx_n, My_n, Mz_n, running_in, running_out), 0.0
+            return (Mx_n, My_n, Mz_n, running_in, running_out, running_power_out), 0.0
 
         # Start from thermal equilibrium
         Mx0 = jnp.zeros(N, dtype=jnp.float32)
         My0 = jnp.zeros(N, dtype=jnp.float32)
         Mz0 = jnp.ones(N, dtype=jnp.float32)
 
-        (Mx, My, Mz, running_in, running_out), _ = jax.lax.scan(
+        (Mx, My, Mz, running_in, running_out, running_power_out), _ = jax.lax.scan(
             body,
-            (Mx0, My0, Mz0, jnp.float32(0.0), jnp.float32(0.0)),
-            (ctrl, gamma_dt_arr, E1_arr, E2_arr, is_free_arr, seg_end_arr),
+            (Mx0, My0, Mz0, jnp.float32(0.0), jnp.float32(0.0), jnp.float32(0.0)),
+            (ctrl[:, :4], gamma_dt_arr, E1_arr, E2_arr, is_free_arr, gate),
         )
 
-        Sx = jnp.sum(prob.w_in * Mx)
-        Sy = jnp.sum(prob.w_in * My)
-        Sx_out = jnp.sum(prob.w_out * Mx)
-        Sy_out = jnp.sum(prob.w_out * My)
-        power_out = jnp.sum(prob.w_out * (Mx * Mx + My * My))
+        power_out = running_power_out
         rf_power = jnp.sum((ctrl[:, 0] ** 2 + ctrl[:, 1] ** 2) * dt_arr)
         rf_xy = ctrl[:, :2]
         prev1 = jnp.concatenate([rf_xy[:1], rf_xy[:-1]], axis=0)
@@ -544,12 +591,26 @@ def make_value_and_grad_full(prob, segments, lam_out, lam_pow, rf_pen, rf_smooth
         rf_second_diff = rf_xy - 2.0 * prev1 + prev2
         rf_second_diff = jnp.where(valid_second[:, None], rf_second_diff, 0.0)
         rf_smooth = jnp.sum(rf_second_diff * rf_second_diff * dt_arr[:, None])
-        J_in = 2.0 * (Sx * Sx + Sy * Sy) + running_in
-        J_out = 2.0 * (Sx_out * Sx_out + Sy_out * Sy_out) + running_out
-        J_in, J_out, power_out, rf_power, rf_smooth = _normalized_objective_terms(
-            prob, J_in, J_out, power_out, rf_power, rf_smooth, dt_arr
+        gate1 = gate
+        prev_gate = jnp.concatenate([gate1[:1], gate1[:-1]], axis=0)
+        valid_gate = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]], axis=0)
+        gate_diff = jnp.where(valid_gate, gate1 - prev_gate, 0.0)
+        gate_switch = jnp.sum(gate_diff * gate_diff * dt_arr)
+        gate_binary = jnp.sum(gate1 * (1.0 - gate1) * dt_arr)
+        J_in = running_in
+        J_out = running_out
+        J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary = _normalized_objective_terms(
+            prob, J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary, dt_arr
         )
-        J = J_in - lam_out * J_out - lam_pow * power_out - rf_pen * rf_power - rf_smooth_pen * rf_smooth
+        J = (
+            J_in
+            - lam_out * J_out
+            - lam_pow * power_out
+            - rf_pen * rf_power
+            - rf_smooth_pen * rf_smooth
+            - gate_switch_pen * gate_switch
+            - gate_binary_pen * gate_binary
+        )
         return -J
 
     return jax.jit(jax.value_and_grad(loss))
@@ -567,7 +628,7 @@ def run_demo():
     ctrl0 = build_cpmg_warm(n_seg, n_free, n_pulse, dt)
 
     t = time.time()
-    value_and_grad = make_value_and_grad(fine_jax, n_seg, n_free, n_pulse, dt, 200.0, 2.0, 5e7)
+    value_and_grad = make_value_and_grad(fine_jax, n_seg, n_free, n_pulse, dt, 200.0, 2.0, 5e7, gate_switch_pen=1.5, gate_binary_pen=0.15)
     _ = value_and_grad(jnp.asarray(ctrl0.ravel(), dtype=jnp.float32))
     jax.block_until_ready(_)
     compile_time = time.time() - t

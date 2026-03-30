@@ -23,8 +23,8 @@ export interface FieldData {
   slice_half?: number;
 }
 
-/** One time-step: [Bx, By, Gx, Gz] */
-export type PulseStep = [number, number, number, number];
+/** One time-step: [Bx, By, Gx, Gz, rfGate] */
+export type PulseStep = [number, number, number, number, number];
 
 /** All steps in one segment */
 export type PulseSegment = PulseStep[];
@@ -68,6 +68,11 @@ export interface PhaseMapData {
   ticks?: number[];
 }
 
+export interface SignalTracePoint {
+  t: number;
+  sig: number;
+}
+
 export type CrossSectionShadeMode = "mp" | "signal";
 
 // ── Shared draw-state passed to every canvas renderer ────────────────────────
@@ -85,4 +90,5 @@ export interface DrawState {
   showMp: boolean;
   xsShadeMode: CrossSectionShadeMode;
   xsH: number;     // cross-section half-height (mm)
+  signalTrace?: SignalTracePoint[] | null;
 }

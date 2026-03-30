@@ -1,4 +1,8 @@
-import { BlochData, PulseSegment } from "./types";
+import { BlochData, PulseSegment, SignalTracePoint } from "./types";
+
+function clampGate(v: number) {
+  return Math.max(0, Math.min(1, v));
+}
 
 // ── Field interpolation ───────────────────────────────────────────────────────
 
@@ -85,10 +89,12 @@ export function sim(
     const E1 = Math.exp(-dt / f.T1);
 
     for (let j = 0; j < steps.length; j++) {
-      out.push(+(t * 1e6).toFixed(1), +mx.toFixed(5), +my.toFixed(5), +mz.toFixed(5), j < nf ? 0 : 1);
-
       const u = steps[j];
-      if (j < nf) {
+      const rfGate = clampGate(u[4]);
+      const isRF = rfGate >= 0.5;
+      out.push(+(t * 1e6).toFixed(1), +mx.toFixed(5), +my.toFixed(5), +mz.toFixed(5), isRF ? 1 : 0);
+
+      if (!isRF) {
         // Free precession: rotate around z
         const om = om0 + ga * (u[2] * fl.gxm + u[3] * fl.gzm);
         const th = om * dt;
@@ -152,7 +158,8 @@ export function simTo(
       if (t * 1e6 >= tC_us) return [mx, my, mz];
 
       const u = steps[j];
-      if (j < nf) {
+      const rfGate = clampGate(u[4]);
+      if (rfGate < 0.5) {
         const om = om0 + ga * (u[2] * fl.gxm + u[3] * fl.gzm);
         const th = om * dt;
         const c = Math.cos(th), s = Math.sin(th);
@@ -195,6 +202,114 @@ export function getPulse(
   if (iterKey && pulses[iterKey]) return pulses[iterKey] ?? null;
   const keys = Object.keys(pulses).sort((a, b) => Number(a) - Number(b));
   return keys.length > 0 ? pulses[keys[keys.length - 1]] ?? null : null;
+}
+
+export function rfGateAtTime(
+  data: BlochData | null,
+  pulse: PulseSegment[] | null,
+  tc_us: number,
+): number {
+  if (!data?.field?.segments || !pulse) return 0;
+  let t = 0;
+  for (let si = 0; si < data.field.segments.length && si < pulse.length; si++) {
+    const seg = data.field.segments[si];
+    const steps = pulse[si];
+    for (let j = 0; j < steps.length; j++) {
+      if (t * 1e6 >= tc_us) return clampGate(steps[j][4]);
+      t += seg.dt;
+    }
+  }
+  const lastSeg = pulse[pulse.length - 1];
+  const last = lastSeg?.[lastSeg.length - 1];
+  return last ? clampGate(last[4]) : 0;
+}
+
+export function compSignalTrace(
+  data: BlochData,
+  pulse: PulseSegment[],
+): SignalTracePoint[] | null {
+  if (!data?.field?.segments || !pulse) return null;
+  const f = data.field;
+  const rArr = f.r_mm;
+  const zArr = f.z_mm;
+  const sliceHalfMm = (f.slice_half ?? 0.005) * 1e3;
+  const points: Array<{ dBz: number; gxm: number; gzm: number; b1s: number; w: number }> = [];
+
+  for (let ir = 0; ir < rArr.length; ir++) {
+    for (let iz = 0; iz < zArr.length; iz++) {
+      const zmm = zArr[iz];
+      if (Math.abs(zmm) > sliceHalfMm) continue;
+      const r_m = rArr[ir] * 1e-3;
+      const z_m = zmm * 1e-3;
+      const B = f.B0n;
+      points.push({
+        dBz: f.dBz_uT[ir][iz] * 1e-6,
+        gxm: r_m + z_m * z_m / (2 * B),
+        gzm: z_m + (r_m / 2) ** 2 / (2 * B),
+        b1s: 1 + 0.12 * (r_m / (f.FOV_X / 2)) ** 2 + 0.08 * (z_m / (f.FOV_Z / 2)) ** 2,
+        w: 1,
+      });
+    }
+  }
+  if (points.length === 0) return null;
+
+  const mx = new Float64Array(points.length);
+  const my = new Float64Array(points.length);
+  const mz = new Float64Array(points.length).fill(1);
+  const trace: SignalTracePoint[] = [{ t: 0, sig: 0 }];
+
+  let t = 0;
+  for (let si = 0; si < f.segments.length && si < pulse.length; si++) {
+    const seg = f.segments[si];
+    const steps = pulse[si];
+    const E2 = Math.exp(-seg.dt / f.T2);
+    const E1 = Math.exp(-seg.dt / f.T1);
+    for (let j = 0; j < steps.length; j++) {
+      const u = steps[j];
+      const rfGate = clampGate(u[4]);
+      for (let p = 0; p < points.length; p++) {
+        const pt = points[p];
+        if (rfGate < 0.5) {
+          const om = f.gamma * (pt.dBz + u[2] * pt.gxm + u[3] * pt.gzm);
+          const th = om * seg.dt;
+          const c = Math.cos(th), s = Math.sin(th);
+          const newMx = (mx[p] * c - my[p] * s) * E2;
+          const newMy = (mx[p] * s + my[p] * c) * E2;
+          mx[p] = newMx;
+          my[p] = newMy;
+          mz[p] = 1 + (mz[p] - 1) * E1;
+        } else {
+          const bx = u[0] * pt.b1s, by = u[1] * pt.b1s;
+          const bz = pt.dBz + u[2] * pt.gxm + u[3] * pt.gzm;
+          const Bm = Math.sqrt(bx * bx + by * by + bz * bz + 1e-60);
+          const th = f.gamma * Bm * seg.dt;
+          const nx = bx / Bm, ny = by / Bm, nz = bz / Bm;
+          const c = Math.cos(th), s = Math.sin(th), oc = 1 - c;
+          const nd = nx * mx[p] + ny * my[p] + nz * mz[p];
+          const cx = ny * mz[p] - nz * my[p];
+          const cy = nz * mx[p] - nx * mz[p];
+          const cz = nx * my[p] - ny * mx[p];
+          const newMx = (mx[p] * c + cx * s + nx * nd * oc) * E2;
+          const newMy = (my[p] * c + cy * s + ny * nd * oc) * E2;
+          mx[p] = newMx;
+          my[p] = newMy;
+          mz[p] = 1 + (mz[p] * c + cz * s + nz * nd * oc - 1) * E1;
+        }
+      }
+
+      t += seg.dt;
+      let sx = 0;
+      let sy = 0;
+      if (rfGate < 0.5) {
+        for (let p = 0; p < points.length; p++) {
+          sx += mx[p];
+          sy += my[p];
+        }
+      }
+      trace.push({ t: +(t * 1e6).toFixed(1), sig: Math.sqrt(sx * sx + sy * sy) / points.length });
+    }
+  }
+  return trace;
 }
 
 /**

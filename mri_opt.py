@@ -27,6 +27,10 @@ class MaskedOptimizationResult:
     best_value: float
 
 
+class OptimizationStopRequested(RuntimeError):
+    pass
+
+
 def flatten_ctrl_list(ctrl_list):
     return np.concatenate([np.asarray(c, dtype=np.float32).ravel() for c in ctrl_list]).astype(np.float32)
 
@@ -37,8 +41,9 @@ def split_ctrl_flat(flat_ctrl, segments):
     flat_ctrl = np.asarray(flat_ctrl, dtype=np.float32)
     for seg in segments:
         ns = seg["n_free"] + seg["n_pulse"]
-        span = ns * 4
-        out.append(flat_ctrl[idx:idx + span].reshape(ns, 4).astype(np.float32))
+        n_ctrl = seg.get("n_ctrl", 4)
+        span = ns * n_ctrl
+        out.append(flat_ctrl[idx:idx + span].reshape(ns, n_ctrl).astype(np.float32))
         idx += span
     return out
 
@@ -47,8 +52,11 @@ def flatten_mask_list(mask_list):
     return np.concatenate([np.asarray(m, dtype=bool).ravel() for m in mask_list])
 
 
-def default_bounds_for_steps(n_total_steps):
-    return [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX), (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total_steps
+def default_bounds_for_steps(n_total_steps, control_dim=4):
+    per_step = [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX), (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)]
+    if control_dim >= 5:
+        per_step.append((0.0, 1.0))
+    return per_step * n_total_steps
 
 
 def optimize_masked_controls(
@@ -58,6 +66,7 @@ def optimize_masked_controls(
     bounds_full,
     config: SearchConfig | None = None,
     progress_fn: Callable[[int, np.ndarray, float], None] | None = None,
+    stop_requested_fn: Callable[[], bool] | None = None,
     show_progress_bar: bool = True,
 ):
     config = config or SearchConfig()
@@ -130,17 +139,37 @@ def optimize_masked_controls(
         current_best = state["best_value"]
         if bar is not None and current_best is not None:
             bar.set_postfix(score=float(-current_best))
+        if stop_requested_fn is not None and stop_requested_fn():
+            snapshots[state["nit"]] = state["best_x"].copy()
+            raise OptimizationStopRequested("Stop requested; returning best-so-far controls.")
 
     try:
-        res = minimize(
-            fg,
-            x0_norm,
-            method="L-BFGS-B",
-            jac=True,
-            bounds=bounds,
-            options={"maxiter": config.opt_steps, "ftol": 1e-12, "gtol": 1e-8},
-            callback=callback,
-        )
+        try:
+            res = minimize(
+                fg,
+                x0_norm,
+                method="L-BFGS-B",
+                jac=True,
+                bounds=bounds,
+                options={"maxiter": config.opt_steps, "ftol": 1e-12, "gtol": 1e-8},
+                callback=callback,
+            )
+        except OptimizationStopRequested as err:
+            nit = int(state["nit"])
+            if state["best_value"] is None:
+                best_value, _ = fg(x0_norm)
+                state["best_value"] = best_value
+            res = type(
+                "StoppedOptimizeResult",
+                (),
+                {
+                    "x": (state["best_x"][free_idx] / scale_free).astype(np.float32),
+                    "nit": nit,
+                    "nfev": nit,
+                    "success": False,
+                    "message": str(err),
+                },
+            )()
     finally:
         if bar is not None:
             bar.close()
