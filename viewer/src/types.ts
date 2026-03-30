@@ -29,21 +29,18 @@ export type PulseStep = [number, number, number, number];
 /** All steps in one segment */
 export type PulseSegment = PulseStep[];
 
-/**
- * `pulses` maps scenario names to PulseSegment arrays, EXCEPT for the special
- * "grape" key which maps iteration-number strings to PulseSegment arrays.
- */
-export interface Pulses {
-  grape?: Record<string, PulseSegment[]>;
-  [key: string]: PulseSegment[] | Record<string, PulseSegment[]> | undefined;
+export type FlatTrajectory = number[];
+export type ScenarioTrajectories = Record<string, Array<[number, FlatTrajectory]>>;
+
+export interface ScenarioData {
+  pulses: Record<string, PulseSegment[]>;
+  trajectories?: ScenarioTrajectories;
 }
 
 export interface BlochData {
   field: FieldData;
-  fixed: Record<string, PulseSegment[]>;
-  /** Top-level grape data (trajectory snapshots, keyed by iteration number string). */
-  grape?: Record<string, unknown>;
-  pulses: Pulses;
+  iso?: Array<[string, string, boolean]>;
+  scenarios: Record<string, ScenarioData>;
 }
 
 // ── UI state ──────────────────────────────────────────────────────────────────

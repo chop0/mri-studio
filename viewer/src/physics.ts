@@ -187,16 +187,14 @@ export function simTo(
 /** Look up the active pulse waveform given current UI scenario/mode. */
 export function getPulse(
   data: BlochData | null,
-  mode: string,
   scen: string,
-  grapeIters: number[],
-  grapeIdx: number,
+  iterKey: string | null,
 ): PulseSegment[] | null {
-  if (!data?.pulses) return null;
-  if ((mode === "grape" || scen === "GRAPE") && data.pulses.grape && grapeIters.length > 0) {
-    return data.pulses.grape[String(grapeIters[grapeIdx])] ?? null;
-  }
-  return (data.pulses[scen] as PulseSegment[]) ?? null;
+  if (!data?.scenarios?.[scen]) return null;
+  const pulses = data.scenarios[scen].pulses;
+  if (iterKey && pulses[iterKey]) return pulses[iterKey] ?? null;
+  const keys = Object.keys(pulses).sort((a, b) => Number(a) - Number(b));
+  return keys.length > 0 ? pulses[keys[keys.length - 1]] ?? null : null;
 }
 
 /**

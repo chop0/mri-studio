@@ -59,6 +59,16 @@ class ProblemJAX:
     nz: int
 
 
+@dataclass
+class MaskedOptimizationResult:
+    x_full: np.ndarray
+    nit: int
+    nfev: int
+    success: bool
+    message: str
+    snapshots: dict[int, np.ndarray]
+
+
 def biot_savart(rho, z, z0, R):
     dz = z - z0
     a2 = np.maximum(R**2 + rho**2 + dz**2 - 2 * R * rho, 1e-30)
@@ -542,6 +552,94 @@ def optimize_lbfgs_full(prob_jax, segments, ctrl0_list, lam_out=200.0,
         callback=cb,
     )
     return res
+
+
+def flatten_ctrl_list(ctrl_list):
+    return np.concatenate([np.asarray(c, dtype=np.float32).ravel() for c in ctrl_list]).astype(np.float32)
+
+
+def split_ctrl_flat(flat_ctrl, segments):
+    out = []
+    idx = 0
+    flat_ctrl = np.asarray(flat_ctrl, dtype=np.float32)
+    for seg in segments:
+        ns = seg["n_free"] + seg["n_pulse"]
+        span = ns * 4
+        out.append(flat_ctrl[idx:idx + span].reshape(ns, 4).astype(np.float32))
+        idx += span
+    return out
+
+
+def flatten_mask_list(mask_list):
+    return np.concatenate([np.asarray(m, dtype=bool).ravel() for m in mask_list])
+
+
+def default_bounds_for_steps(n_total_steps):
+    return [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX), (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total_steps
+
+
+def optimize_lbfgs_masked(value_and_grad, ctrl0_flat, free_mask_flat, bounds_full,
+                          maxiter=100, callback_every=10, snapshot_every=None):
+    ctrl0_flat = np.asarray(ctrl0_flat, dtype=np.float32)
+    free_mask_flat = np.asarray(free_mask_flat, dtype=bool).ravel()
+    snapshots = {0: ctrl0_flat.copy()}
+
+    if ctrl0_flat.shape != free_mask_flat.shape:
+        raise ValueError("ctrl0_flat and free_mask_flat must have the same shape")
+
+    free_idx = np.flatnonzero(free_mask_flat)
+    if free_idx.size == 0:
+        return MaskedOptimizationResult(
+            x_full=ctrl0_flat.copy(),
+            nit=0,
+            nfev=0,
+            success=True,
+            message="No free control variables; skipped optimisation.",
+            snapshots=snapshots,
+        )
+
+    x0 = ctrl0_flat[free_idx].astype(np.float32)
+    bounds = [bounds_full[i] for i in free_idx]
+    counter = {"n": 0}
+    t0 = time.time()
+
+    def merge_free(x_free):
+        x_full = ctrl0_flat.copy()
+        x_full[free_idx] = np.asarray(x_free, dtype=np.float32)
+        return x_full
+
+    def fg(x_free):
+        x_full = merge_free(x_free)
+        v, g_full = value_and_grad(jnp.asarray(x_full, dtype=jnp.float32))
+        g_full = np.asarray(g_full, dtype=np.float64)
+        return float(v), g_full[free_idx]
+
+    def cb(xk):
+        counter["n"] += 1
+        if snapshot_every and counter["n"] % snapshot_every == 0:
+            snapshots[counter["n"]] = merge_free(xk)
+        if callback_every > 0 and counter["n"] % callback_every == 0:
+            print(f"iter={counter['n']:4d}  elapsed={time.time() - t0:7.2f}s")
+
+    res = minimize(
+        fg,
+        x0,
+        method="L-BFGS-B",
+        jac=True,
+        bounds=bounds,
+        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
+        callback=cb,
+    )
+    x_full = merge_free(res.x)
+    snapshots[res.nit] = x_full.copy()
+    return MaskedOptimizationResult(
+        x_full=x_full.astype(np.float32),
+        nit=int(res.nit),
+        nfev=int(res.nfev),
+        success=bool(res.success),
+        message=str(res.message),
+        snapshots=snapshots,
+    )
 
 
 def run_demo():

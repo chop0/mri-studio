@@ -42,7 +42,10 @@ const DEFAULT_ISOS = [
 ];
 
 function makeIsos(data: BlochData, pulse: PulseSegment[]): Isochromat[] {
-  return DEFAULT_ISOS.map((def, i) => ({
+  const defs = data.iso?.length
+    ? data.iso.map(([n], i) => DEFAULT_ISOS[i] ? { ...DEFAULT_ISOS[i], n } : { r: 0, z: 0, n })
+    : DEFAULT_ISOS;
+  return defs.map((def, i) => ({
     r: def.r, z: def.z,
     c: COLORS[i % COLORS.length],
     v: true,
@@ -57,11 +60,14 @@ function totalTime(data: BlochData): number {
   );
 }
 
+function defaultIsoCount(data: BlochData): number {
+  return data.iso?.length ?? DEFAULT_ISOS.length;
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [data,     setData]     = useState<BlochData | null>(null);
-  const [mode,     setMode]     = useState("fixed");
   const [scen,     setScen]     = useState("");
   const [gIdx,     setGIdx]     = useState(0);
   const [tS,       setTS]       = useState(0);
@@ -91,13 +97,16 @@ export default function App() {
   const R = useRef<SharedRef>({} as SharedRef);
 
   const mt     = data ? totalTime(data) : 1000;
-  const gIters = useMemo(
-    () => data?.grape ? Object.keys(data.grape).map(Number).sort((a, b) => a - b) : [],
-    [data]
+  const iterKeys = useMemo(
+    () => scen && data?.scenarios?.[scen]
+      ? Object.keys(data.scenarios[scen].pulses).sort((a, b) => Number(a) - Number(b))
+      : [],
+    [data, scen]
   );
+  const iterNums = useMemo(() => iterKeys.map(Number), [iterKeys]);
   const pulse = useMemo(
-    () => getPulse(data, mode, scen, gIters, gIdx),
-    [data, mode, scen, gIdx, gIters]
+    () => getPulse(data, scen, iterKeys[gIdx] ?? null),
+    [data, scen, gIdx, iterKeys]
   );
 
   R.current = { data, pulse, isos, setIsos, cam, setCam, tS, setTS, tE, setTE, vS, setVS, vE, setVE, tC, setTC, mt, xsH, setXsH, showMp, nCI, setNCI };
@@ -356,15 +365,14 @@ export default function App() {
         const mt2 = totalTime(d);
         setData(d);
         setTS(0); setTE(mt2); setVS(0); setVE(mt2); setTC(mt2);
-        const firstScen = Object.keys(d.fixed)[0] ?? "";
+        const firstScen = Object.keys(d.scenarios)[0] ?? "";
         setScen(firstScen);
-        if (d.grape) {
-          const gi = Object.keys(d.grape).map(Number).sort((a, b) => a - b);
-          setGIdx(gi.length - 1);
-        }
-        const initPulse = d.pulses[firstScen] as PulseSegment[];
+        const firstIterKeys = firstScen ? Object.keys(d.scenarios[firstScen].pulses).sort((a, b) => Number(a) - Number(b)) : [];
+        setGIdx(Math.max(firstIterKeys.length - 1, 0));
+        const initPulse = firstIterKeys.length > 0 ? d.scenarios[firstScen].pulses[firstIterKeys[firstIterKeys.length - 1]] : null;
+        if (!initPulse) throw new Error(`No pulse data for scenario "${firstScen}"`);
         setIsos(makeIsos(d, initPulse));
-        setNCI(DEFAULT_ISOS.length);
+        setNCI(defaultIsoCount(d));
         setXsH(20);
       } catch (err) {
         alert("Bad JSON: " + err);
@@ -398,8 +406,8 @@ export default function App() {
 
   // ── Main viewer ───────────────────────────────────────────────────────────
 
-  const scenarios = Object.keys(data.fixed);
-  const resetIsos = () => { setIsos(makeIsos(data, pulse!)); setNCI(DEFAULT_ISOS.length); };
+  const scenarios = Object.keys(data.scenarios);
+  const resetIsos = () => { setIsos(makeIsos(data, pulse!)); setNCI(defaultIsoCount(data)); };
   const clearIsos = () => { setIsos([]); setNCI(0); };
 
   return (
@@ -411,19 +419,24 @@ export default function App() {
           className="px-2 py-1 rounded border text-xs"
           style={{ background: BG2, borderColor: GR, color: TX }}
           value={scen}
-          onChange={e => { setScen(e.target.value); setMode("fixed"); }}
+          onChange={e => {
+            const nextScen = e.target.value;
+            const nextKeys = Object.keys(data.scenarios[nextScen].pulses).sort((a, b) => Number(a) - Number(b));
+            setScen(nextScen);
+            setGIdx(Math.max(nextKeys.length - 1, 0));
+          }}
         >
           {scenarios.map(k => <option key={k}>{k}</option>)}
         </select>
 
-        {gIters.length > 0 && (
+        {iterKeys.length > 1 && (
           <>
             <input
-              type="range" min={0} max={gIters.length - 1} value={gIdx}
+              type="range" min={0} max={iterKeys.length - 1} value={gIdx}
               onChange={e => setGIdx(+e.target.value)}
               className="w-32" style={{ accentColor: AC }}
             />
-            <span className="font-bold" style={{ color: CUR }}>iter {gIters[gIdx]}</span>
+            <span className="font-bold" style={{ color: CUR }}>iter {iterNums[gIdx]}</span>
           </>
         )}
 
