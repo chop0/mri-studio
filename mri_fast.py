@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import minimize
 from scipy.special import ellipk, ellipe
 
 
@@ -57,16 +56,6 @@ class ProblemJAX:
     s_max: float
     nx: int
     nz: int
-
-
-@dataclass
-class MaskedOptimizationResult:
-    x_full: np.ndarray
-    nit: int
-    nfev: int
-    success: bool
-    message: str
-    snapshots: dict[int, np.ndarray]
 
 
 def biot_savart(rho, z, z0, R):
@@ -380,38 +369,8 @@ def metrics(ctrl, prob: ProblemNP, n_free, dt):
     }
 
 
-def optimize_lbfgs(prob_jax: ProblemJAX, ctrl0, n_seg, n_free, n_pulse, dt, lam_out=200.0, rf_pen=5e7, maxiter=100, callback_every=10):
-    n_steps = n_free + n_pulse
-    value_and_grad = make_value_and_grad(prob_jax, n_seg, n_free, n_pulse, dt, lam_out, rf_pen)
-
-    x0 = np.asarray(ctrl0, dtype=np.float32).ravel()
-    bounds = [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX), (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * (n_seg * n_steps)
-    counter = {"n": 0}
-    t0 = time.time()
-
-    def fg(x):
-        v, g = value_and_grad(jnp.asarray(x, dtype=jnp.float32))
-        return float(v), np.asarray(g, dtype=np.float64)
-
-    def cb(xk):
-        counter["n"] += 1
-        if callback_every > 0 and counter["n"] % callback_every == 0:
-            print(f"iter={counter['n']:4d}  elapsed={time.time() - t0:7.2f}s")
-
-    res = minimize(
-        fg,
-        x0,
-        method="L-BFGS-B",
-        jac=True,
-        bounds=bounds,
-        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
-        callback=cb,
-    )
-    return res
-
-
 # ---------------------------------------------------------------------------
-# Full-sequence optimisation (variable-dt, including excitation)
+# Full-sequence objective (variable-dt, including excitation)
 # ---------------------------------------------------------------------------
 
 def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
@@ -522,127 +481,9 @@ def make_value_and_grad_full(prob, segments, lam_out, rf_pen):
     return jax.jit(jax.value_and_grad(loss))
 
 
-def optimize_lbfgs_full(prob_jax, segments, ctrl0_list, lam_out=200.0,
-                        rf_pen=5e7, maxiter=100, callback_every=10):
-    """
-    Full-sequence L-BFGS-B optimisation with variable-dt segments.
-    ctrl0_list: list of np arrays, one per segment, each (n_steps, 4).
-    """
-    value_and_grad = make_value_and_grad_full(prob_jax, segments, lam_out, rf_pen)
-
-    x0 = np.concatenate([c.ravel() for c in ctrl0_list]).astype(np.float32)
-    n_total = sum(s["n_free"] + s["n_pulse"] for s in segments)
-    bounds = [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX),
-              (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total
-    counter = {"n": 0}
-    t0 = time.time()
-
-    def fg(x):
-        v, g = value_and_grad(jnp.asarray(x, dtype=jnp.float32))
-        return float(v), np.asarray(g, dtype=np.float64)
-
-    def cb(xk):
-        counter["n"] += 1
-        if callback_every > 0 and counter["n"] % callback_every == 0:
-            print(f"iter={counter['n']:4d}  elapsed={time.time() - t0:7.2f}s")
-
-    res = minimize(
-        fg, x0, method="L-BFGS-B", jac=True, bounds=bounds,
-        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
-        callback=cb,
-    )
-    return res
-
-
-def flatten_ctrl_list(ctrl_list):
-    return np.concatenate([np.asarray(c, dtype=np.float32).ravel() for c in ctrl_list]).astype(np.float32)
-
-
-def split_ctrl_flat(flat_ctrl, segments):
-    out = []
-    idx = 0
-    flat_ctrl = np.asarray(flat_ctrl, dtype=np.float32)
-    for seg in segments:
-        ns = seg["n_free"] + seg["n_pulse"]
-        span = ns * 4
-        out.append(flat_ctrl[idx:idx + span].reshape(ns, 4).astype(np.float32))
-        idx += span
-    return out
-
-
-def flatten_mask_list(mask_list):
-    return np.concatenate([np.asarray(m, dtype=bool).ravel() for m in mask_list])
-
-
-def default_bounds_for_steps(n_total_steps):
-    return [(-B1_MAX, B1_MAX), (-B1_MAX, B1_MAX), (-GX_MAX, GX_MAX), (-GZ_MAX, GZ_MAX)] * n_total_steps
-
-
-def optimize_lbfgs_masked(value_and_grad, ctrl0_flat, free_mask_flat, bounds_full,
-                          maxiter=100, callback_every=10, snapshot_every=None):
-    ctrl0_flat = np.asarray(ctrl0_flat, dtype=np.float32)
-    free_mask_flat = np.asarray(free_mask_flat, dtype=bool).ravel()
-    snapshots = {0: ctrl0_flat.copy()}
-
-    if ctrl0_flat.shape != free_mask_flat.shape:
-        raise ValueError("ctrl0_flat and free_mask_flat must have the same shape")
-
-    free_idx = np.flatnonzero(free_mask_flat)
-    if free_idx.size == 0:
-        return MaskedOptimizationResult(
-            x_full=ctrl0_flat.copy(),
-            nit=0,
-            nfev=0,
-            success=True,
-            message="No free control variables; skipped optimisation.",
-            snapshots=snapshots,
-        )
-
-    x0 = ctrl0_flat[free_idx].astype(np.float32)
-    bounds = [bounds_full[i] for i in free_idx]
-    counter = {"n": 0}
-    t0 = time.time()
-
-    def merge_free(x_free):
-        x_full = ctrl0_flat.copy()
-        x_full[free_idx] = np.asarray(x_free, dtype=np.float32)
-        return x_full
-
-    def fg(x_free):
-        x_full = merge_free(x_free)
-        v, g_full = value_and_grad(jnp.asarray(x_full, dtype=jnp.float32))
-        g_full = np.asarray(g_full, dtype=np.float64)
-        return float(v), g_full[free_idx]
-
-    def cb(xk):
-        counter["n"] += 1
-        if snapshot_every and counter["n"] % snapshot_every == 0:
-            snapshots[counter["n"]] = merge_free(xk)
-        if callback_every > 0 and counter["n"] % callback_every == 0:
-            print(f"iter={counter['n']:4d}  elapsed={time.time() - t0:7.2f}s")
-
-    res = minimize(
-        fg,
-        x0,
-        method="L-BFGS-B",
-        jac=True,
-        bounds=bounds,
-        options={"maxiter": maxiter, "ftol": 1e-12, "gtol": 1e-8},
-        callback=cb,
-    )
-    x_full = merge_free(res.x)
-    snapshots[res.nit] = x_full.copy()
-    return MaskedOptimizationResult(
-        x_full=x_full.astype(np.float32),
-        nit=int(res.nit),
-        nfev=int(res.nfev),
-        success=bool(res.success),
-        message=str(res.message),
-        snapshots=snapshots,
-    )
-
-
 def run_demo():
+    from mri_opt import SearchConfig, default_bounds_for_steps, flatten_ctrl_list, optimize_masked_controls
+
     dt = 10e-6
     n_seg = 10
     n_free = 35
@@ -666,17 +507,14 @@ def run_demo():
     print(f"JAX compile+first-eval: {compile_time:.3f}s")
     print(f"JAX steady-state value+grad: {steady_eval:.3f}s")
 
-    res = optimize_lbfgs(
-        fine_jax,
-        ctrl0,
-        n_seg=n_seg,
-        n_free=n_free,
-        n_pulse=n_pulse,
-        dt=dt,
-        maxiter=25,
-        callback_every=5,
+    res = optimize_masked_controls(
+        value_and_grad=value_and_grad,
+        ctrl0_flat=flatten_ctrl_list([ctrl0[si] for si in range(n_seg)]),
+        free_mask_flat=np.ones(ctrl0.size, dtype=bool),
+        bounds_full=default_bounds_for_steps(n_seg * (n_free + n_pulse)),
+        config=SearchConfig(n_trials=4, inner_steps=10),
     )
-    ctrl_opt = res.x.reshape(n_seg, n_free + n_pulse, 4).astype(np.float32)
+    ctrl_opt = res.x_full.reshape(n_seg, n_free + n_pulse, 4).astype(np.float32)
     print("Optimized metrics:", metrics(ctrl_opt, fine_np, n_free, dt))
     print(f"Optimizer status: nit={res.nit}, nfev={res.nfev}, success={res.success}")
 

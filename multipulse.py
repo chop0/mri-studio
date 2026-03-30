@@ -7,10 +7,11 @@ Exports GRAPE iteration snapshots for the Bloch viewer.
 
 import time
 import json
+from dataclasses import dataclass
+
 import numpy as np
 import jax
 import jax.numpy as jnp
-from scipy.optimize import minimize
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -20,10 +21,28 @@ from mri_fast import (
     ProblemNP, ProblemJAX,
     compute_B0, build_cpmg_warm,
     excite_sinc_numpy, rodrigues_numpy, z_step_numpy,
-    make_value_and_grad_full, simulate_numpy_full,
-    flatten_ctrl_list, split_ctrl_flat, flatten_mask_list,
-    default_bounds_for_steps, optimize_lbfgs_masked,
+    make_value_and_grad_full,
 )
+from mri_opt import (
+    SearchConfig,
+    default_bounds_for_steps,
+    flatten_ctrl_list,
+    flatten_mask_list,
+    optimize_masked_controls,
+    split_ctrl_flat,
+)
+
+
+@dataclass
+class ScenarioSpec:
+    name: str
+    base: list[np.ndarray]
+    free_mask: list[np.ndarray]
+    objective: object | None = None
+    search: SearchConfig | None = None
+    log_metrics_prob: ProblemNP | None = None
+    log_metrics_w: np.ndarray | None = None
+    log_metrics_smax: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +303,7 @@ def run():
 
     total_steps = sum(seg["n_free"] + seg["n_pulse"] for seg in seg_meta)
     bounds_full = default_bounds_for_steps(total_steps)
+    optimizer_backend = "optuna"
 
     print("\nCompiling objectives...")
     vg_refocus = make_value_and_grad_full(prob_jax, seg_meta, lam_out=10000.0, rf_pen=5e5)
@@ -294,76 +314,72 @@ def run():
     jax.block_until_ready(_)
     print(f"Compiled: {time.time() - t0:.1f}s")
 
-    scenario_defs = [
-        {
-            "name": "GRAPE",
-            "base": base_selective,
-            "free_mask": mask_refocus,
-            "objective": vg_refocus,
-            "snapshot_every": 100,
-            "maxiter": 1200,
-            "log_metrics_prob": prob_np,
-            "log_metrics_w": prob_np.w_in,
-            "log_metrics_smax": prob_np.s_max,
-        },
-        {
-            "name": "Full GRAPE",
-            "base": base_selective,
-            "free_mask": mask_all,
-            "objective": vg_geom,
-            "snapshot_every": 100,
-            "maxiter": 1200,
-            "log_metrics_prob": prob_np_full,
-            "log_metrics_w": geom_in_full,
-            "log_metrics_smax": s_max_full,
-        },
-        {
-            "name": "Selective CPMG",
-            "base": base_selective,
-            "free_mask": mask_none,
-        },
-        {
-            "name": "Basic CPMG",
-            "base": base_basic,
-            "free_mask": mask_none,
-        },
-        {
-            "name": "Free",
-            "base": base_free,
-            "free_mask": mask_none,
-        },
+    scenario_specs = [
+        ScenarioSpec(
+            name="GRAPE",
+            base=base_selective,
+            free_mask=mask_refocus,
+            objective=vg_refocus,
+            search=SearchConfig(
+                backend=optimizer_backend,
+                n_trials=24,
+                inner_steps=80,
+                seed=11,
+                snapshot_every=1,
+            ),
+            log_metrics_prob=prob_np,
+            log_metrics_w=prob_np.w_in,
+            log_metrics_smax=prob_np.s_max,
+        ),
+        ScenarioSpec(
+            name="Full GRAPE",
+            base=base_selective,
+            free_mask=mask_all,
+            objective=vg_geom,
+            search=SearchConfig(
+                backend=optimizer_backend,
+                n_trials=16,
+                inner_steps=60,
+                seed=23,
+                snapshot_every=1,
+            ),
+            log_metrics_prob=prob_np_full,
+            log_metrics_w=geom_in_full,
+            log_metrics_smax=s_max_full,
+        ),
+        ScenarioSpec(name="Selective CPMG", base=base_selective, free_mask=mask_none),
+        ScenarioSpec(name="Basic CPMG", base=base_basic, free_mask=mask_none),
+        ScenarioSpec(name="Free", base=base_free, free_mask=mask_none),
     ]
 
     scenario_results = {}
-    for cfg in scenario_defs:
-        name = cfg["name"]
-        base_flat = flatten_ctrl_list(cfg["base"])
-        free_mask_flat = flatten_mask_list(cfg["free_mask"])
+    for spec in scenario_specs:
+        name = spec.name
+        base_flat = flatten_ctrl_list(spec.base)
+        free_mask_flat = flatten_mask_list(spec.free_mask)
         n_free_vars = int(np.count_nonzero(free_mask_flat))
         print(f"\n--- {name} ({n_free_vars} free variables) ---")
-        if "objective" in cfg:
-            res = optimize_lbfgs_masked(
-                cfg["objective"],
-                base_flat,
-                free_mask_flat,
-                bounds_full,
-                maxiter=cfg["maxiter"],
-                callback_every=cfg["snapshot_every"],
-                snapshot_every=cfg["snapshot_every"],
+        if spec.objective is not None and spec.search is not None:
+            res = optimize_masked_controls(
+                value_and_grad=spec.objective,
+                ctrl0_flat=base_flat,
+                free_mask_flat=free_mask_flat,
+                bounds_full=bounds_full,
+                config=spec.search,
             )
             ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
             snapshots = {
                 int(it): split_ctrl_flat(flat_ctrl, seg_meta)
                 for it, flat_ctrl in sorted(res.snapshots.items())
             }
-            log_metrics_prob = cfg["log_metrics_prob"]
+            log_metrics_prob = spec.log_metrics_prob
             sig_log, Mx_log, My_log, Mz_log = simulate_numpy_full_signal(ctrl_list, seg_meta, log_metrics_prob)
-            m_log = full_metrics(Mx_log, My_log, Mz_log, cfg["log_metrics_w"], cfg["log_metrics_smax"])
-            print(f"  iter {res.nit:4d}  coh={m_log['coh']:.3f}  φ_std={m_log['phi_std']:.1f}°  "
+            m_log = full_metrics(Mx_log, My_log, Mz_log, spec.log_metrics_w, spec.log_metrics_smax)
+            print(f"  trials {res.nit:4d}  coh={m_log['coh']:.3f}  φ_std={m_log['phi_std']:.1f}°  "
                   f"θ_std={m_log['theta_std']:.1f}°  sig={m_log['sig']:.3f}  [{time.time()-t0:.0f}s]")
-            print(f"  status: {res.message}")
+            print(f"  backend: {res.backend}  status: {res.message}")
         else:
-            ctrl_list = [seg.copy() for seg in cfg["base"]]
+            ctrl_list = [seg.copy() for seg in spec.base]
             snapshots = {0: [seg.copy() for seg in ctrl_list]}
             sig_log, Mx_log, My_log, Mz_log = simulate_numpy_full_signal(ctrl_list, seg_meta, prob_np)
             m_log = full_metrics(Mx_log, My_log, Mz_log, prob_np.w_in, prob_np.s_max)
@@ -428,7 +444,7 @@ def run():
         ax.plot(np.arange(len(sig)) * dt * 1e3, sig / prob_np.s_max,
                 col, lw=2, label=f"{nm} coh={m['coh']:.2f}")
     ax.set_xlabel("t [ms]"); ax.set_ylabel("signal / S_max")
-    ax.set_title(f"Multi-pulse reconvergence ({grape_total} iters)")
+    ax.set_title(f"Multi-pulse reconvergence ({grape_total} trials)")
     ax.legend(fontsize=8); ax.grid(alpha=0.3); ax.set_ylim(-0.05, 1.05)
 
     # Row 1: |M⊥| full FOV and zoomed near slice
@@ -521,7 +537,7 @@ def run():
 
     # Row 6: summary
     ax = fig.add_subplot(gs[6, :]); ax.axis("off")
-    txt = f"Dense grid ({Nx}×{Nz}), xy cost, {grape_total} iters\n\n"
+    txt = f"Dense grid ({Nx}×{Nz}), xy cost, {grape_total} trials\n\n"
     txt += f"  {'':>18s} {'coh':>6s} {'sig':>6s} {'φ_std':>7s} {'θ_std':>7s}\n"
     txt += "  " + "-" * 42 + "\n"
     for nm, m in [("Full GRAPE", scenario_results["Full GRAPE"]["metrics"]), ("GRAPE", m_opt),
