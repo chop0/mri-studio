@@ -2,5 +2,4 @@ numpy
 scipy
 matplotlib
 jax
-optuna
-ray[tune]
+tqdm

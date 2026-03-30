@@ -308,12 +308,14 @@ export default function App() {
 
     const onMove = (e: PointerEvent) => {
       if (!xd) return;
+      const dragIndex = xd.i;
       const p  = canvasToWorld(e);
       const { data: d, pulse: pl, setIsos } = R.current;
       const r  = +Math.max(0, p.r).toFixed(1), z = +p.z.toFixed(1);
       setIsos(prev => {
+        if (!prev[dragIndex] || !d || !pl) return prev;
         const next = [...prev];
-        next[xd!.i] = { ...next[xd!.i], r, z, n: `r=${r} z=${z}`, t: sim(d!, r, z, pl!) };
+        next[dragIndex] = { ...next[dragIndex], r, z, n: `r=${r} z=${z}`, t: sim(d, r, z, pl) };
         return next;
       });
     };

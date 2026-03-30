@@ -12,9 +12,6 @@ from dataclasses import dataclass
 import numpy as np
 import jax
 import jax.numpy as jnp
-import matplotlib
-import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 
 from mri_fast import (
     GAMMA, T1, T2, FOV_X, FOV_Z, GX_MAX, GZ_MAX, B1_MAX,
@@ -303,8 +300,6 @@ def run():
 
     total_steps = sum(seg["n_free"] + seg["n_pulse"] for seg in seg_meta)
     bounds_full = default_bounds_for_steps(total_steps)
-    optimizer_backend = "optuna"
-
     print("\nCompiling objectives...")
     vg_refocus = make_value_and_grad_full(prob_jax, seg_meta, lam_out=10000.0, rf_pen=5e5)
     _ = vg_refocus(jnp.asarray(flatten_ctrl_list(base_selective), dtype=jnp.float32))
@@ -321,11 +316,10 @@ def run():
             free_mask=mask_refocus,
             objective=vg_refocus,
             search=SearchConfig(
-                backend=optimizer_backend,
-                n_trials=24,
-                inner_steps=80,
-                seed=11,
-                snapshot_every=1,
+                opt_steps=1200,
+                snapshot_every=25,
+                print_every=25,
+                metric_every=100,
             ),
             log_metrics_prob=prob_np,
             log_metrics_w=prob_np.w_in,
@@ -337,11 +331,10 @@ def run():
             free_mask=mask_all,
             objective=vg_geom,
             search=SearchConfig(
-                backend=optimizer_backend,
-                n_trials=16,
-                inner_steps=60,
-                seed=23,
-                snapshot_every=1,
+                opt_steps=1200,
+                snapshot_every=25,
+                print_every=25,
+                metric_every=100,
             ),
             log_metrics_prob=prob_np_full,
             log_metrics_w=geom_in_full,
@@ -360,12 +353,26 @@ def run():
         n_free_vars = int(np.count_nonzero(free_mask_flat))
         print(f"\n--- {name} ({n_free_vars} free variables) ---")
         if spec.objective is not None and spec.search is not None:
+            def progress(step, x_best_flat, _best_value):
+                if step % max(spec.search.metric_every, 1) != 0:
+                    print(f"  step {step:4d}  objective={_best_value:.3f}  [{time.time()-t0:.0f}s]")
+                    return
+                ctrl_prog = split_ctrl_flat(x_best_flat, seg_meta)
+                _, Mx_prog, My_prog, Mz_prog = simulate_numpy_full_signal(
+                    ctrl_prog, seg_meta, spec.log_metrics_prob
+                )
+                m_prog = full_metrics(Mx_prog, My_prog, Mz_prog, spec.log_metrics_w, spec.log_metrics_smax)
+                print(f"  step {step:4d}  objective={_best_value:.3f}  coh={m_prog['coh']:.3f}  "
+                      f"φ_std={m_prog['phi_std']:.1f}°  θ_std={m_prog['theta_std']:.1f}°  "
+                      f"sig={m_prog['sig']:.3f}  [{time.time()-t0:.0f}s]")
+
             res = optimize_masked_controls(
                 value_and_grad=spec.objective,
                 ctrl0_flat=base_flat,
                 free_mask_flat=free_mask_flat,
                 bounds_full=bounds_full,
                 config=spec.search,
+                progress_fn=progress,
             )
             ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
             snapshots = {
@@ -375,9 +382,7 @@ def run():
             log_metrics_prob = spec.log_metrics_prob
             sig_log, Mx_log, My_log, Mz_log = simulate_numpy_full_signal(ctrl_list, seg_meta, log_metrics_prob)
             m_log = full_metrics(Mx_log, My_log, Mz_log, spec.log_metrics_w, spec.log_metrics_smax)
-            print(f"  trials {res.nit:4d}  coh={m_log['coh']:.3f}  φ_std={m_log['phi_std']:.1f}°  "
-                  f"θ_std={m_log['theta_std']:.1f}°  sig={m_log['sig']:.3f}  [{time.time()-t0:.0f}s]")
-            print(f"  backend: {res.backend}  status: {res.message}")
+            print(f"  status: {res.message}")
         else:
             ctrl_list = [seg.copy() for seg in spec.base]
             snapshots = {0: [seg.copy() for seg in ctrl_list]}
@@ -427,6 +432,9 @@ def run():
 
     # --- Plots ---
     print("\nPlotting...")
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
     grape_total = max(scenario_results["GRAPE"]["snapshots"].keys())
     scenarios = [
         ("GRAPE", sig_opt, Mx_opt, My_opt, Mz_opt, m_opt, "#2ca02c"),

@@ -512,7 +512,7 @@ def run_demo():
         ctrl0_flat=flatten_ctrl_list([ctrl0[si] for si in range(n_seg)]),
         free_mask_flat=np.ones(ctrl0.size, dtype=bool),
         bounds_full=default_bounds_for_steps(n_seg * (n_free + n_pulse)),
-        config=SearchConfig(n_trials=4, inner_steps=10),
+        config=SearchConfig(n_trials=4, opt_steps=10),
     )
     ctrl_opt = res.x_full.reshape(n_seg, n_free + n_pulse, 4).astype(np.float32)
     print("Optimized metrics:", metrics(ctrl_opt, fine_np, n_free, dt))
