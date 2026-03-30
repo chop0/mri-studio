@@ -452,10 +452,10 @@ def run():
     print("  Multi-pulse reconvergence (dense grid, xy cost)")
     print("=" * 65)
 
-    dt = 10e-6
+    dt = 20e-6
     n_seg = 10
-    n_free = 35
-    n_pulse = 29
+    n_free = 18
+    n_pulse = 14
     n_steps = n_free + n_pulse
     sw_half = 0.004
 
@@ -467,6 +467,7 @@ def run():
 
     print(f"\nGrid: {Nx}×{Nz} (non-uniform z)")
     print(f"In-slice weighted: {int(np.sum(mask2d))}  S_max: {prob_np.s_max:.0f}")
+    print(f"Refocus segment: {n_steps} steps at {dt * 1e6:.1f} us ({n_free} free, {n_pulse} RF)")
 
     # --- Build excitation pulse (used for warm start and export) ---
     dt_exc = 2e-6
@@ -538,9 +539,11 @@ def run():
             free_mask=mask_refocus,
             objective_kind="selective",
             search=SearchConfig(
-                opt_steps=5000,
-                snapshot_every=200,
-                print_every=100,
+                opt_steps=1000,
+                snapshot_every=50,
+                print_every=50,
+                stall_patience=80,
+                min_improvement=1e-4,
             ),
             log_metrics_prob=prob_np,
             log_metrics_w=prob_np.w_in,
@@ -552,9 +555,11 @@ def run():
             free_mask=mask_all,
             objective_kind="full",
             search=SearchConfig(
-                opt_steps=5000,
-                snapshot_every=200,
-                print_every=100,
+                opt_steps=1000,
+                snapshot_every=50,
+                print_every=50,
+                stall_patience=80,
+                min_improvement=1e-4,
             ),
             log_metrics_prob=prob_np_full,
             log_metrics_w=geom_in_full,

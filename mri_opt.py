@@ -14,6 +14,8 @@ class SearchConfig:
     opt_steps: int = 1200
     snapshot_every: int = 25
     print_every: int = 25
+    stall_patience: int = 0
+    min_improvement: float = 0.0
 
 
 @dataclass
@@ -104,6 +106,7 @@ def optimize_masked_controls(
         "nit": 0,
         "best_x": ctrl0_flat.copy(),
         "best_value": None,
+        "best_iter": 0,
     }
     bar = tqdm(total=config.opt_steps, desc="L-BFGS-B", unit="iter", leave=True) if show_progress_bar else None
 
@@ -118,8 +121,11 @@ def optimize_masked_controls(
         value = float(value)
         grad_full = np.asarray(grad_full, dtype=np.float64)
         if state["best_value"] is None or value < state["best_value"]:
+            improvement = np.inf if state["best_value"] is None else float(state["best_value"] - value)
             state["best_value"] = value
             state["best_x"] = x_full.copy()
+            if improvement > float(config.min_improvement):
+                state["best_iter"] = state["nit"]
         return value, grad_full[free_idx] * scale_free
 
     def callback(xk_norm):
@@ -139,6 +145,11 @@ def optimize_masked_controls(
         current_best = state["best_value"]
         if bar is not None and current_best is not None:
             bar.set_postfix(score=float(-current_best))
+        if config.stall_patience > 0 and (state["nit"] - state["best_iter"]) >= config.stall_patience:
+            snapshots[state["nit"]] = state["best_x"].copy()
+            raise OptimizationStopRequested(
+                f"No meaningful improvement for {config.stall_patience} iterations; returning best-so-far controls."
+            )
         if stop_requested_fn is not None and stop_requested_fn():
             snapshots[state["nit"]] = state["best_x"].copy()
             raise OptimizationStopRequested("Stop requested; returning best-so-far controls.")
