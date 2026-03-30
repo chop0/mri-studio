@@ -1,0 +1,182 @@
+/* MRI Studio — dark, dense, no rounded corners */
+.root {
+    -fx-base: #0b0b12;
+    -fx-background: #0b0b12;
+    -fx-control-inner-background: #101018;
+    -fx-accent: #3b82f6;
+    -fx-font-family: "monospace";
+    -fx-font-size: 11px;
+    -fx-text-fill: #94a3b8;
+}
+
+.split-pane {
+    -fx-background-color: #0b0b12;
+    -fx-padding: 0;
+}
+
+.split-pane > .split-pane-divider {
+    -fx-background-color: #1a1a28;
+    -fx-padding: 0 1 0 1;
+}
+
+.label {
+    -fx-text-fill: #94a3b8;
+}
+
+.button {
+    -fx-background-color: #101018;
+    -fx-text-fill: #94a3b8;
+    -fx-border-color: #1a1a28;
+    -fx-border-radius: 0;
+    -fx-background-radius: 0;
+    -fx-padding: 2 6 2 6;
+    -fx-font-size: 10px;
+}
+
+.button:hover {
+    -fx-background-color: #1a1a28;
+    -fx-text-fill: #c8d6e5;
+}
+
+.combo-box {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+    -fx-border-radius: 0;
+    -fx-background-radius: 0;
+}
+
+.combo-box .list-cell {
+    -fx-text-fill: #94a3b8;
+    -fx-background-color: #101018;
+}
+
+.combo-box-popup .list-view {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+}
+
+.combo-box-popup .list-view .list-cell:hover {
+    -fx-background-color: #1a1a28;
+}
+
+.slider .track {
+    -fx-background-color: #1a1a28;
+    -fx-background-radius: 0;
+}
+
+.slider .thumb {
+    -fx-background-color: #3b82f6;
+    -fx-background-radius: 0;
+}
+
+.check-box {
+    -fx-text-fill: #4a5568;
+}
+
+.check-box .box {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+    -fx-border-radius: 0;
+    -fx-background-radius: 0;
+}
+
+.scroll-bar {
+    -fx-background-color: #0b0b12;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: #1a1a28;
+    -fx-background-radius: 0;
+}
+
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-shape: "";
+    -fx-padding: 0;
+}
+
+.menu-bar {
+    -fx-background-color: #0b0b12;
+    -fx-border-color: transparent transparent #1a1a28 transparent;
+}
+
+.menu-bar .menu {
+    -fx-background-color: transparent;
+}
+
+.menu-bar .label {
+    -fx-text-fill: #94a3b8;
+    -fx-font-size: 11px;
+}
+
+.context-menu {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+    -fx-border-radius: 0;
+    -fx-background-radius: 0;
+    -fx-padding: 2 0 2 0;
+}
+
+.context-menu .menu-item {
+    -fx-background-color: transparent;
+}
+
+.context-menu .menu-item .label {
+    -fx-text-fill: #94a3b8;
+    -fx-font-size: 10px;
+}
+
+.context-menu .menu-item:hover,
+.context-menu .menu-item:focused {
+    -fx-background-color: #1a1a28;
+}
+
+.separator .line {
+    -fx-border-color: #1a1a28;
+}
+
+.table-view {
+    -fx-background-color: #0b0b12;
+    -fx-border-color: #1a1a28;
+}
+
+.table-view .column-header {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+}
+
+.table-view .table-row-cell {
+    -fx-background-color: #0b0b12;
+    -fx-border-color: transparent transparent #1a1a28 transparent;
+}
+
+.table-view .table-row-cell:odd {
+    -fx-background-color: #101018;
+}
+
+.table-view .table-row-cell:selected {
+    -fx-background-color: #1a2744;
+}
+
+.titled-pane {
+    -fx-text-fill: #94a3b8;
+}
+
+.titled-pane > .title {
+    -fx-background-color: #101018;
+    -fx-border-color: #1a1a28;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 2 6 2 6;
+}
+
+.titled-pane > .content {
+    -fx-background-color: #0b0b12;
+    -fx-border-color: #1a1a28;
+}
