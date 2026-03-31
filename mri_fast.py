@@ -28,7 +28,7 @@ T2 = 100e-3
 
 
 def _normalized_objective_terms(
-    prob: ProblemJAX,
+    prob,
     J_in,
     J_out,
     power_out,

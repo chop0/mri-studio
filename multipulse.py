@@ -195,11 +195,6 @@ def export_viewer_json(
     Bxfg, Bzfg = compute_B0(Rf, Zf)
     dBzfg = (Bzfg - B0n) + Bxfg ** 2 / (2 * B0n)
 
-    Gxm_f = Rf + Zf ** 2 / (2 * B0n)
-    Gzm_f = Zf + (Rf / 2) ** 2 / (2 * B0n)
-    B1s_f = 1 + 0.12 * (Rf / (FOV_X / 2)) ** 2 + 0.08 * (Zf / (FOV_Z / 2)) ** 2
-    Mx0_f, My0_f, Mz0_f = excite_sinc_numpy(dBzfg, Gzm_f, B1s_f)
-
     field_data = {
         "B0n": B0n, "gamma": GAMMA, "T1": T1, "T2": T2,
         "FOV_X": FOV_X, "FOV_Z": FOV_Z, "slice_half": sw_half,
@@ -207,9 +202,6 @@ def export_viewer_json(
         "r_mm": [round(r * 1e3, 1) for r in r_arr],
         "z_mm": [round(zv * 1e3, 1) for zv in z_arr_f],
         "dBz_uT": np.round(dBzfg * 1e6, 3).tolist(),
-        "Mx0": np.round(Mx0_f, 4).tolist(),
-        "My0": np.round(My0_f, 4).tolist(),
-        "Mz0": np.round(Mz0_f, 4).tolist(),
     }
 
     def export_seg(steps):
@@ -471,7 +463,7 @@ def run():
     print("  Multi-pulse reconvergence (dense grid, xy cost)")
     print("=" * 65)
 
-    dt = 20e-6
+    dt = 200e-6
     n_seg = 10
     n_free = 18
     n_pulse = 14
@@ -488,9 +480,8 @@ def run():
     print(f"In-slice weighted: {int(np.sum(mask2d))}  S_max: {prob_np.s_max:.0f}")
     print(f"Refocus segment: {n_steps} steps at {dt * 1e6:.1f} us ({n_free} free, {n_pulse} RF)")
 
-    # --- Build excitation pulse (used for warm start and export) ---
-    dt_exc = 2e-6
-    T_exc = 400e-6
+    dt_exc = 20e-6
+    T_exc = 4000e-6
     N_exc = int(T_exc / dt_exc)
     N_reph = N_exc // 2
     t_exc_arr = np.linspace(-T_exc / 2, T_exc / 2, N_exc)
