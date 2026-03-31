@@ -18,22 +18,24 @@ import java.util.function.Consumer;
 /** Background cache for geometry shading snapshots. */
 public class GeometryShadingService {
     private static final int RADIAL_SAMPLES = 18;
-    private static final double INNER_Z_STEP = 0.5;
+    private static final double INNER_Z_STEP = 0.1;
     private static final double MID_Z_STEP = 1.0;
     private static final int OUTER_BANDS = 24;
 
     private static final String SIGNAL_BLOCKED_MESSAGE = "Signal shading is only defined during free precession; showing |M⊥|.";
 
+	private final BlochSimulator  blochSimulator;
     private final Executor executor;
     private final Consumer<Runnable> uiDispatcher;
     private final Runnable disposer;
     private final AtomicLong generation = new AtomicLong();
 
     public GeometryShadingService() {
-        this(createExecutor(), Platform::runLater, null);
+        this(new BlochSimulator(), createExecutor(), Platform::runLater, null);
     }
 
-    GeometryShadingService(Executor executor, Consumer<Runnable> uiDispatcher, Runnable disposer) {
+    GeometryShadingService(BlochSimulator blochSimulator, Executor executor, Consumer<Runnable> uiDispatcher, Runnable disposer) {
+		this.blochSimulator = blochSimulator;
         this.executor = executor;
         this.uiDispatcher = uiDispatcher;
         this.disposer = disposer != null ? disposer : () -> { };
@@ -57,7 +59,7 @@ public class GeometryShadingService {
         geometry.shadingComputing.set(true);
         executor.execute(() -> {
             try {
-                var snapshot = computeSnapshot(data, pulse, cursorTimeMicros, geometry.halfHeight.get(), geometry.shadeMode.get());
+                var snapshot = computeSnapshot(data, pulse, cursorTimeMicros, geometry.shadeMode.get());
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     geometry.shadingSnapshot.set(snapshot);
@@ -85,7 +87,6 @@ public class GeometryShadingService {
         BlochData data,
         List<PulseSegment> pulse,
         double cursorTimeMicros,
-        double halfHeight,
         GeometryViewModel.ShadeMode requestedMode
     ) {
         var field = data.field();
@@ -108,7 +109,7 @@ public class GeometryShadingService {
             double rMm = (double) radialIndex / (RADIAL_SAMPLES - 1) * rMax;
             for (int zIndex = 0; zIndex < zSamples.size(); zIndex++) {
                 double zMm = zSamples.get(zIndex);
-                var state = BlochSimulator.simulateTo(data, rMm, zMm, pulse, cursorTimeMicros);
+                var state = blochSimulator.simulateTo(data, rMm, zMm, pulse, cursorTimeMicros);
                 mx[radialIndex][zIndex] = state.mx();
                 my[radialIndex][zIndex] = state.my();
                 mp[radialIndex][zIndex] = state.mPerp();

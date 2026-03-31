@@ -29,7 +29,7 @@ class PersistentLayoutStoreTest {
                 0.42,
                 new PaneLeaf(PaneId.SPHERE),
                 new TabNode(List.of(
-                    new PaneLeaf(PaneId.GEOMETRY),
+                    new PaneLeaf(PaneId.CROSS_SECTION),
                     new PaneLeaf(PaneId.TIMELINE)
                 ), 1)
             ),

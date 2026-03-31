@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
+import ax.xz.mri.service.simulation.BlochSimulator;
 import ax.xz.mri.support.TestBlochDataFactory;
 import org.junit.jupiter.api.Test;
 
@@ -12,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GeometryShadingServiceTest {
     @Test
     void signalShadingFallsBackToMperpDuringRfAndClearsOnceRfEnds() {
-        var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> { });
+        var service = new GeometryShadingService(new BlochSimulator(), (Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
         geometry.shadeMode.set(GeometryViewModel.ShadeMode.SIGNAL);
 

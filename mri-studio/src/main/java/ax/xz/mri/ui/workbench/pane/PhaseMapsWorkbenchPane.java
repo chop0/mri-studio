@@ -7,13 +7,14 @@ import ax.xz.mri.ui.viewmodel.HeatMapViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
-import javafx.beans.property.ObjectProperty;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
+
+import java.util.List;
 
 import static ax.xz.mri.ui.theme.StudioTheme.BG;
 import static ax.xz.mri.ui.theme.StudioTheme.CUR;
@@ -23,28 +24,25 @@ import static ax.xz.mri.ui.theme.StudioTheme.UI_7;
 import static ax.xz.mri.ui.theme.StudioTheme.UI_8;
 import static ax.xz.mri.ui.theme.StudioTheme.UI_BOLD_9;
 
-/** Shared single-heatmap pane. */
-public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
+/** Combined phase-map pane with shared timeline overview and side-by-side subplots. */
+public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
     private static final double OVERVIEW_H = 10;
     private static final double OVERVIEW_GAP = 6;
     private static final double PAD_LEFT = 34;
-    private static final double PAD_RIGHT = 4;
+    private static final double PAD_RIGHT = 6;
     private static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP;
     private static final double PAD_BOTTOM = 16;
+    private static final double PLOT_GAP = 12;
 
-    private final HeatMapViewModel viewModel;
-    private final ObjectProperty<PhaseMapData> dataProperty;
     private final AxisScrubBar.Interaction overviewInteraction;
-    private boolean hoveringPlot;
+    private int hoveredPlot = -1;
     private double hoveredTimeMicros;
     private double hoveredYValue;
 
-    protected AbstractHeatMapPane(PaneContext paneContext, HeatMapViewModel viewModel,
-                                  ObjectProperty<PhaseMapData> dataProperty) {
+    public PhaseMapsWorkbenchPane(PaneContext paneContext) {
         super(paneContext);
-        this.viewModel = viewModel;
-        this.dataProperty = dataProperty;
-        this.overviewInteraction = new AxisScrubBar.Interaction(
+        setPaneTitle("Phase Maps");
+        overviewInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.HORIZONTAL,
             new AxisScrubBar.WindowModel() {
                 @Override
@@ -84,9 +82,9 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             }
         );
 
-        setPaneTitle(viewModel.title());
         bindRedraw(
-            dataProperty,
+            paneContext.session().derived.phaseMapZ,
+            paneContext.session().derived.phaseMapR,
             paneContext.session().viewport.tS,
             paneContext.session().viewport.tE,
             paneContext.session().viewport.tC,
@@ -99,31 +97,34 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             if (!event.isPrimaryButtonDown()) return;
             if (overviewInteraction.handlePress(overviewBounds(), event)) {
                 updateHover(event.getX(), event.getY());
-                updateStatus(event.getX(), event.getY());
+                updateStatus();
                 scheduleRedraw();
                 return;
             }
-            moveCursor(event.getX());
+            moveCursor(event.getX(), event.getY());
         });
         canvas.setOnMouseDragged(event -> {
             if (overviewInteraction.handleDrag(overviewBounds(), event)) {
                 updateHover(event.getX(), event.getY());
-                updateStatus(event.getX(), event.getY());
+                updateStatus();
                 scheduleRedraw();
                 return;
             }
-            updateHover(event.getX(), event.getY());
-            moveCursor(event.getX());
+            moveCursor(event.getX(), event.getY());
         });
         canvas.setOnMouseReleased(event -> overviewInteraction.handleRelease());
         canvas.setOnMouseMoved(event -> {
             updateHover(event.getX(), event.getY());
-            updateStatus(event.getX(), event.getY());
+            updateStatus();
+        });
+        canvas.setOnMouseExited(event -> {
+            hoveredPlot = -1;
+            scheduleRedraw();
         });
         canvas.setOnScroll(event -> {
             if (overviewInteraction.handleScroll(overviewBounds(), event)) {
+                updateStatus();
                 scheduleRedraw();
-                updateStatus(event.getX(), event.getY());
             }
         });
         canvas.setOnContextMenuRequested(event -> {
@@ -134,7 +135,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
                 menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
             } else {
                 var setCursor = new MenuItem("Set cursor here");
-                setCursor.setOnAction(actionEvent -> moveCursor(event.getX()));
+                setCursor.setOnAction(actionEvent -> moveCursor(event.getX(), event.getY()));
                 menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
             }
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
@@ -145,57 +146,83 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
     protected void paint(GraphicsContext g, double width, double height) {
         g.setFill(BG);
         g.fillRect(0, 0, width, height);
-        var phaseMap = dataProperty.get();
-        if (phaseMap == null) return;
 
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double tSpan = tMax - tMin;
-        double plotWidth = width - PAD_LEFT - PAD_RIGHT;
-        double plotHeight = height - PAD_TOP - PAD_BOTTOM;
+        var leftData = paneContext.session().derived.phaseMapZ.get();
+        var rightData = paneContext.session().derived.phaseMapR.get();
+        if (leftData == null && rightData == null) {
+            g.setFill(TX2);
+            g.setFont(UI_BOLD_9);
+            g.fillText("No phase-map data", PAD_LEFT, PAD_TOP + 18);
+            return;
+        }
+
         AxisScrubBar.draw(
             g,
             overviewBounds(width),
             AxisScrubBar.Spec.horizontal(
                 0,
                 Math.max(paneContext.session().viewport.maxTime.get(), 1),
-                tMin,
-                tMax,
-                rfSpans(),
-                java.util.List.of(new AxisScrubBar.Marker(paneContext.session().viewport.tC.get(), CUR, 0.85, 1.0))
+                paneContext.session().viewport.tS.get(),
+                paneContext.session().viewport.tE.get(),
+                AxisScrubBar.rfSpans(
+                    paneContext.session().document.blochData.get(),
+                    paneContext.session().document.currentPulse.get(),
+                    Color.web("#1565c0"),
+                    0.20
+                ),
+                List.of(new AxisScrubBar.Marker(paneContext.session().viewport.tC.get(), CUR, 0.85, 1.0))
             )
         );
 
+        var plots = plotRects(width, height);
+        drawPhaseMapPlot(g, plots[0], paneContext.session().phaseMapZ, leftData, hoveredPlot == 0);
+        drawPhaseMapPlot(g, plots[1], paneContext.session().phaseMapR, rightData, hoveredPlot == 1);
+    }
+
+    private void drawPhaseMapPlot(GraphicsContext g, PlotRect rect, HeatMapViewModel viewModel, PhaseMapData phaseMap, boolean hovered) {
         g.setFill(TX);
         g.setFont(UI_BOLD_9);
         g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(viewModel.title(), PAD_LEFT + plotWidth / 2, PAD_TOP - 3);
+        g.fillText(viewModel.title(), rect.x() + rect.width() / 2, rect.y() - 3);
         g.setTextAlign(TextAlignment.LEFT);
 
+        if (phaseMap == null) {
+            g.setFill(Color.color(0, 0, 0, 0.04));
+            g.fillRoundRect(rect.x(), rect.y(), rect.width(), rect.height(), 8, 8);
+            g.setFill(TX2);
+            g.setFont(UI_8);
+            g.fillText("Unavailable", rect.x() + 8, rect.y() + 16);
+            return;
+        }
+
+        double tMin = paneContext.session().viewport.tS.get();
+        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tSpan = tMax - tMin;
         double yMin = phaseMap.yArr()[0];
         double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
+
         g.setFont(UI_8);
         g.setTextAlign(TextAlignment.RIGHT);
         g.setFill(TX);
         for (double tick : viewModel.ticks()) {
-            double y = PAD_TOP + plotHeight * (1 - (tick - yMin) / (yMax - yMin));
-            g.fillText(String.valueOf((int) tick), PAD_LEFT - 3, y + 2);
+            double y = rect.y() + rect.height() * (1 - (tick - yMin) / (yMax - yMin));
+            g.fillText(String.valueOf((int) tick), rect.x() - 3, y + 2);
             g.setStroke(Color.color(0, 0, 0, 0.06));
             g.setLineWidth(0.3);
-            g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
+            g.strokeLine(rect.x(), y, rect.x() + rect.width(), y);
         }
         g.setTextAlign(TextAlignment.LEFT);
 
-        double cellHeight = plotHeight / phaseMap.nY();
+        double cellHeight = rect.height() / phaseMap.nY();
         for (int yIndex = 0; yIndex < phaseMap.nY(); yIndex++) {
             var row = phaseMap.data()[yIndex];
-            double y = PAD_TOP + plotHeight - ((yIndex + 0.5) / phaseMap.nY()) * plotHeight;
+            double y = rect.y() + rect.height() - ((yIndex + 0.5) / phaseMap.nY()) * rect.height();
             for (int tIndex = 0; tIndex < row.length; tIndex++) {
                 var cell = row[tIndex];
                 if (cell.tMicros() < tMin || cell.tMicros() > tMax) continue;
-                double x = PAD_LEFT + (cell.tMicros() - tMin) / tSpan * plotWidth;
+                double x = rect.x() + (cell.tMicros() - tMin) / tSpan * rect.width();
                 double nextT = (tIndex + 1 < row.length) ? row[tIndex + 1].tMicros() : cell.tMicros() + 40;
-                double cellWidth = Math.max(1, (nextT - cell.tMicros()) / tSpan * plotWidth + 1);
+                double cellWidth = Math.max(1, (nextT - cell.tMicros()) / tSpan * rect.width() + 1);
                 g.setFill(ColourUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.mPerp(), 0, 1)));
                 g.fillRect(x, y - cellHeight / 2, cellWidth, cellHeight + 1);
             }
@@ -205,32 +232,23 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             var field = paneContext.session().document.blochData.get().field();
             double sliceHalf = (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3;
             for (double zValue : new double[]{-sliceHalf, sliceHalf}) {
-                double y = PAD_TOP + plotHeight * (1 - (zValue - yMin) / (yMax - yMin));
+                double y = rect.y() + rect.height() * (1 - (zValue - yMin) / (yMax - yMin));
                 g.setStroke(Color.web("#2e7d32"));
                 g.setGlobalAlpha(0.4);
                 g.setLineWidth(0.5);
                 g.setLineDashes(3, 3);
-                g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
+                g.strokeLine(rect.x(), y, rect.x() + rect.width(), y);
             }
             g.setLineDashes();
             g.setGlobalAlpha(1);
         }
 
-        double cursorX = PAD_LEFT + (paneContext.session().viewport.tC.get() - tMin) / tSpan * plotWidth;
+        double cursorX = rect.x() + (paneContext.session().viewport.tC.get() - tMin) / tSpan * rect.width();
         g.setStroke(CUR);
-        g.setLineWidth(1.5);
+        g.setLineWidth(1.4);
         g.setGlobalAlpha(0.8);
-        g.strokeLine(cursorX, PAD_TOP, cursorX, PAD_TOP + plotHeight);
+        g.strokeLine(cursorX, rect.y(), cursorX, rect.y() + rect.height());
         g.setGlobalAlpha(1);
-        g.setFill(CUR);
-        g.setGlobalAlpha(0.7);
-        g.fillPolygon(
-            new double[]{cursorX, cursorX - 4, cursorX + 4},
-            new double[]{PAD_TOP + plotHeight, PAD_TOP + plotHeight + 6, PAD_TOP + plotHeight + 6},
-            3
-        );
-        g.setGlobalAlpha(1);
-        drawBadge(g, cursorX, PAD_TOP + 4, formatTime(paneContext.session().viewport.tC.get()), CUR);
 
         int tickStep = niceTick(tSpan);
         g.setFill(TX2);
@@ -238,112 +256,96 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         g.setTextAlign(TextAlignment.CENTER);
         g.setGlobalAlpha(0.6);
         for (double tick = Math.ceil(tMin / tickStep) * tickStep; tick <= tMax; tick += tickStep) {
-            double x = PAD_LEFT + (tick - tMin) / tSpan * plotWidth;
-            if (x > PAD_LEFT + 4 && x < PAD_LEFT + plotWidth - 4) {
+            double x = rect.x() + (tick - tMin) / tSpan * rect.width();
+            if (x > rect.x() + 4 && x < rect.x() + rect.width() - 4) {
                 String label = tSpan > 2000 ? String.format("%.0fms", tick / 1000) : (int) tick + "\u03bcs";
-                g.fillText(label, x, height - 2);
+                g.fillText(label, x, rect.y() + rect.height() + 10);
             }
         }
         g.setTextAlign(TextAlignment.LEFT);
         g.setGlobalAlpha(1);
 
-        if (hoveringPlot) {
-            double hoverX = PAD_LEFT + (hoveredTimeMicros - tMin) / tSpan * plotWidth;
-            double hoverY = PAD_TOP + plotHeight * (1 - (hoveredYValue - yMin) / (yMax - yMin));
+        if (hovered) {
+            double hoverX = rect.x() + (hoveredTimeMicros - tMin) / tSpan * rect.width();
+            double hoverY = rect.y() + rect.height() * (1 - (hoveredYValue - yMin) / (yMax - yMin));
             g.setStroke(Color.color(StudioTheme.AC.getRed(), StudioTheme.AC.getGreen(), StudioTheme.AC.getBlue(), 0.35));
             g.setLineWidth(0.8);
             g.setLineDashes(4, 3);
-            g.strokeLine(hoverX, PAD_TOP, hoverX, PAD_TOP + plotHeight);
-            g.strokeLine(PAD_LEFT, hoverY, PAD_LEFT + plotWidth, hoverY);
+            g.strokeLine(hoverX, rect.y(), hoverX, rect.y() + rect.height());
+            g.strokeLine(rect.x(), hoverY, rect.x() + rect.width(), hoverY);
             g.setLineDashes();
-            drawBadge(g, hoverX, PAD_TOP + plotHeight - 18, String.format("t=%.0f \u03bcs", hoveredTimeMicros), StudioTheme.AC);
         }
     }
 
-    private void moveCursor(double mouseX) {
+    private void moveCursor(double mouseX, double mouseY) {
+        int plotIndex = plotIndexAt(mouseX, mouseY);
+        if (plotIndex < 0) return;
+        var rect = plotRects(canvas.getWidth(), canvas.getHeight())[plotIndex];
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
+        double time = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
         paneContext.session().viewport.setCursor(time);
     }
 
-    private void updateStatus(double mouseX, double mouseY) {
-        var phaseMap = dataProperty.get();
-        if (phaseMap == null) {
-            setPaneStatus("No phase data");
-            return;
-        }
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double plotHeight = canvas.getHeight() - PAD_TOP - PAD_BOTTOM;
-        double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
-        double yMin = phaseMap.yArr()[0];
-        double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
-        double yValue = yMax - ((mouseY - PAD_TOP) / plotHeight) * (yMax - yMin);
-        setPaneStatus(String.format("t=%.1f \u03bcs | y=%.2f", time, yValue));
-    }
-
-    private static int niceTick(double span) {
-        return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
-    }
-
     private void updateHover(double mouseX, double mouseY) {
-        var phaseMap = dataProperty.get();
-        if (phaseMap == null) {
-            hoveringPlot = false;
+        int nextPlot = plotIndexAt(mouseX, mouseY);
+        if (nextPlot < 0) {
+            if (hoveredPlot != -1) {
+                hoveredPlot = -1;
+                scheduleRedraw();
+            }
             return;
         }
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double plotHeight = canvas.getHeight() - PAD_TOP - PAD_BOTTOM;
-        boolean nextHover = mouseX >= PAD_LEFT && mouseX <= PAD_LEFT + plotWidth
-            && mouseY >= PAD_TOP && mouseY <= PAD_TOP + plotHeight;
-        if (!nextHover) {
-            if (hoveringPlot) {
-                hoveringPlot = false;
+        var rect = plotRects(canvas.getWidth(), canvas.getHeight())[nextPlot];
+        var data = nextPlot == 0 ? paneContext.session().derived.phaseMapZ.get() : paneContext.session().derived.phaseMapR.get();
+        if (data == null) {
+            if (hoveredPlot != -1) {
+                hoveredPlot = -1;
                 scheduleRedraw();
             }
             return;
         }
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double yMin = phaseMap.yArr()[0];
-        double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
-        hoveringPlot = true;
-        hoveredTimeMicros = tMin + (mouseX - PAD_LEFT) / Math.max(1, plotWidth) * (tMax - tMin);
-        hoveredYValue = yMax - ((mouseY - PAD_TOP) / Math.max(1, plotHeight)) * (yMax - yMin);
+        hoveredTimeMicros = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
+        double yMin = data.yArr()[0];
+        double yMax = data.yArr()[data.nY() - 1];
+        hoveredYValue = yMax - ((mouseY - rect.y()) / Math.max(1, rect.height())) * (yMax - yMin);
+        if (hoveredPlot != nextPlot) {
+            hoveredPlot = nextPlot;
+        }
         scheduleRedraw();
     }
 
-    private java.util.List<AxisScrubBar.Span> rfSpans() {
-        return AxisScrubBar.rfSpans(
-            paneContext.session().document.blochData.get(),
-            paneContext.session().document.currentPulse.get(),
-            Color.web("#1565c0"),
-            0.20
-        );
+    private void updateStatus() {
+        if (hoveredPlot < 0) {
+            setPaneStatus(String.format(
+                "analysis=[%.1f, %.1f] \u03bcs | cursor=%.1f \u03bcs",
+                paneContext.session().viewport.tS.get(),
+                paneContext.session().viewport.tE.get(),
+                paneContext.session().viewport.tC.get()
+            ));
+            return;
+        }
+        String label = hoveredPlot == 0 ? paneContext.session().phaseMapZ.title() : paneContext.session().phaseMapR.title();
+        setPaneStatus(String.format("%s | t=%.1f \u03bcs | y=%.2f", label, hoveredTimeMicros, hoveredYValue));
     }
 
-    private void drawBadge(GraphicsContext g, double centerX, double y, String text, Color accent) {
-        g.setFont(UI_7);
-        double width = Math.max(40, text.length() * 4.9);
-        double x = MathUtil.clamp(centerX - width / 2, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - width - 2);
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.10));
-        g.fillRoundRect(x, y, width, 12, 6, 6);
-        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.45));
-        g.setLineWidth(0.6);
-        g.strokeRoundRect(x, y, width, 12, 6, 6);
-        g.setFill(Color.color(0.18, 0.2, 0.24, 0.9));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x + width / 2, y + 8.2);
-        g.setTextAlign(TextAlignment.LEFT);
+    private int plotIndexAt(double mouseX, double mouseY) {
+        var plots = plotRects(canvas.getWidth(), canvas.getHeight());
+        for (int i = 0; i < plots.length; i++) {
+            if (plots[i].contains(mouseX, mouseY)) return i;
+        }
+        return -1;
     }
 
-    private static String formatTime(double micros) {
-        return micros >= 1000
-            ? String.format("%.2f ms", micros / 1000.0)
-            : String.format("%.0f \u03bcs", micros);
+    private PlotRect[] plotRects(double width, double height) {
+        double plotWidth = (width - PAD_LEFT - PAD_RIGHT - PLOT_GAP) / 2.0;
+        double plotHeight = height - PAD_TOP - PAD_BOTTOM;
+        return new PlotRect[]{
+            new PlotRect(PAD_LEFT, PAD_TOP, Math.max(1, plotWidth), Math.max(1, plotHeight)),
+            new PlotRect(PAD_LEFT + plotWidth + PLOT_GAP, PAD_TOP, Math.max(1, plotWidth), Math.max(1, plotHeight))
+        };
     }
 
     private AxisScrubBar.Bounds overviewBounds() {
@@ -352,5 +354,15 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
 
     private static AxisScrubBar.Bounds overviewBounds(double width) {
         return new AxisScrubBar.Bounds(PAD_LEFT, 2, Math.max(1, width - PAD_LEFT - PAD_RIGHT), OVERVIEW_H);
+    }
+
+    private static int niceTick(double span) {
+        return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
+    }
+
+    private record PlotRect(double x, double y, double width, double height) {
+        boolean contains(double px, double py) {
+            return px >= x && px <= x + width && py >= y && py <= y + height;
+        }
     }
 }

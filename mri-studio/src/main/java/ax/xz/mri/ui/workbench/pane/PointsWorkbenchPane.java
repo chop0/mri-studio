@@ -53,15 +53,19 @@ public class PointsWorkbenchPane extends WorkbenchPane {
                 .thenComparing(entry -> !entry.visible())
                 .thenComparing(IsochromatEntry::name)
         );
+        rows.comparatorProperty().bind(table.comparatorProperty());
         table.setItems(rows);
-        table.getColumns().setAll(List.of(
-            visibilityColumn(),
-            colourColumn(),
-            nameColumn(),
-            rColumn(),
-            zColumn(),
-            originColumn()
-        ));
+        var visibility = visibilityColumn();
+        var colour = colourColumn();
+        var name = nameColumn();
+        var r = rColumn();
+        var z = zColumn();
+        var origin = originColumn();
+        table.getColumns().setAll(List.of(visibility, colour, name, r, z, origin));
+        origin.setSortType(TableColumn.SortType.ASCENDING);
+        name.setSortType(TableColumn.SortType.ASCENDING);
+        table.getSortOrder().setAll(origin, name);
+        table.sort();
         table.setRowFactory(view -> buildRow());
         table.getSelectionModel().getSelectedItems().addListener((ListChangeListener<IsochromatEntry>) change -> syncFromTable());
         paneContext.session().selection.selectedIds.addListener((javafx.beans.InvalidationListener) obs -> syncFromSelectionModel());
@@ -76,7 +80,7 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         var column = new TableColumn<IsochromatEntry, String>("Colour");
         column.setSortable(false);
         column.setCellValueFactory(cell -> new SimpleStringProperty(cell.getValue().colour().toString()));
-        column.setCellFactory(cell -> new TableCell<>() {
+        column.setCellFactory(cell -> new TableCell<IsochromatEntry, String>() {
             private final Region swatch = new Region();
 
             {
@@ -141,7 +145,7 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         var column = new TableColumn<IsochromatEntry, Boolean>("");
         column.setSortable(false);
         column.setCellValueFactory(cell -> new javafx.beans.property.SimpleBooleanProperty(cell.getValue().visible()));
-        column.setCellFactory(cell -> new TableCell<>() {
+        column.setCellFactory(cell -> new TableCell<IsochromatEntry, Boolean>() {
             private final Button eyeButton = new Button("\uD83D\uDC41");
 
             {

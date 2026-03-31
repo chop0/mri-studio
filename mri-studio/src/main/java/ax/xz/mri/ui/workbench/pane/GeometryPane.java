@@ -1,29 +1,42 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.ui.canvas.ColorUtil;
+import ax.xz.mri.ui.canvas.ColourUtil;
 import ax.xz.mri.ui.model.IsochromatEntry;
+import ax.xz.mri.ui.model.IsochromatId;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot;
 import ax.xz.mri.ui.viewmodel.GeometryViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
-import javafx.geometry.Orientation;
+import javafx.scene.Cursor;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
-import javafx.scene.control.Slider;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
-/** Geometry/cross-section pane using async shading and stable point ids. */
+import java.util.ArrayList;
+import java.util.List;
+
+/** Geometry/cross-section pane with a shared scrub-bar interaction model and a true z-axis viewport. */
 public class GeometryPane extends CanvasWorkbenchPane {
-    private final Slider zRangeSlider = new Slider(5, 300, 80);
-    private ax.xz.mri.ui.model.IsochromatId draggingId;
+    private static final double PAD_LEFT = 28;
+    private static final double PAD_TOP = 8;
+    private static final double PAD_BOTTOM = 20;
+    private static final double PAD_RIGHT = 8;
+    private static final double SCRUB_GAP = 8;
+    private static final double SCRUB_WIDTH = 12;
+
+    private final AxisScrubBar.Interaction zRangeInteraction;
+    private IsochromatId draggingId;
     private double dragOffsetR;
     private double dragOffsetZ;
+    private boolean hoveringPlot;
+    private double hoveredR;
+    private double hoveredZ;
 
     public GeometryPane(PaneContext paneContext) {
         super(paneContext);
@@ -36,9 +49,50 @@ public class GeometryPane extends CanvasWorkbenchPane {
         labels.selectedProperty().bindBidirectional(paneContext.session().geometry.showLabels);
         setToolNodes(shadeMode, labels);
 
-        zRangeSlider.setOrientation(Orientation.VERTICAL);
-        zRangeSlider.valueProperty().bindBidirectional(paneContext.session().geometry.halfHeight);
-        setRight(zRangeSlider);
+        zRangeInteraction = new AxisScrubBar.Interaction(
+            AxisScrubBar.Orientation.VERTICAL,
+            new AxisScrubBar.WindowModel() {
+                @Override
+                public double domainStart() {
+                    return zDomainStart();
+                }
+
+                @Override
+                public double domainEnd() {
+                    return zDomainEnd();
+                }
+
+                @Override
+                public double windowStart() {
+                    return paneContext.session().geometry.visibleStart();
+                }
+
+                @Override
+                public double windowEnd() {
+                    return paneContext.session().geometry.visibleEnd();
+                }
+
+                @Override
+                public void setWindow(double start, double end) {
+                    paneContext.session().geometry.setVisibleRange(start, end, domainStart(), domainEnd());
+                }
+
+                @Override
+                public void zoomAround(double anchor, double factor) {
+                    paneContext.session().geometry.zoomVisibleRangeAround(anchor, factor, domainStart(), domainEnd());
+                }
+
+                @Override
+                public void resetWindow() {
+                    paneContext.session().geometry.fitVisibleRange(domainStart(), domainEnd());
+                }
+
+                @Override
+                public String resetLabel() {
+                    return "Zoom Out Z Axis";
+                }
+            }
+        );
 
         bindRedraw(
             paneContext.session().document.blochData,
@@ -47,6 +101,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
             paneContext.session().points.entries,
             paneContext.session().selection.selectedIds,
             paneContext.session().geometry.halfHeight,
+            paneContext.session().geometry.zCenter,
             paneContext.session().geometry.shadeMode,
             paneContext.session().geometry.showLabels,
             paneContext.session().geometry.showSliceOverlay,
@@ -57,6 +112,14 @@ public class GeometryPane extends CanvasWorkbenchPane {
 
         canvas.setOnMousePressed(event -> {
             if (event.isSecondaryButtonDown()) return;
+            if (zRangeInteraction.handlePress(scrubBounds(), event)) {
+                updateHover(event.getX(), event.getY());
+                updateCursor(event.getX(), event.getY());
+                updateStatus(event.getX(), event.getY());
+                scheduleRedraw();
+                return;
+            }
+
             var entry = findEntry(event.getX(), event.getY());
             if (entry != null) {
                 paneContext.session().selection.setSingle(entry.id());
@@ -66,27 +129,63 @@ public class GeometryPane extends CanvasWorkbenchPane {
                     dragOffsetR = entry.r() - rz[0];
                     dragOffsetZ = entry.z() - rz[1];
                 }
-            } else {
+            } else if (plotBounds().contains(event.getX(), event.getY())) {
                 paneContext.session().selection.clear();
             }
         });
         canvas.setOnMouseDragged(event -> {
-            if (draggingId == null) return;
-            var rz = screenToRz(event.getX(), event.getY());
-            paneContext.session().points.move(draggingId, Math.max(0, rz[0] + dragOffsetR), rz[1] + dragOffsetZ);
+            if (zRangeInteraction.handleDrag(scrubBounds(), event)) {
+                updateHover(event.getX(), event.getY());
+                updateCursor(event.getX(), event.getY());
+                updateStatus(event.getX(), event.getY());
+                scheduleRedraw();
+                return;
+            }
+            if (draggingId != null) {
+                var rz = screenToRz(event.getX(), event.getY());
+                paneContext.session().points.move(draggingId, Math.max(0, rz[0] + dragOffsetR), rz[1] + dragOffsetZ);
+            }
+            updateHover(event.getX(), event.getY());
+            updateCursor(event.getX(), event.getY());
             updateStatus(event.getX(), event.getY());
         });
-        canvas.setOnMouseReleased(event -> draggingId = null);
-        canvas.setOnMouseMoved(event -> updateStatus(event.getX(), event.getY()));
-        canvas.setOnScroll(event -> paneContext.session().geometry.halfHeight.set(
-            MathUtil.clamp(
-                paneContext.session().geometry.halfHeight.get() * (event.getDeltaY() > 0 ? 0.85 : 1.18),
-                5,
-                300
-            )));
+        canvas.setOnMouseReleased(event -> {
+            draggingId = null;
+            zRangeInteraction.handleRelease();
+        });
+        canvas.setOnMouseMoved(event -> {
+            updateHover(event.getX(), event.getY());
+            updateCursor(event.getX(), event.getY());
+            updateStatus(event.getX(), event.getY());
+        });
+        canvas.setOnMouseExited(event -> {
+            hoveringPlot = false;
+            updateCursor(-1, -1);
+            scheduleRedraw();
+        });
+        canvas.setOnScroll(event -> {
+            if (zRangeInteraction.handleScroll(scrubBounds(), event)) {
+                updateStatus(event.getX(), event.getY());
+                scheduleRedraw();
+                return;
+            }
+            if (plotBounds().contains(event.getX(), event.getY())) {
+                paneContext.session().geometry.zoomVisibleRangeAround(
+                    screenToRz(event.getX(), event.getY())[1],
+                    event.getDeltaY() > 0 ? 0.85 : 1.18,
+                    zDomainStart(),
+                    zDomainEnd()
+                );
+            }
+        });
         canvas.setOnContextMenuRequested(event -> {
-            var entry = findEntry(event.getX(), event.getY());
-            var menu = entry != null ? buildEntryMenu(entry) : buildBackgroundMenu(event.getX(), event.getY());
+            ContextMenu menu;
+            if (scrubBounds().contains(event.getX(), event.getY())) {
+                menu = buildZRangeMenu();
+            } else {
+                var entry = findEntry(event.getX(), event.getY());
+                menu = entry != null ? buildEntryMenu(entry) : buildBackgroundMenu(event.getX(), event.getY());
+            }
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
         });
     }
@@ -102,109 +201,173 @@ public class GeometryPane extends CanvasWorkbenchPane {
 
         var field = data.field();
         double rMax = field.rMm[field.rMm.length - 1];
-        double halfHeight = paneContext.session().geometry.halfHeight.get();
-        double padLeft = 28;
-        double padRight = 8;
-        double padTop = 8;
-        double padBottom = 20;
-        double plotWidth = width - padLeft - padRight;
-        double plotHeight = height - padTop - padBottom;
+        double zMin = paneContext.session().geometry.visibleStart();
+        double zMax = paneContext.session().geometry.visibleEnd();
+        double plotWidth = plotWidth(width);
+        double plotHeight = plotHeight(height);
+        if (plotWidth <= 0 || plotHeight <= 0) return;
 
         if (paneContext.session().geometry.shadeMode.get() != GeometryViewModel.ShadeMode.OFF) {
             var snapshot = paneContext.session().geometry.shadingSnapshot.get();
             if (snapshot != null) {
-                drawShading(g, snapshot, rMax, halfHeight, padLeft, padTop, plotWidth, plotHeight);
+                drawShading(g, snapshot, rMax, zMin, zMax, PAD_LEFT, PAD_TOP, plotWidth, plotHeight);
             } else if (paneContext.session().geometry.shadingComputing.get()) {
                 g.setFill(Color.gray(0.2, 0.5));
-                g.fillText("Computing shading\u2026", padLeft + 8, padTop + 14);
+                g.fillText("Computing shading\u2026", PAD_LEFT + 8, PAD_TOP + 14);
             }
         }
 
         if (paneContext.session().geometry.showSliceOverlay.get()) {
             double sliceHalf = (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3;
-            double yTop = padTop + plotHeight * (1 - (sliceHalf - (-halfHeight)) / (2 * halfHeight));
-            double yBottom = padTop + plotHeight * (1 - (-sliceHalf - (-halfHeight)) / (2 * halfHeight));
+            double yTop = zToPixel(sliceHalf, zMin, zMax, plotHeight);
+            double yBottom = zToPixel(-sliceHalf, zMin, zMax, plotHeight);
+            g.setFill(Color.color(0.18, 0.49, 0.2, 0.05));
+            g.fillRect(PAD_LEFT, Math.min(yTop, yBottom), plotWidth, Math.abs(yBottom - yTop));
             g.setStroke(Color.web("#2e7d32"));
-            g.setGlobalAlpha(0.5);
+            g.setGlobalAlpha(0.55);
             g.setLineWidth(1);
             g.setLineDashes(4, 3);
-            g.strokeLine(padLeft, yTop, padLeft + plotWidth, yTop);
-            g.strokeLine(padLeft, yBottom, padLeft + plotWidth, yBottom);
+            g.strokeLine(PAD_LEFT, yTop, PAD_LEFT + plotWidth, yTop);
+            g.strokeLine(PAD_LEFT, yBottom, PAD_LEFT + plotWidth, yBottom);
             g.setLineDashes();
             g.setFill(Color.web("#2e7d32"));
-            g.fillText("slice", padLeft + 2, (yTop + yBottom) / 2 + 3);
+            g.fillText("slice", PAD_LEFT + 2, (yTop + yBottom) / 2 + 3);
             g.setGlobalAlpha(1);
         }
 
+        drawAxes(g, rMax, zMin, zMax, plotWidth, plotHeight, height);
+
+        for (var entry : paneContext.session().points.entries) {
+            double x = rToPixel(entry.r(), rMax, plotWidth);
+            double y = zToPixel(entry.z(), zMin, zMax, plotHeight);
+            if (y < PAD_TOP - 5 || y > PAD_TOP + plotHeight + 5 || x < PAD_LEFT - 5 || x > PAD_LEFT + plotWidth + 5) continue;
+            boolean selected = paneContext.session().selection.isSelected(entry.id());
+            double radius = selected ? 5.5 : 4.2;
+            if (selected) {
+                g.setFill(Color.color(0, 0, 0, 0.10));
+                g.fillOval(x - radius - 2, y - radius - 2, (radius + 2) * 2, (radius + 2) * 2);
+            }
+            g.setFill(entry.colour());
+            g.setGlobalAlpha(entry.visible() ? 0.92 : 0.18);
+            g.fillOval(x - radius, y - radius, radius * 2, radius * 2);
+            g.setStroke(selected ? Color.BLACK : Color.color(0, 0, 0, 0.35));
+            g.setLineWidth(selected ? 1.5 : 0.9);
+            g.strokeOval(x - radius, y - radius, radius * 2, radius * 2);
+            if (paneContext.session().geometry.showLabels.get()) {
+                drawPointLabel(g, entry, x + 8, y - 8, selected);
+            }
+            g.setGlobalAlpha(1);
+        }
+
+        if (hoveringPlot) {
+            double hoverX = rToPixel(hoveredR, rMax, plotWidth);
+            double hoverY = zToPixel(hoveredZ, zMin, zMax, plotHeight);
+            g.setStroke(Color.color(StudioTheme.AC.getRed(), StudioTheme.AC.getGreen(), StudioTheme.AC.getBlue(), 0.35));
+            g.setLineWidth(0.8);
+            g.setLineDashes(4, 3);
+            g.strokeLine(hoverX, PAD_TOP, hoverX, PAD_TOP + plotHeight);
+            g.strokeLine(PAD_LEFT, hoverY, PAD_LEFT + plotWidth, hoverY);
+            g.setLineDashes();
+            drawBadge(g, PAD_LEFT + plotWidth - 48, PAD_TOP + 4, String.format("z=%.1f mm", hoveredZ), StudioTheme.AC);
+        }
+
+        AxisScrubBar.draw(
+            g,
+            scrubBounds(plotWidth, plotHeight),
+            AxisScrubBar.Spec.vertical(
+                zDomainStart(),
+                zDomainEnd(),
+                zMin,
+                zMax,
+                sliceSpans(),
+                List.of()
+            )
+        );
+        drawBadge(
+            g,
+            PAD_LEFT + plotWidth - 36,
+            PAD_TOP + plotHeight - 18,
+            String.format("[%.0f, %.0f] mm", zMin, zMax),
+            Color.web("#1565c0")
+        );
+    }
+
+    private void drawAxes(
+        javafx.scene.canvas.GraphicsContext g,
+        double rMax,
+        double zMin,
+        double zMax,
+        double plotWidth,
+        double plotHeight,
+        double totalHeight
+    ) {
         g.setStroke(Color.color(0, 0, 0, 0.2));
         g.setLineWidth(0.5);
         g.beginPath();
-        g.moveTo(padLeft, padTop);
-        g.lineTo(padLeft, padTop + plotHeight);
-        g.lineTo(padLeft + plotWidth, padTop + plotHeight);
+        g.moveTo(PAD_LEFT, PAD_TOP);
+        g.lineTo(PAD_LEFT, PAD_TOP + plotHeight);
+        g.lineTo(PAD_LEFT + plotWidth, PAD_TOP + plotHeight);
         g.stroke();
 
         g.setFill(StudioTheme.TX2);
         g.setFont(StudioTheme.UI_7);
         g.setTextAlign(TextAlignment.RIGHT);
-        int zTickStep = halfHeight > 50 ? 50 : halfHeight > 20 ? 10 : halfHeight > 8 ? 5 : 2;
-        for (double z = -Math.floor(halfHeight / zTickStep) * zTickStep; z <= halfHeight; z += zTickStep) {
-            double y = padTop + plotHeight * (1 - (z - (-halfHeight)) / (2 * halfHeight));
-            if (y < padTop + 2 || y > padTop + plotHeight - 2) continue;
-            g.fillText(String.valueOf((int) z), padLeft - 3, y + 3);
+        for (double z = niceStart(zMin, niceZTick(zMax - zMin)); z <= zMax + 1e-6; z += niceZTick(zMax - zMin)) {
+            double y = zToPixel(z, zMin, zMax, plotHeight);
+            if (y < PAD_TOP + 2 || y > PAD_TOP + plotHeight - 2) continue;
+            g.fillText(String.valueOf((int) Math.round(z)), PAD_LEFT - 3, y + 3);
             g.setStroke(Color.color(0, 0, 0, 0.06));
             g.setLineWidth(0.3);
-            g.strokeLine(padLeft, y, padLeft + plotWidth, y);
+            g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
         }
 
         g.setTextAlign(TextAlignment.CENTER);
         int rTickStep = rMax > 60 ? 20 : rMax > 30 ? 10 : 5;
-        for (double r = 0; r <= rMax; r += rTickStep) {
-            double x = padLeft + (r / rMax) * plotWidth;
-            if (x < padLeft + 2 || x > padLeft + plotWidth - 2) continue;
-            g.fillText(String.valueOf((int) r), x, padTop + plotHeight + 11);
+        for (double r = 0; r <= rMax + 1e-6; r += rTickStep) {
+            double x = rToPixel(r, rMax, plotWidth);
+            if (x < PAD_LEFT + 2 || x > PAD_LEFT + plotWidth - 2) continue;
+            g.fillText(String.valueOf((int) r), x, PAD_TOP + plotHeight + 11);
             g.setStroke(Color.color(0, 0, 0, 0.06));
             g.setLineWidth(0.3);
-            g.strokeLine(x, padTop, x, padTop + plotHeight);
+            g.strokeLine(x, PAD_TOP, x, PAD_TOP + plotHeight);
         }
 
         g.setFill(StudioTheme.TX2);
         g.setFont(StudioTheme.UI_BOLD_7);
         g.setGlobalAlpha(0.6);
-        g.fillText("r [mm]", padLeft + plotWidth / 2, height - 2);
+        g.fillText("r [mm]", PAD_LEFT + plotWidth / 2, totalHeight - 2);
         g.save();
-        g.translate(8, padTop + plotHeight / 2);
+        g.translate(8, PAD_TOP + plotHeight / 2);
         g.rotate(-90);
         g.fillText("z [mm]", 0, 0);
         g.restore();
         g.setGlobalAlpha(1);
         g.setTextAlign(TextAlignment.LEFT);
-
-        for (var entry : paneContext.session().points.entries) {
-            double x = padLeft + (entry.r() / rMax) * plotWidth;
-            double y = padTop + plotHeight * (1 - (entry.z() - (-halfHeight)) / (2 * halfHeight));
-            if (y < padTop - 5 || y > padTop + plotHeight + 5 || x < padLeft - 5 || x > padLeft + plotWidth + 5) continue;
-            boolean selected = paneContext.session().selection.isSelected(entry.id());
-            double radius = selected ? 5 : 4;
-            g.setFill(entry.colour());
-            g.setGlobalAlpha(entry.visible() ? 0.9 : 0.2);
-            g.fillOval(x - radius, y - radius, radius * 2, radius * 2);
-            g.setStroke(selected ? Color.BLACK : Color.color(0, 0, 0, 0.4));
-            g.setLineWidth(selected ? 1.5 : 1);
-            g.setGlobalAlpha(entry.visible() ? 0.9 : 0.2);
-            g.strokeOval(x - radius, y - radius, radius * 2, radius * 2);
-            if (paneContext.session().geometry.showLabels.get()) {
-                g.setFill(StudioTheme.TX);
-                g.setFont(StudioTheme.UI_7);
-                g.fillText(entry.name(), x + 6, y + 3);
-            }
-            g.setGlobalAlpha(1);
-        }
     }
 
-    private void drawShading(javafx.scene.canvas.GraphicsContext g, GeometryShadingSnapshot snapshot,
-                             double rMax, double halfHeight,
-                             double padLeft, double padTop, double plotWidth, double plotHeight) {
+    private void drawPointLabel(javafx.scene.canvas.GraphicsContext g, IsochromatEntry entry, double x, double y, boolean selected) {
+        double width = Math.max(42, entry.name().length() * 5.0 + 10);
+        g.setFill(Color.color(1, 1, 1, selected ? 0.85 : 0.72));
+        g.fillRoundRect(x - 3, y - 10, width, 12, 5, 5);
+        g.setStroke(Color.color(entry.colour().getRed(), entry.colour().getGreen(), entry.colour().getBlue(), selected ? 0.55 : 0.28));
+        g.setLineWidth(selected ? 0.9 : 0.6);
+        g.strokeRoundRect(x - 3, y - 10, width, 12, 5, 5);
+        g.setFill(StudioTheme.TX);
+        g.setFont(StudioTheme.UI_7);
+        g.fillText(entry.name(), x + 2, y - 1.5);
+    }
+
+    private void drawShading(
+        javafx.scene.canvas.GraphicsContext g,
+        GeometryShadingSnapshot snapshot,
+        double rMax,
+        double zMin,
+        double zMax,
+        double padLeft,
+        double padTop,
+        double plotWidth,
+        double plotHeight
+    ) {
         g.save();
         g.beginPath();
         g.rect(padLeft, padTop, plotWidth, plotHeight);
@@ -226,11 +389,11 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 double zNext = zIndex < zCount - 1 ? 0.5 * (z0 + snapshot.zSamples().get(zIndex + 1)) : z0;
                 double zTop = zIndex < zCount - 1 ? zNext : z0 + (z0 - zPrev);
                 double zBottom = zIndex > 0 ? zPrev : z0 - (zNext - z0);
-                if (zTop < -halfHeight || zBottom > halfHeight) continue;
+                if (zTop < zMin || zBottom > zMax) continue;
                 var cell = snapshot.cells()[radialIndex][zIndex];
-                double y0 = padTop + plotHeight * (1 - (Math.min(zTop, halfHeight) - (-halfHeight)) / (2 * halfHeight));
-                double y1 = padTop + plotHeight * (1 - (Math.max(zBottom, -halfHeight) - (-halfHeight)) / (2 * halfHeight));
-                g.setFill(ColorUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.brightness(), 0, 1)));
+                double y0 = padTop + plotHeight * (1 - (Math.min(zTop, zMax) - zMin) / (zMax - zMin));
+                double y1 = padTop + plotHeight * (1 - (Math.max(zBottom, zMin) - zMin) / (zMax - zMin));
+                g.setFill(ColourUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.brightness(), 0, 1)));
                 g.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) + 1, Math.abs(y1 - y0) + 1);
             }
         }
@@ -241,6 +404,14 @@ public class GeometryPane extends CanvasWorkbenchPane {
         var data = paneContext.session().document.blochData.get();
         if (data == null || data.field() == null) {
             setPaneStatus("No geometry loaded");
+            return;
+        }
+        if (scrubBounds().contains(mouseX, mouseY)) {
+            setPaneStatus(String.format(
+                "z view=[%.1f, %.1f] mm | double-click to zoom out",
+                paneContext.session().geometry.visibleStart(),
+                paneContext.session().geometry.visibleEnd()
+            ));
             return;
         }
         var rz = screenToRz(mouseX, mouseY);
@@ -263,13 +434,27 @@ public class GeometryPane extends CanvasWorkbenchPane {
         var rz = screenToRz(mouseX, mouseY);
         var menu = new ContextMenu();
         var add = new MenuItem(String.format("Add Point (r=%.1f, z=%.1f)", rz[0], rz[1]));
-        add.setOnAction(event -> paneContext.session().points.addUserPoint(rz[0], rz[1],
-            String.format("r=%.1f z=%.1f", rz[0], rz[1])));
-        var reset = new MenuItem("Reset Defaults");
-        reset.setOnAction(event -> paneContext.session().points.resetToDefaults());
+        add.setOnAction(event -> paneContext.session().points.addUserPoint(rz[0], rz[1], String.format("r=%.1f z=%.1f", rz[0], rz[1])));
+        var resetDefaults = new MenuItem("Reset Defaults");
+        resetDefaults.setOnAction(event -> paneContext.session().points.resetToDefaults());
         var clearUser = new MenuItem("Clear User Points");
         clearUser.setOnAction(event -> paneContext.session().points.clearUserPoints());
-        menu.getItems().addAll(add, new SeparatorMenuItem(), reset, clearUser);
+        menu.getItems().addAll(add, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem(), new SeparatorMenuItem(), resetDefaults, clearUser);
+        return menu;
+    }
+
+    private ContextMenu buildZRangeMenu() {
+        var menu = new ContextMenu();
+        var label = new MenuItem("Z Axis");
+        label.setDisable(true);
+        var centerSlice = new MenuItem("Center On Slice");
+        centerSlice.setOnAction(event -> paneContext.session().geometry.setVisibleRange(
+            -paneContext.session().geometry.halfHeight.get(),
+            paneContext.session().geometry.halfHeight.get(),
+            zDomainStart(),
+            zDomainEnd()
+        ));
+        menu.getItems().addAll(label, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem(), centerSlice);
         return menu;
     }
 
@@ -288,29 +473,24 @@ public class GeometryPane extends CanvasWorkbenchPane {
         lock.setOnAction(event -> paneContext.session().points.setLocked(entry.id(), !entry.locked()));
         var delete = new MenuItem("Delete");
         delete.setOnAction(event -> paneContext.session().points.remove(entry.id()));
-        menu.getItems().addAll(selectOnly, toggle, duplicate, lock, new SeparatorMenuItem(), delete);
+        menu.getItems().addAll(selectOnly, toggle, duplicate, lock, new SeparatorMenuItem(), delete, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem());
         return menu;
     }
 
     private IsochromatEntry findEntry(double mouseX, double mouseY) {
         var data = paneContext.session().document.blochData.get();
-        if (data == null || data.field() == null) return null;
+        if (data == null || data.field() == null || !plotBounds().contains(mouseX, mouseY)) return null;
         double rMax = data.field().rMm[data.field().rMm.length - 1];
-        double width = canvas.getWidth();
-        double height = canvas.getHeight();
-        double padLeft = 28;
-        double padRight = 8;
-        double padTop = 8;
-        double padBottom = 20;
-        double plotWidth = width - padLeft - padRight;
-        double plotHeight = height - padTop - padBottom;
-        double halfHeight = paneContext.session().geometry.halfHeight.get();
+        double plotWidth = plotWidth(canvas.getWidth());
+        double plotHeight = plotHeight(canvas.getHeight());
+        double zMin = paneContext.session().geometry.visibleStart();
+        double zMax = paneContext.session().geometry.visibleEnd();
 
         IsochromatEntry best = null;
         double bestDistance = Double.MAX_VALUE;
         for (var entry : paneContext.session().points.entries) {
-            double x = padLeft + (entry.r() / rMax) * plotWidth;
-            double y = padTop + plotHeight * (1 - (entry.z() - (-halfHeight)) / (2 * halfHeight));
+            double x = rToPixel(entry.r(), rMax, plotWidth);
+            double y = zToPixel(entry.z(), zMin, zMax, plotHeight);
             double distance = Math.hypot(mouseX - x, mouseY - y);
             if (distance < 10 && distance < bestDistance) {
                 best = entry;
@@ -322,18 +502,113 @@ public class GeometryPane extends CanvasWorkbenchPane {
 
     private double[] screenToRz(double mouseX, double mouseY) {
         var data = paneContext.session().document.blochData.get();
-        double width = canvas.getWidth();
-        double height = canvas.getHeight();
-        double padLeft = 28;
-        double padRight = 8;
-        double padTop = 8;
-        double padBottom = 20;
-        double plotWidth = width - padLeft - padRight;
-        double plotHeight = height - padTop - padBottom;
+        double plotWidth = plotWidth(canvas.getWidth());
+        double plotHeight = plotHeight(canvas.getHeight());
         double rMax = data.field().rMm[data.field().rMm.length - 1];
-        double halfHeight = paneContext.session().geometry.halfHeight.get();
-        double r = (mouseX - padLeft) / plotWidth * rMax;
-        double z = (1 - (mouseY - padTop) / plotHeight) * 2 * halfHeight - halfHeight;
-        return new double[]{Math.max(0, r), z};
+        double zMin = paneContext.session().geometry.visibleStart();
+        double zMax = paneContext.session().geometry.visibleEnd();
+        double r = (mouseX - PAD_LEFT) / Math.max(1, plotWidth) * rMax;
+        double z = zMax - ((mouseY - PAD_TOP) / Math.max(1, plotHeight)) * (zMax - zMin);
+        return new double[]{Math.max(0, r), MathUtil.clamp(z, zMin, zMax)};
+    }
+
+    private void updateHover(double mouseX, double mouseY) {
+        boolean nextHover = plotBounds().contains(mouseX, mouseY);
+        if (!nextHover) {
+            if (hoveringPlot) {
+                hoveringPlot = false;
+                scheduleRedraw();
+            }
+            return;
+        }
+        var rz = screenToRz(mouseX, mouseY);
+        hoveringPlot = true;
+        hoveredR = rz[0];
+        hoveredZ = rz[1];
+        scheduleRedraw();
+    }
+
+    private void updateCursor(double mouseX, double mouseY) {
+        if (scrubBounds().contains(mouseX, mouseY)) {
+            canvas.setCursor(zRangeInteraction.cursor(scrubBounds(), mouseX, mouseY));
+            return;
+        }
+        if (draggingId != null) {
+            canvas.setCursor(Cursor.CLOSED_HAND);
+            return;
+        }
+        canvas.setCursor(findEntry(mouseX, mouseY) != null ? Cursor.OPEN_HAND : Cursor.CROSSHAIR);
+    }
+
+    private List<AxisScrubBar.Span> sliceSpans() {
+        var data = paneContext.session().document.blochData.get();
+        if (data == null || data.field() == null) return List.of();
+        double sliceHalf = (data.field().sliceHalf != null ? data.field().sliceHalf : 0.005) * 1e3;
+        var spans = new ArrayList<AxisScrubBar.Span>();
+        spans.add(new AxisScrubBar.Span(-sliceHalf, sliceHalf, Color.web("#2e7d32"), 0.14));
+        return spans;
+    }
+
+    private void drawBadge(javafx.scene.canvas.GraphicsContext g, double centerX, double y, String text, Color accent) {
+        g.setFont(StudioTheme.UI_7);
+        double width = Math.max(48, text.length() * 4.9);
+        double x = MathUtil.clamp(centerX - width / 2, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - SCRUB_WIDTH - width);
+        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.10));
+        g.fillRoundRect(x, y, width, 12, 6, 6);
+        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.45));
+        g.setLineWidth(0.6);
+        g.strokeRoundRect(x, y, width, 12, 6, 6);
+        g.setFill(Color.color(0.18, 0.2, 0.24, 0.9));
+        g.setTextAlign(TextAlignment.CENTER);
+        g.fillText(text, x + width / 2, y + 8.2);
+        g.setTextAlign(TextAlignment.LEFT);
+    }
+
+    private double zDomainStart() {
+        var data = paneContext.session().document.blochData.get();
+        if (data == null || data.field() == null) return -80;
+        return data.field().zMm[0];
+    }
+
+    private double zDomainEnd() {
+        var data = paneContext.session().document.blochData.get();
+        if (data == null || data.field() == null) return 80;
+        return data.field().zMm[data.field().zMm.length - 1];
+    }
+
+    private AxisScrubBar.Bounds scrubBounds() {
+        return scrubBounds(plotWidth(canvas.getWidth()), plotHeight(canvas.getHeight()));
+    }
+
+    private AxisScrubBar.Bounds scrubBounds(double plotWidth, double plotHeight) {
+        return new AxisScrubBar.Bounds(PAD_LEFT + plotWidth + SCRUB_GAP, PAD_TOP, SCRUB_WIDTH, plotHeight);
+    }
+
+    private AxisScrubBar.Bounds plotBounds() {
+        return new AxisScrubBar.Bounds(PAD_LEFT, PAD_TOP, plotWidth(canvas.getWidth()), plotHeight(canvas.getHeight()));
+    }
+
+    private static double plotWidth(double totalWidth) {
+        return Math.max(1, totalWidth - PAD_LEFT - PAD_RIGHT - SCRUB_GAP - SCRUB_WIDTH);
+    }
+
+    private static double plotHeight(double totalHeight) {
+        return Math.max(1, totalHeight - PAD_TOP - PAD_BOTTOM);
+    }
+
+    private static double rToPixel(double r, double rMax, double plotWidth) {
+        return PAD_LEFT + (r / Math.max(1e-9, rMax)) * plotWidth;
+    }
+
+    private static double zToPixel(double z, double zMin, double zMax, double plotHeight) {
+        return PAD_TOP + (1 - (z - zMin) / Math.max(1e-9, zMax - zMin)) * plotHeight;
+    }
+
+    private static int niceZTick(double span) {
+        return span > 120 ? 20 : span > 60 ? 10 : span > 24 ? 5 : span > 12 ? 2 : 1;
+    }
+
+    private static double niceStart(double value, double step) {
+        return Math.ceil(value / step) * step;
     }
 }

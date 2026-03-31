@@ -42,7 +42,6 @@ public class StudioSession {
         });
 
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
-        geometry.halfHeight.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         geometry.shadeMode.addListener((obs, oldMode, newMode) -> refreshGeometryShading());
     }
 
@@ -64,6 +63,7 @@ public class StudioSession {
         if (data == null || data.field() == null || data.field().segments == null) {
             viewport.maxTime.set(1000);
             viewport.resetToFullRange();
+            geometry.fitVisibleRange(-80, 80);
             return;
         }
         double total = data.field().segments.stream()
@@ -71,6 +71,7 @@ public class StudioSession {
             .sum();
         viewport.maxTime.set(total);
         viewport.resetToFullRange();
+        geometry.fitVisibleRange(data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
     }
 
     private void refreshGeometryShading() {

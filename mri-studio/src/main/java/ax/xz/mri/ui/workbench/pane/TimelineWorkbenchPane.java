@@ -4,7 +4,6 @@ import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
 import javafx.scene.Cursor;
-import javafx.scene.control.Button;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
@@ -32,9 +31,6 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
     private static final int DRAG_CURSOR = 3;
     private static final int DRAG_PAN_VIEW = 4;
     private static final int DRAG_ANALYSIS_WINDOW = 5;
-    private static final int DRAG_OVERVIEW_START = 6;
-    private static final int DRAG_OVERVIEW_END = 7;
-    private static final int DRAG_OVERVIEW_WINDOW = 8;
 
     private static final double PAD_L = 40;
     private static final double PAD_R = 6;
@@ -49,11 +45,52 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
     private double dragStartVE;
     private double dragStartTS;
     private double dragStartTE;
+    private int hoveredTrackIndex = -1;
+    private final AxisScrubBar.Interaction overviewInteraction;
 
     public TimelineWorkbenchPane(PaneContext paneContext) {
         super(paneContext);
         setPaneTitle("Timeline");
         setToolNodes();
+        overviewInteraction = new AxisScrubBar.Interaction(
+            AxisScrubBar.Orientation.HORIZONTAL,
+            new AxisScrubBar.WindowModel() {
+                @Override
+                public double domainStart() {
+                    return 0;
+                }
+
+                @Override
+                public double domainEnd() {
+                    return Math.max(paneContext.session().viewport.maxTime.get(), 1);
+                }
+
+                @Override
+                public double windowStart() {
+                    return paneContext.session().viewport.vS.get();
+                }
+
+                @Override
+                public double windowEnd() {
+                    return paneContext.session().viewport.vE.get();
+                }
+
+                @Override
+                public void setWindow(double start, double end) {
+                    paneContext.session().timeline.viewportController.setViewport(start, end);
+                }
+
+                @Override
+                public void zoomAround(double anchor, double factor) {
+                    paneContext.session().timeline.viewportController.zoomViewportAround(anchor, factor);
+                }
+
+                @Override
+                public void resetWindow() {
+                    paneContext.session().timeline.viewportController.fitViewportToData();
+                }
+            }
+        );
 
         bindRedraw(
             paneContext.session().document.currentPulse,
@@ -73,27 +110,9 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
             dragStartTS = paneContext.session().viewport.tS.get();
             dragStartTE = paneContext.session().viewport.tE.get();
 
-            var overview = overviewBounds();
-            if (overview.contains(x, event.getY())) {
-                double domainEnd = Math.max(paneContext.session().viewport.maxTime.get(), 1);
-                double viewStart = OverviewStrip.pixelAt(overview, dragStartVS, 0, domainEnd);
-                double viewEnd = OverviewStrip.pixelAt(overview, dragStartVE, 0, domainEnd);
-                if (Math.abs(x - viewStart) <= OverviewStrip.HANDLE_HIT_RADIUS) {
-                    dragMode = DRAG_OVERVIEW_START;
-                } else if (Math.abs(x - viewEnd) <= OverviewStrip.HANDLE_HIT_RADIUS) {
-                    dragMode = DRAG_OVERVIEW_END;
-                } else {
-                    if (x < viewStart || x > viewEnd) {
-                        double span = dragStartVE - dragStartVS;
-                        double centre = OverviewStrip.valueAt(overview, x, 0, domainEnd);
-                        paneContext.session().timeline.viewportController.setViewport(centre - span / 2, centre + span / 2);
-                        dragStartVS = paneContext.session().viewport.vS.get();
-                        dragStartVE = paneContext.session().viewport.vE.get();
-                    }
-                    dragMode = DRAG_OVERVIEW_WINDOW;
-                }
-                dragStartX = x;
+            if (overviewInteraction.handlePress(overviewBounds(), event)) {
                 updateCursor(event.getX(), event.getY());
+                updateStatus(event.getX(), event.getY());
                 return;
             }
 
@@ -114,6 +133,13 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
             dragStartX = x;
         });
         canvas.setOnMouseDragged(event -> {
+            if (overviewInteraction.handleDrag(overviewBounds(), event)) {
+                updateHover(event.getX(), event.getY());
+                updateCursor(event.getX(), event.getY());
+                updateStatus(event.getX(), event.getY());
+                scheduleRedraw();
+                return;
+            }
             double time = pixelToTime(event.getX());
             double plotSpan = Math.max(1, dragStartVE - dragStartVS);
             double plotWidth = Math.max(1, canvas.getWidth() - PAD_L - PAD_R);
@@ -130,36 +156,33 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
                     dragStartTS - plotDelta,
                     dragStartTE - plotDelta
                 );
-                case DRAG_OVERVIEW_START -> paneContext.session().timeline.viewportController.setViewport(
-                    OverviewStrip.valueAt(overviewBounds(), event.getX(), 0, Math.max(paneContext.session().viewport.maxTime.get(), 1)),
-                    dragStartVE
-                );
-                case DRAG_OVERVIEW_END -> paneContext.session().timeline.viewportController.setViewport(
-                    dragStartVS,
-                    OverviewStrip.valueAt(overviewBounds(), event.getX(), 0, Math.max(paneContext.session().viewport.maxTime.get(), 1))
-                );
-                case DRAG_OVERVIEW_WINDOW -> {
-                    double domainEnd = Math.max(paneContext.session().viewport.maxTime.get(), 1);
-                    double delta = OverviewStrip.valueAt(overviewBounds(), event.getX(), 0, domainEnd)
-                        - OverviewStrip.valueAt(overviewBounds(), dragStartX, 0, domainEnd);
-                    paneContext.session().timeline.viewportController.setViewport(dragStartVS + delta, dragStartVE + delta);
-                }
                 default -> {
                 }
             }
+            updateHover(event.getX(), event.getY());
             updateCursor(event.getX(), event.getY());
             updateStatus(event.getX(), event.getY());
         });
         canvas.setOnMouseReleased(event -> {
             dragMode = 0;
+            overviewInteraction.handleRelease();
             canvas.setCursor(Cursor.DEFAULT);
         });
         canvas.setOnMouseMoved(event -> {
+            updateHover(event.getX(), event.getY());
             updateCursor(event.getX(), event.getY());
             updateStatus(event.getX(), event.getY());
         });
-        canvas.setOnScroll(event -> paneContext.session().timeline.viewportController.zoomViewportAround(
-            pixelToTime(event.getX()), event.getDeltaY() > 0 ? 0.8 : 1.25));
+        canvas.setOnScroll(event -> {
+            if (overviewInteraction.handleScroll(overviewBounds(), event)) {
+                scheduleRedraw();
+                updateStatus(event.getX(), event.getY());
+                return;
+            }
+            paneContext.session().timeline.viewportController.zoomViewportAround(
+                pixelToTime(event.getX()), event.getDeltaY() > 0 ? 0.8 : 1.25
+            );
+        });
         canvas.setOnContextMenuRequested(event -> {
             var menu = buildContextMenu(event.getX(), event.getY());
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
@@ -198,20 +221,22 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
 
         double domainEnd = Math.max(paneContext.session().viewport.maxTime.get(), 1);
         var overview = overviewBounds(width);
-        OverviewStrip.drawHorizontal(
+        AxisScrubBar.draw(
             g,
             overview,
-            0,
-            domainEnd,
-            paneContext.session().viewport.vS.get(),
-            paneContext.session().viewport.vE.get(),
-            rfWindows.stream().map(window -> new OverviewStrip.Span(
-                window.t0(),
-                window.t1(),
-                Color.web("#1565c0"),
-                0.20
-            )).toList(),
-            paneContext.session().viewport.tC.get()
+            AxisScrubBar.Spec.horizontal(
+                0,
+                domainEnd,
+                paneContext.session().viewport.vS.get(),
+                paneContext.session().viewport.vE.get(),
+                rfWindows.stream().map(window -> new AxisScrubBar.Span(
+                    window.t0(),
+                    window.t1(),
+                    Color.web("#1565c0"),
+                    0.20
+                )).toList(),
+                java.util.List.of(new AxisScrubBar.Marker(paneContext.session().viewport.tC.get(), CUR, 0.85, 1.0))
+            )
         );
 
         double mainTop = PAD_T + OVERVIEW_H + OVERVIEW_GAP;
@@ -238,6 +263,10 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
             double y0 = mainTop + trackIndex * trackHeight;
             g.setFill(trackIndex % 2 == 1 ? BG2 : BG);
             g.fillRect(PAD_L, y0, plotWidth, trackHeight);
+            if (trackIndex == hoveredTrackIndex) {
+                g.setFill(Color.color(0.0, 0.47, 0.83, 0.06));
+                g.fillRect(PAD_L, y0, plotWidth, trackHeight);
+            }
             g.setStroke(GR);
             g.setLineWidth(0.5);
             g.strokeLine(PAD_L, y0 + trackHeight, PAD_L + plotWidth, y0 + trackHeight);
@@ -345,6 +374,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         g.setGlobalAlpha(0.8);
         g.strokeLine(cursorX, mainTop, cursorX, mainTop + plotHeight);
         g.setGlobalAlpha(1);
+        drawBadge(g, cursorX, mainTop + 10, formatTime(paneContext.session().viewport.tC.get()), CUR);
 
         g.setFont(UI_BOLD_7);
         g.setTextAlign(TextAlignment.CENTER);
@@ -375,6 +405,12 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
 
     private ContextMenu buildContextMenu(double mouseX, double mouseY) {
         var menu = new ContextMenu();
+        if (overviewBounds().contains(mouseX, mouseY)) {
+            var overviewLabel = new MenuItem("Overview");
+            overviewLabel.setDisable(true);
+            menu.getItems().addAll(overviewLabel, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+            return menu;
+        }
         var setCursor = new MenuItem("Set cursor here");
         setCursor.setOnAction(event -> paneContext.session().timeline.viewportController.setCursor(pixelToTime(mouseX)));
         var fit = new MenuItem("Fit to data");
@@ -383,24 +419,14 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         resetAnalysis.setOnAction(event -> paneContext.session().timeline.viewportController.setAnalysisWindowToViewport());
         var trackLabel = new MenuItem("Track: " + hoveredTrackLabel(mouseY));
         trackLabel.setDisable(true);
-        menu.getItems().addAll(trackLabel, new SeparatorMenuItem(), setCursor, fit, resetAnalysis);
+        menu.getItems().addAll(trackLabel, new SeparatorMenuItem(), setCursor, fit, resetAnalysis, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
         return menu;
     }
 
     private void updateCursor(double mouseX, double mouseY) {
         var overview = overviewBounds();
         if (overview.contains(mouseX, mouseY)) {
-            double domainEnd = Math.max(paneContext.session().viewport.maxTime.get(), 1);
-            double viewStart = OverviewStrip.pixelAt(overview, paneContext.session().viewport.vS.get(), 0, domainEnd);
-            double viewEnd = OverviewStrip.pixelAt(overview, paneContext.session().viewport.vE.get(), 0, domainEnd);
-            if (Math.abs(mouseX - viewStart) < OverviewStrip.HANDLE_HIT_RADIUS
-                || Math.abs(mouseX - viewEnd) < OverviewStrip.HANDLE_HIT_RADIUS) {
-                canvas.setCursor(Cursor.H_RESIZE);
-            } else if (mouseX > viewStart && mouseX < viewEnd) {
-                canvas.setCursor(Cursor.CLOSED_HAND);
-            } else {
-                canvas.setCursor(Cursor.OPEN_HAND);
-            }
+            canvas.setCursor(overviewInteraction.cursor(overview, mouseX, mouseY));
             return;
         }
         double start = timeToPixel(paneContext.session().viewport.tS.get());
@@ -450,11 +476,46 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 500 : 200;
     }
 
-    private OverviewStrip.Bounds overviewBounds() {
+    private void updateHover(double mouseX, double mouseY) {
+        double mainTop = PAD_T + OVERVIEW_H + OVERVIEW_GAP;
+        double plotHeight = canvas.getHeight() - mainTop - PAD_B;
+        double plotWidth = canvas.getWidth() - PAD_L - PAD_R;
+        int nextHovered = -1;
+        if (mouseX >= PAD_L && mouseX <= PAD_L + plotWidth && mouseY >= mainTop && mouseY <= mainTop + plotHeight) {
+            nextHovered = Math.max(0, Math.min(3, (int) ((mouseY - mainTop) / Math.max(1, plotHeight / 4.0))));
+        }
+        if (nextHovered != hoveredTrackIndex) {
+            hoveredTrackIndex = nextHovered;
+            scheduleRedraw();
+        }
+    }
+
+    private void drawBadge(javafx.scene.canvas.GraphicsContext g, double centerX, double y, String text, Color accent) {
+        g.setFont(UI_BOLD_7);
+        double width = Math.max(36, text.length() * 4.7);
+        double x = MathUtil.clamp(centerX - width / 2, PAD_L + 4, canvas.getWidth() - PAD_R - width - 4);
+        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.12));
+        g.fillRoundRect(x, y, width, 12, 6, 6);
+        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.55));
+        g.setLineWidth(0.7);
+        g.strokeRoundRect(x, y, width, 12, 6, 6);
+        g.setFill(Color.color(0.18, 0.2, 0.24, 0.92));
+        g.setTextAlign(TextAlignment.CENTER);
+        g.fillText(text, x + width / 2, y + 8.5);
+        g.setTextAlign(TextAlignment.LEFT);
+    }
+
+    private static String formatTime(double micros) {
+        return micros >= 1000
+            ? String.format("%.2f ms", micros / 1000.0)
+            : String.format("%.0f \u03bcs", micros);
+    }
+
+    private AxisScrubBar.Bounds overviewBounds() {
         return overviewBounds(canvas.getWidth());
     }
 
-    private static OverviewStrip.Bounds overviewBounds(double width) {
-        return new OverviewStrip.Bounds(PAD_L, PAD_T, Math.max(1, width - PAD_L - PAD_R), OVERVIEW_H);
+    private static AxisScrubBar.Bounds overviewBounds(double width) {
+        return new AxisScrubBar.Bounds(PAD_L, PAD_T, Math.max(1, width - PAD_L - PAD_R), OVERVIEW_H);
     }
 }

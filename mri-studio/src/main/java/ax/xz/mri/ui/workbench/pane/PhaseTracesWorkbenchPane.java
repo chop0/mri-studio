@@ -13,6 +13,8 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
+import java.util.List;
+
 import static ax.xz.mri.ui.theme.StudioTheme.BG;
 import static ax.xz.mri.ui.theme.StudioTheme.CUR;
 import static ax.xz.mri.ui.theme.StudioTheme.TX;
@@ -21,24 +23,24 @@ import static ax.xz.mri.ui.theme.StudioTheme.UI_7;
 import static ax.xz.mri.ui.theme.StudioTheme.UI_8;
 import static ax.xz.mri.ui.theme.StudioTheme.UI_BOLD_10;
 
-/** Shared single trace-plot pane. */
-public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
+/** Combined angular trace pane containing phase and polar traces side-by-side. */
+public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     private static final double OVERVIEW_H = 10;
     private static final double OVERVIEW_GAP = 6;
     private static final double PAD_LEFT = 40;
     private static final double PAD_RIGHT = 8;
     private static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP;
     private static final double PAD_BOTTOM = 18;
+    private static final double PLOT_GAP = 14;
 
-    private final TracePlotViewModel viewModel;
     private final AxisScrubBar.Interaction overviewInteraction;
-    private boolean hoveringPlot;
+    private int hoveredPlot = -1;
     private double hoveredTimeMicros;
 
-    protected AbstractTracePlotPane(PaneContext paneContext, TracePlotViewModel viewModel) {
+    public PhaseTracesWorkbenchPane(PaneContext paneContext) {
         super(paneContext);
-        this.viewModel = viewModel;
-        this.overviewInteraction = new AxisScrubBar.Interaction(
+        setPaneTitle("Phase Traces");
+        overviewInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.HORIZONTAL,
             new AxisScrubBar.WindowModel() {
                 @Override
@@ -77,7 +79,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
                 }
             }
         );
-        setPaneTitle(viewModel.title());
+
         bindRedraw(
             paneContext.session().points.entries,
             paneContext.session().selection.selectedIds,
@@ -93,31 +95,34 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             if (!event.isPrimaryButtonDown()) return;
             if (overviewInteraction.handlePress(overviewBounds(), event)) {
                 updateHover(event.getX(), event.getY());
-                updateStatus(event.getX());
+                updateStatus();
                 scheduleRedraw();
                 return;
             }
-            moveCursor(event.getX());
+            moveCursor(event.getX(), event.getY());
         });
         canvas.setOnMouseDragged(event -> {
             if (overviewInteraction.handleDrag(overviewBounds(), event)) {
                 updateHover(event.getX(), event.getY());
-                updateStatus(event.getX());
+                updateStatus();
                 scheduleRedraw();
                 return;
             }
-            updateHover(event.getX(), event.getY());
-            moveCursor(event.getX());
+            moveCursor(event.getX(), event.getY());
         });
         canvas.setOnMouseReleased(event -> overviewInteraction.handleRelease());
         canvas.setOnMouseMoved(event -> {
             updateHover(event.getX(), event.getY());
-            updateStatus(event.getX());
+            updateStatus();
+        });
+        canvas.setOnMouseExited(event -> {
+            hoveredPlot = -1;
+            scheduleRedraw();
         });
         canvas.setOnScroll(event -> {
             if (overviewInteraction.handleScroll(overviewBounds(), event)) {
+                updateStatus();
                 scheduleRedraw();
-                updateStatus(event.getX());
             }
         });
         canvas.setOnContextMenuRequested(event -> {
@@ -128,7 +133,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
                 menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
             } else {
                 var setCursor = new MenuItem("Set cursor here");
-                setCursor.setOnAction(actionEvent -> moveCursor(event.getX()));
+                setCursor.setOnAction(actionEvent -> moveCursor(event.getX(), event.getY()));
                 menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
             }
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
@@ -140,45 +145,56 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         g.setFill(BG);
         g.fillRect(0, 0, width, height);
 
-        double plotWidth = width - PAD_LEFT - PAD_RIGHT;
-        double plotHeight = height - PAD_TOP - PAD_BOTTOM;
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double tSpan = tMax - tMin;
-        double cursorTime = paneContext.session().viewport.tC.get();
         AxisScrubBar.draw(
             g,
             overviewBounds(width),
             AxisScrubBar.Spec.horizontal(
                 0,
                 Math.max(paneContext.session().viewport.maxTime.get(), 1),
-                tMin,
-                tMax,
-                rfSpans(),
-                java.util.List.of(new AxisScrubBar.Marker(cursorTime, CUR, 0.85, 1.0))
+                paneContext.session().viewport.tS.get(),
+                paneContext.session().viewport.tE.get(),
+                AxisScrubBar.rfSpans(
+                    paneContext.session().document.blochData.get(),
+                    paneContext.session().document.currentPulse.get(),
+                    Color.web("#1565c0"),
+                    0.20
+                ),
+                List.of(new AxisScrubBar.Marker(paneContext.session().viewport.tC.get(), CUR, 0.85, 1.0))
             )
         );
 
+        var plots = plotRects(width, height);
+        drawTracePlot(g, plots[0], paneContext.session().tracePhase, hoveredPlot == 0);
+        drawTracePlot(g, plots[1], paneContext.session().tracePolar, hoveredPlot == 1);
+        drawLegend(g, width);
+    }
+
+    private void drawTracePlot(GraphicsContext g, PlotRect rect, TracePlotViewModel viewModel, boolean hovered) {
+        double tMin = paneContext.session().viewport.tS.get();
+        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tSpan = tMax - tMin;
+        double cursorTime = paneContext.session().viewport.tC.get();
+
         g.setTextAlign(TextAlignment.RIGHT);
         for (double tick : viewModel.ticks()) {
-            double y = PAD_TOP + plotHeight - (tick - viewModel.min()) / (viewModel.max() - viewModel.min()) * plotHeight;
+            double y = rect.y() + rect.height() - (tick - viewModel.min()) / (viewModel.max() - viewModel.min()) * rect.height();
             g.setStroke(Color.color(0, 0, 0, tick == 0 ? 0.15 : 0.06));
             g.setLineWidth(tick == 0 ? 0.6 : 0.3);
-            g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
+            g.strokeLine(rect.x(), y, rect.x() + rect.width(), y);
             g.setFill(TX);
             g.setFont(UI_8);
             String label = "\u00b0".equals(viewModel.unit()) ? (int) tick + "\u00b0"
                 : (tick % 1 != 0 ? String.format("%.2f", tick) : String.valueOf((int) tick));
-            g.fillText(label, PAD_LEFT - 4, y + 3);
+            g.fillText(label, rect.x() - 4, y + 3);
         }
         g.setTextAlign(TextAlignment.LEFT);
 
         g.setStroke(Color.color(0, 0, 0, 0.15));
         g.setLineWidth(0.5);
         g.beginPath();
-        g.moveTo(PAD_LEFT, PAD_TOP);
-        g.lineTo(PAD_LEFT, PAD_TOP + plotHeight);
-        g.lineTo(PAD_LEFT + plotWidth, PAD_TOP + plotHeight);
+        g.moveTo(rect.x(), rect.y());
+        g.lineTo(rect.x(), rect.y() + rect.height());
+        g.lineTo(rect.x() + rect.width(), rect.y() + rect.height());
         g.stroke();
 
         int xTickStep = niceTick(tSpan);
@@ -187,41 +203,40 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         g.setTextAlign(TextAlignment.CENTER);
         g.setGlobalAlpha(0.6);
         for (double tick = Math.ceil(tMin / xTickStep) * xTickStep; tick <= tMax; tick += xTickStep) {
-            double x = PAD_LEFT + (tick - tMin) / tSpan * plotWidth;
-            if (x > PAD_LEFT + 4 && x < PAD_LEFT + plotWidth - 4) {
+            double x = rect.x() + (tick - tMin) / tSpan * rect.width();
+            if (x > rect.x() + 4 && x < rect.x() + rect.width() - 4) {
                 String label = tSpan > 2000
                     ? String.format("%.0f", tick / 1000) + (tick % 1000 != 0 ? String.format(".%01.0f", (tick % 1000) / 100) : "")
                     : String.valueOf((int) tick);
-                g.fillText(label, x, PAD_TOP + plotHeight + 10);
+                g.fillText(label, x, rect.y() + rect.height() + 10);
                 g.setStroke(Color.color(0, 0, 0, 0.04));
                 g.setLineWidth(0.3);
-                g.strokeLine(x, PAD_TOP, x, PAD_TOP + plotHeight);
+                g.strokeLine(x, rect.y(), x, rect.y() + rect.height());
             }
         }
         if (!viewModel.unit().isEmpty()) {
             g.setTextAlign(TextAlignment.RIGHT);
-            g.fillText(tSpan > 2000 ? "ms" : "\u03bcs", PAD_LEFT + plotWidth, PAD_TOP + plotHeight + 10);
+            g.fillText(tSpan > 2000 ? "ms" : "\u03bcs", rect.x() + rect.width(), rect.y() + rect.height() + 10);
             g.setTextAlign(TextAlignment.LEFT);
         }
         g.setGlobalAlpha(1);
 
-        double cursorX = PAD_LEFT + (cursorTime - tMin) / tSpan * plotWidth;
+        double cursorX = rect.x() + (cursorTime - tMin) / tSpan * rect.width();
         g.setStroke(CUR);
         g.setLineWidth(1);
         g.setGlobalAlpha(0.5);
-        g.strokeLine(cursorX, PAD_TOP, cursorX, PAD_TOP + plotHeight);
+        g.strokeLine(cursorX, rect.y(), cursorX, rect.y() + rect.height());
         g.setGlobalAlpha(1);
-        drawBadge(g, cursorX, PAD_TOP + 4, formatTime(cursorTime), CUR);
 
         g.setFill(TX);
         g.setFont(UI_BOLD_10);
         g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(viewModel.title(), PAD_LEFT + plotWidth / 2, PAD_TOP - 3);
+        g.fillText(viewModel.title(), rect.x() + rect.width() / 2, rect.y() - 3);
         g.setTextAlign(TextAlignment.LEFT);
 
         g.save();
         g.beginPath();
-        g.rect(PAD_LEFT, PAD_TOP - 1, plotWidth, plotHeight + 2);
+        g.rect(rect.x(), rect.y() - 1, rect.width(), rect.height() + 2);
         g.clip();
         for (var entry : paneContext.session().points.entries) {
             if (!entry.visible() || entry.trajectory() == null) continue;
@@ -234,13 +249,13 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             for (int pointIndex = 0; pointIndex < entry.trajectory().pointCount(); pointIndex += 5) {
                 double t = entry.trajectory().tAt(pointIndex);
                 if (t < tMin - tSpan * 0.02 || t > tMax + tSpan * 0.02) continue;
-                double value = evalPlot(entry, pointIndex);
+                double value = evalPlot(viewModel.kind(), entry, pointIndex);
                 if (Double.isNaN(value)) {
                     started = false;
                     continue;
                 }
-                double x = PAD_LEFT + (t - tMin) / tSpan * plotWidth;
-                double y = PAD_TOP + plotHeight - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * plotHeight;
+                double x = rect.x() + (t - tMin) / tSpan * rect.width();
+                double y = rect.y() + rect.height() - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * rect.height();
                 if (!started) {
                     g.moveTo(x, y);
                     started = true;
@@ -253,96 +268,63 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
             var cursorState = entry.trajectory().interpolateAt(cursorTime);
             if (cursorState != null) {
-                double value = evalPlot(cursorState.mx(), cursorState.my(), cursorState.mz());
+                double value = evalPlot(viewModel.kind(), cursorState.mx(), cursorState.my(), cursorState.mz());
                 if (!Double.isNaN(value)) {
-                    double y = PAD_TOP + plotHeight - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * plotHeight;
+                    double y = rect.y() + rect.height() - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * rect.height();
                     g.setFill(entry.colour());
                     double radius = selected ? 4 : 3;
                     g.fillOval(cursorX - radius, y - radius, radius * 2, radius * 2);
                 }
             }
         }
-        if (hoveringPlot) {
-            double hoverX = PAD_LEFT + (hoveredTimeMicros - tMin) / tSpan * plotWidth;
+        if (hovered) {
+            double hoverX = rect.x() + (hoveredTimeMicros - tMin) / tSpan * rect.width();
             g.setStroke(Color.color(StudioTheme.AC.getRed(), StudioTheme.AC.getGreen(), StudioTheme.AC.getBlue(), 0.35));
             g.setLineWidth(0.8);
             g.setLineDashes(4, 3);
-            g.strokeLine(hoverX, PAD_TOP, hoverX, PAD_TOP + plotHeight);
+            g.strokeLine(hoverX, rect.y(), hoverX, rect.y() + rect.height());
             g.setLineDashes();
-            drawBadge(g, hoverX, PAD_TOP + plotHeight - 18, String.format("t=%.0f \u03bcs", hoveredTimeMicros), StudioTheme.AC);
         }
         g.restore();
-        drawLegend(g, width);
     }
 
-    private double evalPlot(IsochromatEntry entry, int pointIndex) {
-        return evalPlot(
-            entry.trajectory().mxAt(pointIndex),
-            entry.trajectory().myAt(pointIndex),
-            entry.trajectory().mzAt(pointIndex)
-        );
-    }
-
-    private double evalPlot(double mx, double my, double mz) {
-        return switch (viewModel.kind()) {
-            case PHASE -> {
-                double magnitude = Math.sqrt(mx * mx + my * my);
-                yield magnitude > 0.01 ? Math.atan2(my, mx) * 180.0 / Math.PI : Double.NaN;
-            }
-            case POLAR -> Math.atan2(Math.sqrt(mx * mx + my * my), mz) * 180.0 / Math.PI;
-            case MPERP -> Math.sqrt(mx * mx + my * my);
-        };
-    }
-
-    private void moveCursor(double mouseX) {
+    private void moveCursor(double mouseX, double mouseY) {
+        int plotIndex = plotIndexAt(mouseX, mouseY);
+        if (plotIndex < 0) return;
+        var rect = plotRects(canvas.getWidth(), canvas.getHeight())[plotIndex];
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
+        double time = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
         paneContext.session().viewport.setCursor(time);
     }
 
-    private void updateStatus(double mouseX) {
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
-        long visible = paneContext.session().points.entries.stream()
-            .filter(entry -> entry.visible() && entry.trajectory() != null)
-            .count();
-        setPaneStatus(String.format("t=%.1f \u03bcs | %d traces visible", time, visible));
-    }
-
-    private static int niceTick(double span) {
-        return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
-    }
-
     private void updateHover(double mouseX, double mouseY) {
-        double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
-        double plotHeight = canvas.getHeight() - PAD_TOP - PAD_BOTTOM;
-        boolean nextHover = mouseX >= PAD_LEFT && mouseX <= PAD_LEFT + plotWidth
-            && mouseY >= PAD_TOP && mouseY <= PAD_TOP + plotHeight;
-        if (!nextHover) {
-            if (hoveringPlot) {
-                hoveringPlot = false;
+        int next = plotIndexAt(mouseX, mouseY);
+        if (next < 0) {
+            if (hoveredPlot != -1) {
+                hoveredPlot = -1;
                 scheduleRedraw();
             }
             return;
         }
+        var rect = plotRects(canvas.getWidth(), canvas.getHeight())[next];
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
-        hoveringPlot = true;
-        hoveredTimeMicros = tMin + (mouseX - PAD_LEFT) / Math.max(1, plotWidth) * (tMax - tMin);
+        hoveredTimeMicros = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
+        if (hoveredPlot != next) hoveredPlot = next;
         scheduleRedraw();
     }
 
-    private java.util.List<AxisScrubBar.Span> rfSpans() {
-        return AxisScrubBar.rfSpans(
-            paneContext.session().document.blochData.get(),
-            paneContext.session().document.currentPulse.get(),
-            Color.web("#1565c0"),
-            0.20
-        );
+    private void updateStatus() {
+        long visible = paneContext.session().points.entries.stream()
+            .filter(entry -> entry.visible() && entry.trajectory() != null)
+            .count();
+        if (hoveredPlot < 0) {
+            setPaneStatus(String.format("cursor=%.1f \u03bcs | %d traces visible", paneContext.session().viewport.tC.get(), visible));
+            return;
+        }
+        String label = hoveredPlot == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
+        setPaneStatus(String.format("%s | t=%.1f \u03bcs | %d traces visible", label, hoveredTimeMicros, visible));
     }
 
     private void drawLegend(GraphicsContext g, double width) {
@@ -369,25 +351,36 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         }
     }
 
-    private void drawBadge(GraphicsContext g, double centerX, double y, String text, Color accent) {
-        g.setFont(UI_7);
-        double width = Math.max(40, text.length() * 4.9);
-        double x = MathUtil.clamp(centerX - width / 2, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - width - 2);
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.10));
-        g.fillRoundRect(x, y, width, 12, 6, 6);
-        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.45));
-        g.setLineWidth(0.6);
-        g.strokeRoundRect(x, y, width, 12, 6, 6);
-        g.setFill(Color.color(0.18, 0.2, 0.24, 0.9));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x + width / 2, y + 8.2);
-        g.setTextAlign(TextAlignment.LEFT);
+    private static double evalPlot(TracePlotViewModel.PlotKind kind, IsochromatEntry entry, int pointIndex) {
+        return evalPlot(kind, entry.trajectory().mxAt(pointIndex), entry.trajectory().myAt(pointIndex), entry.trajectory().mzAt(pointIndex));
     }
 
-    private static String formatTime(double micros) {
-        return micros >= 1000
-            ? String.format("%.2f ms", micros / 1000.0)
-            : String.format("%.0f \u03bcs", micros);
+    private static double evalPlot(TracePlotViewModel.PlotKind kind, double mx, double my, double mz) {
+        return switch (kind) {
+            case PHASE -> {
+                double magnitude = Math.sqrt(mx * mx + my * my);
+                yield magnitude > 0.01 ? Math.atan2(my, mx) * 180.0 / Math.PI : Double.NaN;
+            }
+            case POLAR -> Math.atan2(Math.sqrt(mx * mx + my * my), mz) * 180.0 / Math.PI;
+            case MPERP -> Math.sqrt(mx * mx + my * my);
+        };
+    }
+
+    private int plotIndexAt(double mouseX, double mouseY) {
+        var plots = plotRects(canvas.getWidth(), canvas.getHeight());
+        for (int i = 0; i < plots.length; i++) {
+            if (plots[i].contains(mouseX, mouseY)) return i;
+        }
+        return -1;
+    }
+
+    private PlotRect[] plotRects(double width, double height) {
+        double plotWidth = (width - PAD_LEFT - PAD_RIGHT - PLOT_GAP) / 2.0;
+        double plotHeight = height - PAD_TOP - PAD_BOTTOM;
+        return new PlotRect[]{
+            new PlotRect(PAD_LEFT, PAD_TOP, Math.max(1, plotWidth), Math.max(1, plotHeight)),
+            new PlotRect(PAD_LEFT + plotWidth + PLOT_GAP, PAD_TOP, Math.max(1, plotWidth), Math.max(1, plotHeight))
+        };
     }
 
     private AxisScrubBar.Bounds overviewBounds() {
@@ -396,5 +389,15 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
     private static AxisScrubBar.Bounds overviewBounds(double width) {
         return new AxisScrubBar.Bounds(PAD_LEFT, 2, Math.max(1, width - PAD_LEFT - PAD_RIGHT), OVERVIEW_H);
+    }
+
+    private static int niceTick(double span) {
+        return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
+    }
+
+    private record PlotRect(double x, double y, double width, double height) {
+        boolean contains(double px, double py) {
+            return px >= x && px <= x + width && py >= y && py <= y + height;
+        }
     }
 }

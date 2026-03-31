@@ -20,18 +20,48 @@ public record Trajectory(double[] data) {
     public MagnetisationState interpolateAt(double tcMicros) {
         int n = pointCount();
         if (n < 2) return null;
-        for (int i = 0; i < n - 1; i++) {
-            double tA = tAt(i), tB = tAt(i + 1);
-            if (tB >= tcMicros) {
-                double f = (tB == tA) ? 0.0 : (tcMicros - tA) / (tB - tA);
-                return new MagnetisationState(
-                    mxAt(i) + f * (mxAt(i + 1) - mxAt(i)),
-                    myAt(i) + f * (myAt(i + 1) - myAt(i)),
-                    mzAt(i) + f * (mzAt(i + 1) - mzAt(i))
-                );
+        int rightIndex = firstIndexWithTimeAtLeast(tcMicros);
+        if (rightIndex <= 0) {
+            return new MagnetisationState(mxAt(0), myAt(0), mzAt(0));
+        }
+        if (rightIndex >= n) {
+            int last = n - 1;
+            return new MagnetisationState(mxAt(last), myAt(last), mzAt(last));
+        }
+        int leftIndex = rightIndex - 1;
+        double tA = tAt(leftIndex);
+        double tB = tAt(rightIndex);
+        double f = (tB == tA) ? 0.0 : (tcMicros - tA) / (tB - tA);
+        return new MagnetisationState(
+            mxAt(leftIndex) + f * (mxAt(rightIndex) - mxAt(leftIndex)),
+            myAt(leftIndex) + f * (myAt(rightIndex) - myAt(leftIndex)),
+            mzAt(leftIndex) + f * (mzAt(rightIndex) - mzAt(leftIndex))
+        );
+    }
+
+    /**
+     * Return the discrete step state used by {@code simulateTo()} semantics:
+     * the first sampled state whose timestamp is greater than or equal to {@code tcMicros}.
+     */
+    public MagnetisationState stepStateAt(double tcMicros) {
+        int n = pointCount();
+        if (n == 0) return MagnetisationState.THERMAL_EQUILIBRIUM;
+        int index = Math.min(Math.max(firstIndexWithTimeAtLeast(tcMicros), 0), n - 1);
+        return new MagnetisationState(mxAt(index), myAt(index), mzAt(index));
+    }
+
+    private int firstIndexWithTimeAtLeast(double tcMicros) {
+        int low = 0;
+        int high = pointCount() - 1;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            double tMid = tAt(mid);
+            if (tMid < tcMicros) {
+                low = mid + 1;
+            } else {
+                high = mid - 1;
             }
         }
-        int last = n - 1;
-        return new MagnetisationState(mxAt(last), myAt(last), mzAt(last));
+        return low;
     }
 }

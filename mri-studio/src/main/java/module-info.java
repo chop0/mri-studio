@@ -2,6 +2,7 @@ module ax.xz.mri {
     requires javafx.controls;
     requires javafx.graphics;
     requires com.fasterxml.jackson.databind;
+    requires bento.fx;
 
     opens ax.xz.mri.model.field    to com.fasterxml.jackson.databind;
     opens ax.xz.mri.model.sequence to com.fasterxml.jackson.databind;

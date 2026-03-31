@@ -16,6 +16,10 @@ public class TimelineViewportController {
         viewport.zoomViewportAround(centreTime, factor);
     }
 
+    public void zoomAnalysisWindowAround(double centreTime, double factor) {
+        viewport.zoomAnalysisWindowAround(centreTime, factor);
+    }
+
     public void panViewportBy(double deltaTime) {
         viewport.panViewportBy(deltaTime);
     }
@@ -46,5 +50,9 @@ public class TimelineViewportController {
 
     public void setAnalysisWindowToViewport() {
         viewport.setAnalysisWindow(viewport.vS.get(), viewport.vE.get());
+    }
+
+    public void fitAnalysisToData() {
+        viewport.fitAnalysisToData();
     }
 }

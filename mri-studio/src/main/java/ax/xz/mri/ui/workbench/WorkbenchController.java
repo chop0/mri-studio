@@ -3,19 +3,11 @@ package ax.xz.mri.ui.workbench;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.service.io.BlochDataReader;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
-import ax.xz.mri.ui.workbench.layout.DockNode;
-import ax.xz.mri.ui.workbench.layout.FloatingWindowState;
-import ax.xz.mri.ui.workbench.layout.PaneLeaf;
-import ax.xz.mri.ui.workbench.layout.SplitNode;
-import ax.xz.mri.ui.workbench.layout.TabNode;
-import ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
-import ax.xz.mri.ui.workbench.pane.PhaseMapRPane;
-import ax.xz.mri.ui.workbench.pane.PhaseMapZPane;
-import ax.xz.mri.ui.workbench.pane.PhaseTracePane;
+import ax.xz.mri.ui.workbench.pane.PhaseMapsWorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.PhaseTracesWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.PointsWorkbenchPane;
-import ax.xz.mri.ui.workbench.pane.PolarTracePane;
 import ax.xz.mri.ui.workbench.pane.SphereWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.TimelineWorkbenchPane;
 import ax.xz.mri.ui.viewmodel.StudioSession;
@@ -29,42 +21,39 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
-import javafx.scene.control.SplitPane;
-import javafx.scene.control.Tab;
-import javafx.scene.control.TabPane;
 import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import software.coley.bentofx.Bento;
+import software.coley.bentofx.dockable.Dockable;
+import software.coley.bentofx.layout.container.DockContainerLeaf;
+import software.coley.bentofx.layout.container.DockContainerRootBranch;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** Owns pane activation, dock/floating state, file loading, and layout persistence. */
+/** Owns pane activation, BentoFX docking, file loading, and shell command wiring. */
 public class WorkbenchController {
+    private static final int STUDIO_DRAG_GROUP = 1;
+
     private final StudioSession session;
-    private final PersistentLayoutStore layoutStore;
     private final CommandRegistry commandRegistry = new CommandRegistry();
     private final StringProperty shellStatus = new SimpleStringProperty("Ready");
     private final BorderPane dockContainer = new BorderPane();
     private final Map<PaneId, WorkbenchPane> panes = new EnumMap<>(PaneId.class);
-    private final Map<PaneId, StackPane> dockSlots = new EnumMap<>(PaneId.class);
-    private final Map<PaneId, Stage> floatingStages = new EnumMap<>(PaneId.class);
+    private final Map<PaneId, Dockable> dockables = new EnumMap<>(PaneId.class);
+    private final Map<PaneId, DockContainerLeaf> homeLeaves = new EnumMap<>(PaneId.class);
     private final Map<PaneId, String> paneStatuses = new EnumMap<>(PaneId.class);
 
+    private Bento bento;
+    private DockContainerRootBranch rootBranch;
     private Stage mainStage;
-    private WorkbenchLayoutState currentLayout;
     private boolean disposed;
 
     public WorkbenchController(StudioSession session) {
         this.session = session;
-        this.layoutStore = new PersistentLayoutStore(Path.of(System.getProperty("user.home"), ".mri-studio", "layout.json"));
         initializePanes();
         registerCommands();
         installShellStatusBindings();
@@ -72,7 +61,7 @@ public class WorkbenchController {
 
     public void initialize(Stage stage) {
         this.mainStage = stage;
-        loadLayoutFromStore();
+        resetLayout();
     }
 
     public Node dockRoot() {
@@ -93,6 +82,10 @@ public class WorkbenchController {
 
     public void activatePane(PaneId paneId) {
         session.docking.activate(paneId);
+        var dockable = dockables.get(paneId);
+        if (dockable != null) {
+            dockable.inContainer(container -> container.selectDockable(dockable));
+        }
         updateShellStatus();
     }
 
@@ -102,73 +95,56 @@ public class WorkbenchController {
     }
 
     public boolean isFloating(PaneId paneId) {
-        return session.docking.floatingPanes.contains(paneId);
+        var pane = panes.get(paneId);
+        if (pane == null || pane.getScene() == null || mainStage == null || mainStage.getScene() == null) return false;
+        return pane.getScene() != mainStage.getScene();
     }
 
     public void focusPane(PaneId paneId) {
-        if (floatingStages.containsKey(paneId)) {
-            floatingStages.get(paneId).toFront();
-            floatingStages.get(paneId).requestFocus();
-        } else if (panes.containsKey(paneId)) {
-            panes.get(paneId).requestFocus();
-        }
         activatePane(paneId);
+        var pane = panes.get(paneId);
+        if (pane != null && pane.getScene() != null && pane.getScene().getWindow() instanceof Stage stage) {
+            stage.toFront();
+            stage.requestFocus();
+        }
+        if (pane != null) pane.requestFocus();
     }
 
     public void floatPane(PaneId paneId) {
-        if (isFloating(paneId)) return;
-        var pane = panes.get(paneId);
-        var slot = dockSlots.get(paneId);
-        if (pane == null || slot == null || mainStage == null) return;
-
-        slot.getChildren().setAll(buildFloatedPlaceholder(paneId));
-        session.docking.floatingPanes.add(paneId);
-
-        var stage = new Stage();
-        stage.initOwner(mainStage);
-        stage.setTitle(paneId.title() + " - MRI Studio");
-        stage.setScene(new Scene(pane, 500, 360));
-        stage.setOnCloseRequest(event -> {
-            event.consume();
-            dockPane(paneId);
-        });
-        stage.show();
-        floatingStages.put(paneId, stage);
-        activatePane(paneId);
-        updateShellStatus();
+        if (mainStage == null || mainStage.getScene() == null) return;
+        var dockable = dockables.get(paneId);
+        if (dockable == null) return;
+        if (isFloating(paneId)) {
+            focusPane(paneId);
+            return;
+        }
+        bento.stageBuilding().newStageForDockable(
+            mainStage.getScene(),
+            dockable,
+            mainStage.getX() + 90,
+            mainStage.getY() + 90
+        );
+        focusPane(paneId);
     }
 
     public void dockPane(PaneId paneId) {
-        var pane = panes.get(paneId);
-        var slot = dockSlots.get(paneId);
-        if (pane == null || slot == null) return;
-
-        var stage = floatingStages.remove(paneId);
-        if (stage != null) {
-            stage.setOnCloseRequest(null);
-            stage.hide();
-        }
-
-        session.docking.floatingPanes.remove(paneId);
-        slot.getChildren().setAll(pane);
-        activatePane(paneId);
-        updateShellStatus();
+        var dockable = dockables.get(paneId);
+        var homeLeaf = homeLeaves.get(paneId);
+        if (dockable == null || homeLeaf == null) return;
+        homeLeaf.addDockable(dockable);
+        homeLeaf.selectDockable(dockable);
+        focusPane(paneId);
     }
 
     public void resetLayout() {
-        applyLayout(defaultLayout());
+        rebuildWorkbench();
     }
 
     public void loadLayoutFromStore() {
-        applyLayout(layoutStore.load().orElseGet(this::defaultLayout));
+        resetLayout();
     }
 
     public void saveLayoutToStore() {
-        try {
-            layoutStore.save(snapshotLayout());
-        } catch (IOException ex) {
-            showError("Failed to save layout", ex.getMessage());
-        }
     }
 
     public void openFileChooser() {
@@ -176,9 +152,7 @@ public class WorkbenchController {
         chooser.setTitle("Open bloch_data.json");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON", "*.json"));
         File file = chooser.showOpenDialog(mainStage);
-        if (file != null) {
-            loadFile(file);
-        }
+        if (file != null) loadFile(file);
     }
 
     public void loadFile(File file) {
@@ -198,12 +172,6 @@ public class WorkbenchController {
     public void dispose() {
         if (disposed) return;
         disposed = true;
-
-        for (var stage : new ArrayList<>(floatingStages.values())) {
-            stage.setOnCloseRequest(null);
-            stage.hide();
-        }
-        floatingStages.clear();
         panes.values().forEach(WorkbenchPane::dispose);
     }
 
@@ -306,13 +274,11 @@ public class WorkbenchController {
         var context = new PaneContext(session, this, paneId);
         return switch (paneId) {
             case SPHERE -> new SphereWorkbenchPane(context);
-            case GEOMETRY -> new GeometryPane(context);
+            case CROSS_SECTION -> new GeometryPane(context);
             case POINTS -> new PointsWorkbenchPane(context);
             case TIMELINE -> new TimelineWorkbenchPane(context);
-            case PHASE_MAP_Z -> new PhaseMapZPane(context);
-            case PHASE_MAP_R -> new PhaseMapRPane(context);
-            case TRACE_PHASE -> new PhaseTracePane(context);
-            case TRACE_POLAR -> new PolarTracePane(context);
+            case PHASE_MAPS -> new PhaseMapsWorkbenchPane(context);
+            case TRACE_ANGLES -> new PhaseTracesWorkbenchPane(context);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
         };
     }
@@ -348,6 +314,124 @@ public class WorkbenchController {
         session.docking.activePaneId.addListener((obs, oldValue, newValue) -> updateShellStatus());
     }
 
+    private void rebuildWorkbench() {
+        bento = new Bento();
+        configureBento();
+        dockables.clear();
+        homeLeaves.clear();
+
+        var builder = bento.dockBuilding();
+        var root = builder.root("studio-root");
+        var workspace = builder.branch("workspace");
+        var upper = builder.branch("upper");
+        var left = builder.branch("left");
+        var lower = builder.branch("lower");
+
+        var timeline = registerLeaf(builder, PaneId.TIMELINE);
+        var sphere = registerLeaf(builder, PaneId.SPHERE);
+        var geometry = registerLeaf(builder, PaneId.CROSS_SECTION);
+        var points = registerLeaf(builder, PaneId.POINTS);
+        var phaseMaps = registerLeaf(builder, PaneId.PHASE_MAPS);
+        var traceAngles = registerLeaf(builder, PaneId.TRACE_ANGLES);
+        var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
+
+        root.setOrientation(Orientation.VERTICAL);
+        workspace.setOrientation(Orientation.VERTICAL);
+        upper.setOrientation(Orientation.HORIZONTAL);
+        left.setOrientation(Orientation.HORIZONTAL);
+        lower.setOrientation(Orientation.HORIZONTAL);
+
+        root.addContainers(timeline, workspace);
+        workspace.addContainers(upper, lower);
+        upper.addContainers(left, points);
+        left.addContainers(sphere, geometry);
+        lower.addContainers(phaseMaps, traceAngles, traceMagnitude);
+
+        root.setDividerPositions(0.26);
+        workspace.setDividerPositions(0.62);
+        upper.setDividerPositions(0.58);
+        left.setDividerPositions(0.52);
+        lower.setDividerPositions(0.38, 0.74);
+
+        root.setContainerResizable(timeline, false);
+        root.setContainerSizePx(timeline, 250);
+
+        rootBranch = root;
+        dockContainer.setCenter(rootBranch);
+        activatePane(PaneId.TIMELINE);
+    }
+
+    private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
+        var leaf = builder.leaf(paneId.name().toLowerCase());
+        leaf.setPruneWhenEmpty(true);
+        var dockable = builder.dockable(paneId.name());
+        dockable.setTitle(paneId.title());
+        dockable.setNode(panes.get(paneId));
+        dockable.setClosable(false);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(true);
+        dockable.setDragGroup(STUDIO_DRAG_GROUP);
+        dockable.setContextMenuFactory(ignored -> buildDockableMenu(paneId));
+        dockables.put(paneId, dockable);
+        homeLeaves.put(paneId, leaf);
+        leaf.addDockable(dockable);
+        leaf.selectDockable(dockable);
+        return leaf;
+    }
+
+    private void configureBento() {
+        bento.stageBuilding().setSceneFactory(this::createDockingScene);
+        bento.events().addDockableSelectListener((path, dockable) -> {
+            var paneId = paneIdOf(dockable);
+            if (paneId != null) {
+                session.docking.activate(paneId);
+                updateShellStatus();
+            }
+        });
+        bento.events().addDockableMoveListener((oldPath, newPath, dockable) -> {
+            var paneId = paneIdOf(dockable);
+            if (paneId != null) {
+                session.docking.activate(paneId);
+                updateShellStatus();
+            }
+        });
+        bento.events().addDockableOpenListener((path, dockable) -> {
+            var paneId = paneIdOf(dockable);
+            if (paneId != null) {
+                session.docking.activate(paneId);
+                updateShellStatus();
+            }
+        });
+    }
+
+    private Scene createDockingScene(Scene sourceScene, javafx.scene.layout.Region region, double width, double height) {
+        var scene = new Scene(region, width, height);
+        if (sourceScene != null) {
+            scene.getStylesheets().setAll(sourceScene.getStylesheets());
+        }
+        return scene;
+    }
+
+    private javafx.scene.control.ContextMenu buildDockableMenu(PaneId paneId) {
+        var menu = new javafx.scene.control.ContextMenu();
+        var focus = new MenuItem("Focus Pane");
+        focus.setOnAction(event -> focusPane(paneId));
+        var floatItem = new MenuItem(isFloating(paneId) ? "Raise Window" : "Float Pane");
+        floatItem.setOnAction(event -> floatPane(paneId));
+        var dockItem = new MenuItem("Dock To Default");
+        dockItem.setOnAction(event -> dockPane(paneId));
+        menu.getItems().addAll(focus, floatItem, dockItem);
+        return menu;
+    }
+
+    private PaneId paneIdOf(Dockable dockable) {
+        try {
+            return dockable == null ? null : PaneId.valueOf(dockable.getIdentifier());
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
     private void updateShellStatus() {
         String scenario = session.document.currentScenario.get() == null ? "\u2014" : session.document.currentScenario.get();
         String iter = session.document.iterationKeys.isEmpty()
@@ -369,150 +453,6 @@ public class WorkbenchController {
             activePane,
             paneStatus == null || paneStatus.isBlank() ? "" : " | " + paneStatus
         ));
-    }
-
-    private void applyLayout(WorkbenchLayoutState layoutState) {
-        currentLayout = layoutState;
-        for (var paneId : new ArrayList<>(floatingStages.keySet())) {
-            dockPane(paneId);
-        }
-        dockSlots.clear();
-        dockContainer.setCenter(buildDockNode(layoutState.dockRoot()));
-
-        for (var paneId : PaneId.values()) {
-            dockPane(paneId);
-        }
-        for (var floatingWindow : layoutState.floatingWindows()) {
-            floatPane(floatingWindow.paneId());
-            var stage = floatingStages.get(floatingWindow.paneId());
-            if (stage != null) {
-                stage.setX(floatingWindow.x());
-                stage.setY(floatingWindow.y());
-                stage.setWidth(floatingWindow.width());
-                stage.setHeight(floatingWindow.height());
-            }
-        }
-        activatePane(PaneId.SPHERE);
-    }
-
-    private Node buildDockNode(DockNode node) {
-        if (node instanceof PaneLeaf leaf) {
-            var slot = new StackPane();
-            slot.getStyleClass().add("dock-slot");
-            dockSlots.put(leaf.paneId(), slot);
-            slot.getChildren().setAll(panes.get(leaf.paneId()));
-            return slot;
-        }
-        if (node instanceof SplitNode splitNode) {
-            var splitPane = new SplitPane();
-            splitPane.setOrientation(splitNode.orientation());
-            splitPane.getItems().addAll(buildDockNode(splitNode.first()), buildDockNode(splitNode.second()));
-            splitPane.setDividerPositions(splitNode.dividerPosition());
-            return splitPane;
-        }
-        if (node instanceof TabNode tabNode) {
-            var tabPane = new TabPane();
-            for (var child : tabNode.tabs()) {
-                var tab = new Tab();
-                tab.setClosable(false);
-                tab.setContent(buildDockNode(child));
-                tabPane.getTabs().add(tab);
-            }
-            tabPane.getSelectionModel().select(Math.max(0, Math.min(tabNode.selectedIndex(), tabPane.getTabs().size() - 1)));
-            return tabPane;
-        }
-        throw new IllegalStateException("Unknown dock node: " + node);
-    }
-
-    private WorkbenchLayoutState snapshotLayout() {
-        return new WorkbenchLayoutState(
-            snapshotDockNode(currentLayout.dockRoot(), dockContainer.getCenter()),
-            floatingStages.entrySet().stream()
-                .map(entry -> new FloatingWindowState(
-                    entry.getKey(),
-                    entry.getValue().getX(),
-                    entry.getValue().getY(),
-                    entry.getValue().getWidth(),
-                    entry.getValue().getHeight()
-                ))
-                .toList()
-        );
-    }
-
-    private DockNode snapshotDockNode(DockNode template, Node actualNode) {
-        if (template instanceof PaneLeaf) return template;
-        if (template instanceof SplitNode splitNode && actualNode instanceof SplitPane splitPane) {
-            var items = splitPane.getItems();
-            return new SplitNode(
-                splitPane.getOrientation(),
-                splitPane.getDividerPositions().length > 0 ? splitPane.getDividerPositions()[0] : splitNode.dividerPosition(),
-                snapshotDockNode(splitNode.first(), items.get(0)),
-                snapshotDockNode(splitNode.second(), items.get(1))
-            );
-        }
-        if (template instanceof TabNode tabNode && actualNode instanceof TabPane tabPane) {
-            var tabs = new ArrayList<DockNode>();
-            for (int index = 0; index < tabNode.tabs().size(); index++) {
-                tabs.add(snapshotDockNode(tabNode.tabs().get(index), tabPane.getTabs().get(index).getContent()));
-            }
-            return new TabNode(tabs, tabPane.getSelectionModel().getSelectedIndex());
-        }
-        return template;
-    }
-
-    private Node buildFloatedPlaceholder(PaneId paneId) {
-        var label = new Label(paneId.title() + " is floating");
-        var button = new Button("Dock Pane");
-        button.setOnAction(event -> dockPane(paneId));
-        var box = new javafx.scene.layout.VBox(8, label, button);
-        box.setAlignment(javafx.geometry.Pos.CENTER);
-        box.getStyleClass().add("floating-placeholder");
-        return box;
-    }
-
-    private WorkbenchLayoutState defaultLayout() {
-        DockNode root = new SplitNode(
-            Orientation.VERTICAL,
-            0.55,
-            new SplitNode(
-                Orientation.HORIZONTAL,
-                0.58,
-                new PaneLeaf(PaneId.SPHERE),
-                new SplitNode(
-                    Orientation.VERTICAL,
-                    0.65,
-                    new PaneLeaf(PaneId.GEOMETRY),
-                    new PaneLeaf(PaneId.POINTS)
-                )
-            ),
-            new SplitNode(
-                Orientation.VERTICAL,
-                0.35,
-                new PaneLeaf(PaneId.TIMELINE),
-                new SplitNode(
-                    Orientation.HORIZONTAL,
-                    0.42,
-                    new SplitNode(
-                        Orientation.HORIZONTAL,
-                        0.5,
-                        new PaneLeaf(PaneId.PHASE_MAP_Z),
-                        new PaneLeaf(PaneId.PHASE_MAP_R)
-                    ),
-                    new SplitNode(
-                        Orientation.HORIZONTAL,
-                        0.34,
-                        new PaneLeaf(PaneId.TRACE_PHASE),
-                        new SplitNode(
-                            Orientation.HORIZONTAL,
-                            0.5,
-                            new PaneLeaf(PaneId.TRACE_POLAR),
-                            new PaneLeaf(PaneId.TRACE_MAGNITUDE)
-                        )
-                    )
-                )
-            )
-        );
-        return new WorkbenchLayoutState(root, List.of());
     }
 
     private void showError(String title, String message) {

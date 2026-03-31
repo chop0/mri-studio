@@ -5,6 +5,7 @@ import ax.xz.mri.ui.workbench.StudioShell;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
+import software.coley.bentofx.Bento;
 
 /**
  * MRI Studio — entry point.
@@ -17,11 +18,13 @@ public class MriStudioApp extends Application {
     @Override
     public void start(Stage stage) {
         // Replace Modena entirely with AeroFX + our Modena-compat definitions
-        AeroFX.style();
+//        AeroFX.style();
 
         shell = new StudioShell();
         var scene = new Scene(shell, 1600, 980);
 
+        var bentoCss = Bento.class.getResource("/bento.css");
+        if (bentoCss != null) scene.getStylesheets().add(bentoCss.toExternalForm());
         var css = getClass().getResource("/ax/xz/mri/ui/theme/studio.css");
         if (css != null) scene.getStylesheets().add(css.toExternalForm());
 

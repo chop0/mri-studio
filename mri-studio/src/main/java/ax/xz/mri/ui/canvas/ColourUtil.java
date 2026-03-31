@@ -6,8 +6,8 @@ import javafx.scene.paint.Color;
  * Colour utilities for heatmap rendering.
  * Port of {@code hue2rgb()} and {@code hue2rgbBytes()} from canvas.ts.
  */
-public final class ColorUtil {
-    private ColorUtil() {}
+public final class ColourUtil {
+    private ColourUtil() {}
 
     /**
      * Convert a phase angle (hue) and transverse magnetisation (brightness) to a Color.

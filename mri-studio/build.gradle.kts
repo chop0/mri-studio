@@ -24,6 +24,7 @@ javafx {
 
 dependencies {
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
+    implementation("software.coley:bento-fx:0.10.1")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
 }
 

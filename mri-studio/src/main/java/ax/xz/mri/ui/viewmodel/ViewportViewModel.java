@@ -8,6 +8,7 @@ import javafx.beans.property.SimpleDoubleProperty;
 public class ViewportViewModel {
     private static final double MIN_VIEWPORT_SPAN = 1.0;
     private static final double MIN_ANALYSIS_SPAN = 1.0;
+    private static final double MAX_VIEWPORT_SPAN_FACTOR = 4.0;
 
     public final DoubleProperty tS = new SimpleDoubleProperty(0);
     public final DoubleProperty tE = new SimpleDoubleProperty(1000);
@@ -47,10 +48,20 @@ public class ViewportViewModel {
 
     public void zoomViewportAround(double centreTime, double factor) {
         double currentSpan = Math.max(MIN_VIEWPORT_SPAN, vE.get() - vS.get());
-        double nextSpan = MathUtil.clamp(currentSpan * factor, MIN_VIEWPORT_SPAN, Math.max(maxTime.get(), MIN_VIEWPORT_SPAN));
+        double maxSpan = Math.max(maxTime.get() * MAX_VIEWPORT_SPAN_FACTOR, MIN_VIEWPORT_SPAN);
+        double nextSpan = MathUtil.clamp(currentSpan * factor, MIN_VIEWPORT_SPAN, maxSpan);
         double nextStart = centreTime - (centreTime - vS.get()) / currentSpan * nextSpan;
         vS.set(nextStart);
         vE.set(nextStart + nextSpan);
+        normalize();
+    }
+
+    public void zoomAnalysisWindowAround(double centreTime, double factor) {
+        double currentSpan = Math.max(MIN_ANALYSIS_SPAN, tE.get() - tS.get());
+        double nextSpan = MathUtil.clamp(currentSpan * factor, MIN_ANALYSIS_SPAN, Math.max(maxTime.get(), MIN_ANALYSIS_SPAN));
+        double nextStart = centreTime - (centreTime - tS.get()) / currentSpan * nextSpan;
+        tS.set(nextStart);
+        tE.set(nextStart + nextSpan);
         normalize();
     }
 
@@ -93,21 +104,40 @@ public class ViewportViewModel {
         normalize();
     }
 
+    public void fitAnalysisToData() {
+        double max = Math.max(maxTime.get(), MIN_ANALYSIS_SPAN);
+        tS.set(0);
+        tE.set(max);
+        normalize();
+    }
+
     private void normalize() {
         if (normalizing) return;
         normalizing = true;
         try {
             double max = Math.max(maxTime.get(), MIN_VIEWPORT_SPAN);
-            double viewStart = MathUtil.clamp(vS.get(), 0, max - MIN_VIEWPORT_SPAN);
-            double viewEnd = MathUtil.clamp(vE.get(), viewStart + MIN_VIEWPORT_SPAN, max);
-
-            double analysisSpan = Math.min(Math.max(MIN_ANALYSIS_SPAN, tE.get() - tS.get()), viewEnd - viewStart);
-            double analysisStart = MathUtil.clamp(tS.get(), viewStart, viewEnd - analysisSpan);
-            double analysisEnd = MathUtil.clamp(tE.get(), analysisStart + analysisSpan, viewEnd);
+            double analysisSpan = MathUtil.clamp(tE.get() - tS.get(), MIN_ANALYSIS_SPAN, max);
+            double analysisStart = MathUtil.clamp(tS.get(), 0, max - analysisSpan);
+            double analysisEnd = MathUtil.clamp(tE.get(), analysisStart + analysisSpan, max);
 
             if (analysisEnd - analysisStart < MIN_ANALYSIS_SPAN) {
-                analysisEnd = Math.min(viewEnd, analysisStart + MIN_ANALYSIS_SPAN);
-                analysisStart = Math.max(viewStart, analysisEnd - MIN_ANALYSIS_SPAN);
+                analysisEnd = Math.min(max, analysisStart + MIN_ANALYSIS_SPAN);
+                analysisStart = Math.max(0, analysisEnd - MIN_ANALYSIS_SPAN);
+            }
+
+            double maxViewportSpan = Math.max(max * MAX_VIEWPORT_SPAN_FACTOR, MIN_VIEWPORT_SPAN);
+            double viewSpan = MathUtil.clamp(vE.get() - vS.get(), MIN_VIEWPORT_SPAN, maxViewportSpan);
+            viewSpan = Math.max(viewSpan, analysisEnd - analysisStart);
+            double viewStart = vS.get();
+            double viewEnd = viewStart + viewSpan;
+
+            if (analysisStart < viewStart) {
+                viewStart = analysisStart;
+                viewEnd = viewStart + viewSpan;
+            }
+            if (analysisEnd > viewEnd) {
+                viewEnd = analysisEnd;
+                viewStart = viewEnd - viewSpan;
             }
 
             double cursor = MathUtil.clamp(tC.get(), analysisStart, analysisEnd);
