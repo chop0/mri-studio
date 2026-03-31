@@ -6,6 +6,7 @@ import ax.xz.mri.ui.model.IsochromatId;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot;
 import ax.xz.mri.ui.viewmodel.GeometryViewModel;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
@@ -34,6 +35,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     private IsochromatId draggingId;
     private double dragOffsetR;
     private double dragOffsetZ;
+    private boolean draggingReference;
     private boolean hoveringPlot;
     private double hoveredR;
     private double hoveredZ;
@@ -107,7 +109,11 @@ public class GeometryPane extends CanvasWorkbenchPane {
             paneContext.session().geometry.showSliceOverlay,
             paneContext.session().geometry.shadingSnapshot,
             paneContext.session().geometry.shadingComputing,
-            paneContext.session().geometry.signalModeBlocked
+            paneContext.session().geometry.signalModeBlocked,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.r,
+            paneContext.session().reference.z,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -117,6 +123,16 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 updateCursor(event.getX(), event.getY());
                 updateStatus(event.getX(), event.getY());
                 scheduleRedraw();
+                return;
+            }
+
+            if (referenceHandleContains(event.getX(), event.getY())) {
+                draggingReference = true;
+                var rz = screenToRz(event.getX(), event.getY());
+                paneContext.session().reference.moveTo(rz[0], rz[1]);
+                updateHover(event.getX(), event.getY());
+                updateCursor(event.getX(), event.getY());
+                updateStatus(event.getX(), event.getY());
                 return;
             }
 
@@ -141,6 +157,10 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 scheduleRedraw();
                 return;
             }
+            if (draggingReference) {
+                var rz = screenToRz(event.getX(), event.getY());
+                paneContext.session().reference.moveTo(rz[0], rz[1]);
+            }
             if (draggingId != null) {
                 var rz = screenToRz(event.getX(), event.getY());
                 paneContext.session().points.move(draggingId, Math.max(0, rz[0] + dragOffsetR), rz[1] + dragOffsetZ);
@@ -151,6 +171,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
         });
         canvas.setOnMouseReleased(event -> {
             draggingId = null;
+            draggingReference = false;
             zRangeInteraction.handleRelease();
         });
         canvas.setOnMouseMoved(event -> {
@@ -182,6 +203,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
             ContextMenu menu;
             if (scrubBounds().contains(event.getX(), event.getY())) {
                 menu = buildZRangeMenu();
+            } else if (referenceHandleContains(event.getX(), event.getY())) {
+                menu = buildReferenceMenu();
             } else {
                 var entry = findEntry(event.getX(), event.getY());
                 menu = entry != null ? buildEntryMenu(entry) : buildBackgroundMenu(event.getX(), event.getY());
@@ -258,6 +281,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
             }
             g.setGlobalAlpha(1);
         }
+
+        drawReferenceMarker(g, rMax, zMin, zMax, plotWidth, plotHeight);
 
         if (hoveringPlot) {
             double hoverX = rToPixel(hoveredR, rMax, plotWidth);
@@ -408,9 +433,10 @@ public class GeometryPane extends CanvasWorkbenchPane {
         }
         if (scrubBounds().contains(mouseX, mouseY)) {
             setPaneStatus(String.format(
-                "z view=[%.1f, %.1f] mm | double-click to zoom out",
+                "z view=[%.1f, %.1f] mm | double-click to zoom out%s",
                 paneContext.session().geometry.visibleStart(),
-                paneContext.session().geometry.visibleEnd()
+                paneContext.session().geometry.visibleEnd(),
+                referenceSuffix()
             ));
             return;
         }
@@ -421,11 +447,12 @@ public class GeometryPane extends CanvasWorkbenchPane {
             : paneContext.session().geometry.statusMessage.get();
         if (suffix == null) suffix = "";
         setPaneStatus(String.format(
-            "r=%.1f z=%.1f mm | %d points (%d visible)%s",
+            "r=%.1f z=%.1f mm | %d points (%d visible)%s%s",
             rz[0],
             rz[1],
             paneContext.session().points.entries.size(),
             visible,
+            referenceSuffix(),
             suffix.isBlank() ? "" : suffix
         ));
     }
@@ -435,11 +462,25 @@ public class GeometryPane extends CanvasWorkbenchPane {
         var menu = new ContextMenu();
         var add = new MenuItem(String.format("Add Point (r=%.1f, z=%.1f)", rz[0], rz[1]));
         add.setOnAction(event -> paneContext.session().points.addUserPoint(rz[0], rz[1], String.format("r=%.1f z=%.1f", rz[0], rz[1])));
+        var setBasis = new MenuItem(String.format("Set Basis Frame Here (r=%.1f, z=%.1f)", rz[0], rz[1]));
+        setBasis.setOnAction(event -> paneContext.session().reference.setReference(rz[0], rz[1]));
+        var clearBasis = new MenuItem("Clear Basis Frame");
+        clearBasis.setDisable(!paneContext.session().reference.enabled.get());
+        clearBasis.setOnAction(event -> paneContext.session().reference.clear());
         var resetDefaults = new MenuItem("Reset Defaults");
         resetDefaults.setOnAction(event -> paneContext.session().points.resetToDefaults());
         var clearUser = new MenuItem("Clear User Points");
         clearUser.setOnAction(event -> paneContext.session().points.clearUserPoints());
-        menu.getItems().addAll(add, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem(), new SeparatorMenuItem(), resetDefaults, clearUser);
+        menu.getItems().addAll(
+            add,
+            setBasis,
+            clearBasis,
+            new SeparatorMenuItem(),
+            zRangeInteraction.newResetMenuItem(),
+            new SeparatorMenuItem(),
+            resetDefaults,
+            clearUser
+        );
         return menu;
     }
 
@@ -462,6 +503,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
         var menu = new ContextMenu();
         var selectOnly = new MenuItem("Select Only");
         selectOnly.setOnAction(event -> paneContext.session().selection.setSingle(entry.id()));
+        var useAsBasis = new MenuItem("Use As Basis Frame");
+        useAsBasis.setOnAction(event -> paneContext.session().reference.setReference(entry.r(), entry.z()));
         var toggle = new MenuItem(entry.visible() ? "Hide" : "Show");
         toggle.setOnAction(event -> paneContext.session().points.toggleVisibility(entry.id()));
         var duplicate = new MenuItem("Duplicate");
@@ -473,7 +516,28 @@ public class GeometryPane extends CanvasWorkbenchPane {
         lock.setOnAction(event -> paneContext.session().points.setLocked(entry.id(), !entry.locked()));
         var delete = new MenuItem("Delete");
         delete.setOnAction(event -> paneContext.session().points.remove(entry.id()));
-        menu.getItems().addAll(selectOnly, toggle, duplicate, lock, new SeparatorMenuItem(), delete, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem());
+        menu.getItems().addAll(
+            selectOnly,
+            useAsBasis,
+            toggle,
+            duplicate,
+            lock,
+            new SeparatorMenuItem(),
+            delete,
+            new SeparatorMenuItem(),
+            zRangeInteraction.newResetMenuItem()
+        );
+        return menu;
+    }
+
+    private ContextMenu buildReferenceMenu() {
+        var reference = paneContext.session().reference;
+        var menu = new ContextMenu();
+        var label = new MenuItem(String.format("Basis Frame (r=%.1f, z=%.1f)", reference.r.get(), reference.z.get()));
+        label.setDisable(true);
+        var clear = new MenuItem("Clear Basis Frame");
+        clear.setOnAction(event -> reference.clear());
+        menu.getItems().addAll(label, new SeparatorMenuItem(), clear, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem());
         return menu;
     }
 
@@ -502,6 +566,9 @@ public class GeometryPane extends CanvasWorkbenchPane {
 
     private double[] screenToRz(double mouseX, double mouseY) {
         var data = paneContext.session().document.blochData.get();
+        if (data == null || data.field() == null) {
+            return new double[]{0, paneContext.session().geometry.zCenter.get()};
+        }
         double plotWidth = plotWidth(canvas.getWidth());
         double plotHeight = plotHeight(canvas.getHeight());
         double rMax = data.field().rMm[data.field().rMm.length - 1];
@@ -533,6 +600,14 @@ public class GeometryPane extends CanvasWorkbenchPane {
             canvas.setCursor(zRangeInteraction.cursor(scrubBounds(), mouseX, mouseY));
             return;
         }
+        if (draggingReference) {
+            canvas.setCursor(Cursor.CLOSED_HAND);
+            return;
+        }
+        if (referenceHandleContains(mouseX, mouseY)) {
+            canvas.setCursor(Cursor.OPEN_HAND);
+            return;
+        }
         if (draggingId != null) {
             canvas.setCursor(Cursor.CLOSED_HAND);
             return;
@@ -562,6 +637,54 @@ public class GeometryPane extends CanvasWorkbenchPane {
         g.setTextAlign(TextAlignment.CENTER);
         g.fillText(text, x + width / 2, y + 8.2);
         g.setTextAlign(TextAlignment.LEFT);
+    }
+
+    private void drawReferenceMarker(
+        javafx.scene.canvas.GraphicsContext g,
+        double rMax,
+        double zMin,
+        double zMax,
+        double plotWidth,
+        double plotHeight
+    ) {
+        var reference = paneContext.session().reference;
+        if (!reference.enabled.get()) return;
+        double x = rToPixel(reference.r.get(), rMax, plotWidth);
+        double y = zToPixel(reference.z.get(), zMin, zMax, plotHeight);
+        if (!plotBounds().contains(x, y)) return;
+
+        Color accent = Color.web("#f57c00");
+        double radius = draggingReference ? 7.0 : 6.0;
+        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.12));
+        g.fillOval(x - radius - 3, y - radius - 3, (radius + 3) * 2, (radius + 3) * 2);
+        g.setStroke(accent);
+        g.setLineWidth(1.6);
+        g.strokePolygon(
+            new double[]{x, x + radius, x, x - radius},
+            new double[]{y - radius, y, y + radius, y},
+            4
+        );
+        g.strokeLine(x - radius - 3, y, x + radius + 3, y);
+        g.strokeLine(x, y - radius - 3, x, y + radius + 3);
+        drawBadge(g, Math.min(x + 28, PAD_LEFT + plotWidth - 18), Math.max(PAD_TOP + 4, y - 18), "Basis", accent);
+    }
+
+    private boolean referenceHandleContains(double mouseX, double mouseY) {
+        var reference = paneContext.session().reference;
+        if (!reference.enabled.get()) return false;
+        var data = paneContext.session().document.blochData.get();
+        if (data == null || data.field() == null) return false;
+        double plotWidth = plotWidth(canvas.getWidth());
+        double plotHeight = plotHeight(canvas.getHeight());
+        double x = rToPixel(reference.r.get(), data.field().rMm[data.field().rMm.length - 1], plotWidth);
+        double y = zToPixel(reference.z.get(), paneContext.session().geometry.visibleStart(), paneContext.session().geometry.visibleEnd(), plotHeight);
+        return plotBounds().contains(x, y) && Math.hypot(mouseX - x, mouseY - y) <= 11.0;
+    }
+
+    private String referenceSuffix() {
+        var reference = paneContext.session().reference;
+        if (!reference.enabled.get()) return "";
+        return String.format(" | basis=(%.1f, %.1f)", reference.r.get(), reference.z.get());
     }
 
     private double zDomainStart() {

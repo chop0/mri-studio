@@ -2,6 +2,7 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.viewmodel.TracePlotViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
@@ -88,7 +89,11 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.blochData
+            paneContext.session().document.blochData,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.r,
+            paneContext.session().reference.z,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -164,12 +169,21 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         );
 
         var plots = plotRects(width, height);
-        drawTracePlot(g, plots[0], paneContext.session().tracePhase, hoveredPlot == 0);
-        drawTracePlot(g, plots[1], paneContext.session().tracePolar, hoveredPlot == 1);
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
+        drawTracePlot(g, plots[0], paneContext.session().tracePhase, referenceTrajectory, hoveredPlot == 0);
+        drawTracePlot(g, plots[1], paneContext.session().tracePolar, referenceTrajectory, hoveredPlot == 1);
         drawLegend(g, width);
     }
 
-    private void drawTracePlot(GraphicsContext g, PlotRect rect, TracePlotViewModel viewModel, boolean hovered) {
+    private void drawTracePlot(
+        GraphicsContext g,
+        PlotRect rect,
+        TracePlotViewModel viewModel,
+        ax.xz.mri.model.simulation.Trajectory referenceTrajectory,
+        boolean hovered
+    ) {
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
         double tSpan = tMax - tMin;
@@ -249,7 +263,15 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             for (int pointIndex = 0; pointIndex < entry.trajectory().pointCount(); pointIndex += 5) {
                 double t = entry.trajectory().tAt(pointIndex);
                 if (t < tMin - tSpan * 0.02 || t > tMax + tSpan * 0.02) continue;
-                double value = evalPlot(viewModel.kind(), entry, pointIndex);
+                var rotated = ReferenceFrameUtil.rotateIntoReferenceFrame(
+                    entry.trajectory().mxAt(pointIndex),
+                    entry.trajectory().myAt(pointIndex),
+                    entry.trajectory().mzAt(pointIndex),
+                    referenceTrajectory,
+                    pointIndex,
+                    t
+                );
+                double value = evalPlot(viewModel.kind(), rotated.mx(), rotated.my(), rotated.mz());
                 if (Double.isNaN(value)) {
                     started = false;
                     continue;
@@ -268,7 +290,8 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
 
             var cursorState = entry.trajectory().interpolateAt(cursorTime);
             if (cursorState != null) {
-                double value = evalPlot(viewModel.kind(), cursorState.mx(), cursorState.my(), cursorState.mz());
+                var rotatedState = ReferenceFrameUtil.rotateIntoReferenceFrame(cursorState, referenceTrajectory, cursorTime);
+                double value = evalPlot(viewModel.kind(), rotatedState.mx(), rotatedState.my(), rotatedState.mz());
                 if (!Double.isNaN(value)) {
                     double y = rect.y() + rect.height() - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * rect.height();
                     g.setFill(entry.colour());
@@ -350,11 +373,6 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             drawn++;
         }
     }
-
-    private static double evalPlot(TracePlotViewModel.PlotKind kind, IsochromatEntry entry, int pointIndex) {
-        return evalPlot(kind, entry.trajectory().mxAt(pointIndex), entry.trajectory().myAt(pointIndex), entry.trajectory().mzAt(pointIndex));
-    }
-
     private static double evalPlot(TracePlotViewModel.PlotKind kind, double mx, double my, double mz) {
         return switch (kind) {
             case PHASE -> {

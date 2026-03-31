@@ -17,6 +17,7 @@ public class StudioSession {
     public final PointsViewModel pointsView = new PointsViewModel(points, selection);
     public final DerivedComputationViewModel derived = new DerivedComputationViewModel();
     public final GeometryShadingService geometryShading = new GeometryShadingService();
+    public final ReferenceFrameViewModel reference = new ReferenceFrameViewModel();
     public final HeatMapViewModel phaseMapZ = new HeatMapViewModel("\u03c6(z, t)", new double[]{-6, -3, 0, 3, 6}, true);
     public final HeatMapViewModel phaseMapR = new HeatMapViewModel("\u03c6(r, t)", new double[]{0, 10, 20, 30}, false);
     public final TracePlotViewModel tracePhase =
@@ -32,17 +33,31 @@ public class StudioSession {
             points.setContext(data, newPulse);
             points.resimulateAll();
             derived.recompute(data, newPulse);
+            refreshReferenceFrame();
             refreshGeometryShading();
         });
 
         document.blochData.addListener((obs, oldData, newData) -> {
             updateViewportBounds(newData);
             points.setContext(newData, document.currentPulse.get());
+            refreshReferenceFrame();
             refreshGeometryShading();
         });
 
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         geometry.shadeMode.addListener((obs, oldMode, newMode) -> refreshGeometryShading());
+        reference.enabled.addListener((obs, oldValue, newValue) -> {
+            refreshReferenceFrame();
+            refreshGeometryShading();
+        });
+        reference.r.addListener((obs, oldValue, newValue) -> {
+            refreshReferenceFrame();
+            refreshGeometryShading();
+        });
+        reference.z.addListener((obs, oldValue, newValue) -> {
+            refreshReferenceFrame();
+            refreshGeometryShading();
+        });
     }
 
     public void setDocument(java.io.File file, BlochData data) {
@@ -50,6 +65,7 @@ public class StudioSession {
         points.setContext(data, document.currentPulse.get());
         points.resetToDefaults();
         updateViewportBounds(data);
+        refreshReferenceFrame();
         refreshGeometryShading();
     }
 
@@ -57,6 +73,7 @@ public class StudioSession {
         derived.dispose();
         geometryShading.dispose();
         points.dispose();
+        reference.dispose();
     }
 
     private void updateViewportBounds(BlochData data) {
@@ -75,6 +92,10 @@ public class StudioSession {
     }
 
     private void refreshGeometryShading() {
-        geometryShading.request(geometry, document.blochData.get(), document.currentPulse.get(), viewport.tC.get());
+        geometryShading.request(geometry, document.blochData.get(), document.currentPulse.get(), viewport.tC.get(), reference);
+    }
+
+    private void refreshReferenceFrame() {
+        reference.refresh(document.blochData.get(), document.currentPulse.get());
     }
 }

@@ -2,6 +2,7 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.viewmodel.TracePlotViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
@@ -86,7 +87,11 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.blochData
+            paneContext.session().document.blochData,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.r,
+            paneContext.session().reference.z,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -146,6 +151,9 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
         double tSpan = tMax - tMin;
         double cursorTime = paneContext.session().viewport.tC.get();
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
         AxisScrubBar.draw(
             g,
             overviewBounds(width),
@@ -234,7 +242,15 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             for (int pointIndex = 0; pointIndex < entry.trajectory().pointCount(); pointIndex += 5) {
                 double t = entry.trajectory().tAt(pointIndex);
                 if (t < tMin - tSpan * 0.02 || t > tMax + tSpan * 0.02) continue;
-                double value = evalPlot(entry, pointIndex);
+                var rotated = ReferenceFrameUtil.rotateIntoReferenceFrame(
+                    entry.trajectory().mxAt(pointIndex),
+                    entry.trajectory().myAt(pointIndex),
+                    entry.trajectory().mzAt(pointIndex),
+                    referenceTrajectory,
+                    pointIndex,
+                    t
+                );
+                double value = evalPlot(rotated.mx(), rotated.my(), rotated.mz());
                 if (Double.isNaN(value)) {
                     started = false;
                     continue;
@@ -253,7 +269,8 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
             var cursorState = entry.trajectory().interpolateAt(cursorTime);
             if (cursorState != null) {
-                double value = evalPlot(cursorState.mx(), cursorState.my(), cursorState.mz());
+                var rotatedState = ReferenceFrameUtil.rotateIntoReferenceFrame(cursorState, referenceTrajectory, cursorTime);
+                double value = evalPlot(rotatedState.mx(), rotatedState.my(), rotatedState.mz());
                 if (!Double.isNaN(value)) {
                     double y = PAD_TOP + plotHeight - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * plotHeight;
                     g.setFill(entry.colour());
@@ -273,14 +290,6 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         }
         g.restore();
         drawLegend(g, width);
-    }
-
-    private double evalPlot(IsochromatEntry entry, int pointIndex) {
-        return evalPlot(
-            entry.trajectory().mxAt(pointIndex),
-            entry.trajectory().myAt(pointIndex),
-            entry.trajectory().mzAt(pointIndex)
-        );
     }
 
     private double evalPlot(double mx, double my, double mz) {

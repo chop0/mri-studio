@@ -3,6 +3,7 @@ package ax.xz.mri.ui.workbench.pane;
 import ax.xz.mri.ui.canvas.Projection;
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import javafx.scene.control.Button;
@@ -47,7 +48,11 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().sphere.showProjection,
             paneContext.session().viewport.tS,
             paneContext.session().viewport.tE,
-            paneContext.session().viewport.tC
+            paneContext.session().viewport.tC,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.r,
+            paneContext.session().reference.z,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -119,6 +124,9 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
         double windowEnd = paneContext.session().viewport.tE.get();
         double cursorTime = paneContext.session().viewport.tC.get();
         boolean showProjection = paneContext.session().sphere.showProjection.get();
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
 
         for (var entry : paneContext.session().points.entries) {
             if (!entry.visible() || entry.trajectory() == null) continue;
@@ -146,10 +154,19 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
                     boolean pulseSegment = trajectory.isRfAt(segmentStart);
                     double sumDepth = 0;
                     for (int sampleIndex = segmentStart; sampleIndex < pointIndex; sampleIndex++) {
-                        var projected = project(
+                        double t = trajectory.tAt(sampleIndex);
+                        var rotated = ReferenceFrameUtil.rotateIntoReferenceFrame(
                             trajectory.mxAt(sampleIndex),
                             trajectory.myAt(sampleIndex),
                             trajectory.mzAt(sampleIndex),
+                            referenceTrajectory,
+                            sampleIndex,
+                            t
+                        );
+                        var projected = project(
+                            rotated.mx(),
+                            rotated.my(),
+                            rotated.mz(),
                             theta, phi, scale, centreX, centreY
                         );
                         sumDepth += projected[2];
@@ -160,10 +177,19 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
                     g.setGlobalAlpha((pulseSegment ? 0.8 : 0.1) * fade * (selected ? 1.0 : 0.9));
                     g.beginPath();
                     for (int sampleIndex = segmentStart; sampleIndex < pointIndex; sampleIndex++) {
-                        var projected = project(
+                        double t = trajectory.tAt(sampleIndex);
+                        var rotated = ReferenceFrameUtil.rotateIntoReferenceFrame(
                             trajectory.mxAt(sampleIndex),
                             trajectory.myAt(sampleIndex),
                             trajectory.mzAt(sampleIndex),
+                            referenceTrajectory,
+                            sampleIndex,
+                            t
+                        );
+                        var projected = project(
+                            rotated.mx(),
+                            rotated.my(),
+                            rotated.mz(),
                             theta, phi, scale, centreX, centreY
                         );
                         if (sampleIndex == segmentStart) g.moveTo(projected[0], projected[1]);
@@ -177,9 +203,10 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
 
             var state = trajectory.interpolateAt(cursorTime);
             if (state == null) continue;
-            double mx = state.mx();
-            double my = state.my();
-            double mz = state.mz();
+            var rotatedState = ReferenceFrameUtil.rotateIntoReferenceFrame(state, referenceTrajectory, cursorTime);
+            double mx = rotatedState.mx();
+            double my = rotatedState.my();
+            double mz = rotatedState.mz();
             double magnitude = Math.sqrt(mx * mx + my * my + mz * mz);
             double mPerp = Math.sqrt(mx * mx + my * my);
             double ux = magnitude > 1e-6 ? mx / magnitude : 0;
@@ -223,6 +250,13 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
         double zoom = paneContext.session().sphere.zoom.get();
         var hit = findNearestEntry(mouseX, mouseY);
         String suffix = hit != null ? " | selected: " + hit.name() : "";
+        if (paneContext.session().reference.enabled.get()) {
+            suffix += String.format(
+                " | basis=(%.1f, %.1f)",
+                paneContext.session().reference.r.get(),
+                paneContext.session().reference.z.get()
+            );
+        }
         setPaneStatus(String.format(
             "\u03b8=%.1f\u00b0 \u03c6=%.1f\u00b0 zoom=%.0f%%%s",
             Math.toDegrees(theta), Math.toDegrees(phi), zoom * 100, suffix
@@ -280,16 +314,22 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
         double centreX = width / 2;
         double centreY = height / 2;
         double cursorTime = paneContext.session().viewport.tC.get();
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
 
         return paneContext.session().points.entries.stream()
             .filter(entry -> entry.trajectory() != null)
             .map(entry -> {
                 var state = entry.trajectory().interpolateAt(cursorTime);
                 if (state == null) return null;
-                double magnitude = Math.sqrt(state.mx() * state.mx() + state.my() * state.my() + state.mz() * state.mz());
-                double mx = magnitude > 1e-6 ? state.mx() / magnitude : 0;
-                double my = magnitude > 1e-6 ? state.my() / magnitude : 0;
-                double mz = magnitude > 1e-6 ? state.mz() / magnitude : 0;
+                var rotatedState = ReferenceFrameUtil.rotateIntoReferenceFrame(state, referenceTrajectory, cursorTime);
+                double magnitude = Math.sqrt(rotatedState.mx() * rotatedState.mx()
+                    + rotatedState.my() * rotatedState.my()
+                    + rotatedState.mz() * rotatedState.mz());
+                double mx = magnitude > 1e-6 ? rotatedState.mx() / magnitude : 0;
+                double my = magnitude > 1e-6 ? rotatedState.my() / magnitude : 0;
+                double mz = magnitude > 1e-6 ? rotatedState.mz() / magnitude : 0;
                 var projected = project(mx, my, mz, theta, phi, scale, centreX, centreY);
                 double distance = Math.hypot(mouseX - projected[0], mouseY - projected[1]);
                 return new Object() {

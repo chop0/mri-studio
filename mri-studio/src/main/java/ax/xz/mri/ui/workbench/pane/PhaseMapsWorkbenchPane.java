@@ -4,6 +4,7 @@ import ax.xz.mri.model.simulation.PhaseMapData;
 import ax.xz.mri.ui.canvas.ColourUtil;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.HeatMapViewModel;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
@@ -90,7 +91,11 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.blochData,
-            paneContext.session().document.currentPulse
+            paneContext.session().document.currentPulse,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.r,
+            paneContext.session().reference.z,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -156,6 +161,9 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
             return;
         }
 
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
         AxisScrubBar.draw(
             g,
             overviewBounds(width),
@@ -175,11 +183,18 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
         );
 
         var plots = plotRects(width, height);
-        drawPhaseMapPlot(g, plots[0], paneContext.session().phaseMapZ, leftData, hoveredPlot == 0);
-        drawPhaseMapPlot(g, plots[1], paneContext.session().phaseMapR, rightData, hoveredPlot == 1);
+        drawPhaseMapPlot(g, plots[0], paneContext.session().phaseMapZ, leftData, referenceTrajectory, hoveredPlot == 0);
+        drawPhaseMapPlot(g, plots[1], paneContext.session().phaseMapR, rightData, referenceTrajectory, hoveredPlot == 1);
     }
 
-    private void drawPhaseMapPlot(GraphicsContext g, PlotRect rect, HeatMapViewModel viewModel, PhaseMapData phaseMap, boolean hovered) {
+    private void drawPhaseMapPlot(
+        GraphicsContext g,
+        PlotRect rect,
+        HeatMapViewModel viewModel,
+        PhaseMapData phaseMap,
+        ax.xz.mri.model.simulation.Trajectory referenceTrajectory,
+        boolean hovered
+    ) {
         g.setFill(TX);
         g.setFont(UI_BOLD_9);
         g.setTextAlign(TextAlignment.CENTER);
@@ -200,6 +215,7 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
         double tSpan = tMax - tMin;
         double yMin = phaseMap.yArr()[0];
         double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
+        double[] referencePhaseOffsets = referencePhaseOffsets(phaseMap, referenceTrajectory);
 
         g.setFont(UI_8);
         g.setTextAlign(TextAlignment.RIGHT);
@@ -223,7 +239,10 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
                 double x = rect.x() + (cell.tMicros() - tMin) / tSpan * rect.width();
                 double nextT = (tIndex + 1 < row.length) ? row[tIndex + 1].tMicros() : cell.tMicros() + 40;
                 double cellWidth = Math.max(1, (nextT - cell.tMicros()) / tSpan * rect.width() + 1);
-                g.setFill(ColourUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.mPerp(), 0, 1)));
+                double phaseDeg = referencePhaseOffsets == null || tIndex >= referencePhaseOffsets.length
+                    ? cell.phaseDeg()
+                    : ReferenceFrameUtil.normalizeDegrees(cell.phaseDeg() - referencePhaseOffsets[tIndex]);
+                g.setFill(ColourUtil.hue2color(phaseDeg, MathUtil.clamp(cell.mPerp(), 0, 1)));
                 g.fillRect(x, y - cellHeight / 2, cellWidth, cellHeight + 1);
             }
         }
@@ -358,6 +377,20 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
 
     private static int niceTick(double span) {
         return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
+    }
+
+    private static double[] referencePhaseOffsets(
+        PhaseMapData phaseMap,
+        ax.xz.mri.model.simulation.Trajectory referenceTrajectory
+    ) {
+        if (phaseMap == null || referenceTrajectory == null || phaseMap.data().length == 0) return null;
+        var row = phaseMap.data()[0];
+        var offsets = new double[row.length];
+        for (int index = 0; index < row.length; index++) {
+            var referenceState = referenceTrajectory.interpolateAt(row[index].tMicros());
+            offsets[index] = referenceState != null ? referenceState.phaseDeg() : 0.0;
+        }
+        return offsets;
     }
 
     private record PlotRect(double x, double y, double width, double height) {
