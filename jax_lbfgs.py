@@ -51,7 +51,7 @@ def _make_step_fn(value_and_grad_fn, history_size):
     """Return a JIT-compiled function that executes one full L-BFGS-B step."""
 
     @jax.jit
-    def step(x, val, grad, s_hist, y_hist, rho_hist, n_stored, lb, ub):
+    def step(x, val, grad, s_hist, y_hist, rho_hist, n_stored, lb, ub, *value_and_grad_args):
         # 1. Search direction via L-BFGS two-loop recursion
         d = _two_loop(grad, s_hist, y_hist, rho_hist, n_stored, m=history_size)
 
@@ -79,13 +79,13 @@ def _make_step_fn(value_and_grad_fn, history_size):
             alpha, _f, _g, n, _done = state
             alpha = alpha * 0.5
             x_try = jnp.clip(x + alpha * d, lb, ub)
-            f_try, g_try = value_and_grad_fn(x_try)
+            f_try, g_try = value_and_grad_fn(x_try, *value_and_grad_args)
             ok = f_try <= val + c1 * alpha * slope
             return (alpha, f_try, g_try, n + 1, ok)
 
         # Initial trial at α=1
         x1 = jnp.clip(x + d, lb, ub)
-        f1, g1 = value_and_grad_fn(x1)
+        f1, g1 = value_and_grad_fn(x1, *value_and_grad_args)
         ok1 = f1 <= val + c1 * slope
 
         init = (jnp.float32(1.0), f1, g1, jnp.int32(1), ok1)
@@ -115,6 +115,69 @@ def _make_step_fn(value_and_grad_fn, history_size):
 
 # ── public API ───────────────────────────────────────────────────────
 
+
+def make_lbfgsb_solver(value_and_grad_fn, history_size=10):
+    step_fn = _make_step_fn(value_and_grad_fn, history_size)
+
+    def solve(
+        x0,
+        bounds,
+        maxiter=1000,
+        gtol=1e-8,
+        callback=None,
+        value_and_grad_args=(),
+    ):
+        lb, ub = bounds
+        n = x0.shape[0]
+
+        # History buffers
+        s_hist = jnp.zeros((history_size, n), dtype=jnp.float32)
+        y_hist = jnp.zeros((history_size, n), dtype=jnp.float32)
+        rho_hist = jnp.zeros(history_size, dtype=jnp.float32)
+        n_stored = jnp.int32(0)
+
+        x = jnp.asarray(x0, dtype=jnp.float32)
+        val, grad = value_and_grad_fn(x, *value_and_grad_args)
+
+        best_val = val
+        best_x = x
+        nit = 0
+
+        for i in range(maxiter):
+            # Projected-gradient convergence check (only sync once per iter)
+            pg = jnp.where(
+                (x <= lb + 1e-10) & (grad > 0), 0.0,
+                jnp.where((x >= ub - 1e-10) & (grad < 0), 0.0, grad),
+            )
+            pg_norm = jnp.max(jnp.abs(pg))
+
+            # Single compiled step: direction + line search + history update
+            x, val, grad, s_hist, y_hist, rho_hist, n_stored, alpha, found = step_fn(
+                x, val, grad, s_hist, y_hist, rho_hist, n_stored, lb, ub, *value_and_grad_args,
+            )
+            nit = i + 1
+
+            improved = val < best_val
+            best_val = jnp.where(improved, val, best_val)
+            best_x = jnp.where(improved, x, best_x)
+
+            # Callback (the only device→host sync per iteration)
+            if callback is not None:
+                should_stop = callback(nit, x, float(val))
+                if should_stop:
+                    break
+
+            # Convergence / line-search failure (pull scalars after callback
+            # so the sync from float(val) above is already done)
+            if float(pg_norm) < gtol:
+                break
+            if not bool(found):
+                break
+
+        return best_x, float(best_val), nit
+
+    return solve
+
 def minimize_lbfgsb(
     value_and_grad_fn,
     x0,
@@ -123,6 +186,7 @@ def minimize_lbfgsb(
     history_size=10,
     gtol=1e-8,
     callback=None,
+    value_and_grad_args=(),
 ):
     """
     Minimise a scalar function with box constraints, entirely on-device.
@@ -148,53 +212,12 @@ def minimize_lbfgsb(
     -------
     x_best, best_value, n_iters
     """
-    lb, ub = bounds
-    n = x0.shape[0]
-
-    step_fn = _make_step_fn(value_and_grad_fn, history_size)
-
-    # History buffers
-    s_hist = jnp.zeros((history_size, n), dtype=jnp.float32)
-    y_hist = jnp.zeros((history_size, n), dtype=jnp.float32)
-    rho_hist = jnp.zeros(history_size, dtype=jnp.float32)
-    n_stored = jnp.int32(0)
-
-    x = jnp.asarray(x0, dtype=jnp.float32)
-    val, grad = value_and_grad_fn(x)
-
-    best_val = val
-    best_x = x
-    nit = 0
-
-    for i in range(maxiter):
-        # Projected-gradient convergence check (only sync once per iter)
-        pg = jnp.where(
-            (x <= lb + 1e-10) & (grad > 0), 0.0,
-            jnp.where((x >= ub - 1e-10) & (grad < 0), 0.0, grad),
-        )
-        pg_norm = jnp.max(jnp.abs(pg))
-
-        # Single compiled step: direction + line search + history update
-        x, val, grad, s_hist, y_hist, rho_hist, n_stored, alpha, found = step_fn(
-            x, val, grad, s_hist, y_hist, rho_hist, n_stored, lb, ub,
-        )
-        nit = i + 1
-
-        improved = val < best_val
-        best_val = jnp.where(improved, val, best_val)
-        best_x = jnp.where(improved, x, best_x)
-
-        # Callback (the only device→host sync per iteration)
-        if callback is not None:
-            should_stop = callback(nit, x, float(val))
-            if should_stop:
-                break
-
-        # Convergence / line-search failure (pull scalars after callback
-        # so the sync from float(val) above is already done)
-        if float(pg_norm) < gtol:
-            break
-        if not bool(found):
-            break
-
-    return best_x, float(best_val), nit
+    solver = make_lbfgsb_solver(value_and_grad_fn, history_size=history_size)
+    return solver(
+        x0,
+        bounds,
+        maxiter=maxiter,
+        gtol=gtol,
+        callback=callback,
+        value_and_grad_args=value_and_grad_args,
+    )

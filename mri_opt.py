@@ -7,7 +7,7 @@ import numpy as np
 from scipy.optimize import minimize
 from tqdm import tqdm
 
-from jax_lbfgs import minimize_lbfgsb
+from jax_lbfgs import make_lbfgsb_solver
 from mri_fast import B1_MAX, GX_MAX, GZ_MAX
 
 
@@ -45,6 +45,24 @@ class MaskedOptimizationResult:
     best_value: float
 
 
+@dataclass
+class PreparedMaskedOptimizerJax:
+    base_ctrl_flat: np.ndarray
+    free_idx: np.ndarray
+    scale_free_np: np.ndarray
+    bounds: tuple[jnp.ndarray, jnp.ndarray]
+    solver: Callable
+
+    def merge_free_norm(self, x_free_norm):
+        x_full = self.base_ctrl_flat.copy()
+        x_full[self.free_idx] = np.asarray(x_free_norm, dtype=np.float32) * self.scale_free_np
+        return x_full
+
+    def free_norm_from_full(self, ctrl_full):
+        ctrl_full = np.asarray(ctrl_full, dtype=np.float32)
+        return (ctrl_full[self.free_idx] / self.scale_free_np).astype(np.float32)
+
+
 class OptimizationStopRequested(RuntimeError):
     pass
 
@@ -75,6 +93,47 @@ def default_bounds_for_steps(n_total_steps, control_dim=4):
     if control_dim >= 5:
         per_step.append((0.0, 1.0))
     return per_step * n_total_steps
+
+
+def prepare_masked_optimizer_jax(
+    value_and_grad,
+    base_ctrl_flat,
+    free_mask_flat,
+    bounds_full,
+    history_size=20,
+):
+    base_ctrl_flat = np.asarray(base_ctrl_flat, dtype=np.float32)
+    free_mask_flat = np.asarray(free_mask_flat, dtype=bool).ravel()
+
+    if base_ctrl_flat.shape != free_mask_flat.shape:
+        raise ValueError("base_ctrl_flat and free_mask_flat must have the same shape")
+
+    free_idx = np.flatnonzero(free_mask_flat)
+    scales_full = np.array(
+        [max(abs(lo), abs(hi), 1e-12) for lo, hi in bounds_full],
+        dtype=np.float32,
+    )
+    scale_free_np = scales_full[free_idx]
+    lb = jnp.array([bounds_full[i][0] / scales_full[i] for i in free_idx], dtype=jnp.float32)
+    ub = jnp.array([bounds_full[i][1] / scales_full[i] for i in free_idx], dtype=jnp.float32)
+
+    frozen_jax = jnp.asarray(base_ctrl_flat, dtype=jnp.float32)
+    free_idx_jax = jnp.asarray(free_idx, dtype=jnp.int32)
+    scale_free_jax = jnp.asarray(scale_free_np, dtype=jnp.float32)
+
+    @jax.jit
+    def fg_jax(x_free_norm, *value_and_grad_args):
+        x_full = frozen_jax.at[free_idx_jax].set(x_free_norm * scale_free_jax)
+        val, grad_full = value_and_grad(x_full, *value_and_grad_args)
+        return val, grad_full[free_idx_jax] * scale_free_jax
+
+    return PreparedMaskedOptimizerJax(
+        base_ctrl_flat=base_ctrl_flat.copy(),
+        free_idx=free_idx,
+        scale_free_np=scale_free_np,
+        bounds=(lb, ub),
+        solver=make_lbfgsb_solver(fg_jax, history_size=history_size),
+    )
 
 
 def optimize_masked_controls(
@@ -239,6 +298,8 @@ def optimize_masked_controls_jax(
     progress_fn: Callable[[int, np.ndarray, float], None] | None = None,
     stop_requested_fn: Callable[[], bool] | None = None,
     show_progress_bar: bool = True,
+    value_and_grad_args=(),
+    prepared: PreparedMaskedOptimizerJax | None = None,
 ):
     """Like optimize_masked_controls but uses pure-JAX L-BFGS-B (no scipy)."""
     config = config or SearchConfig()
@@ -249,32 +310,22 @@ def optimize_masked_controls_jax(
     if ctrl0_flat.shape != free_mask_flat.shape:
         raise ValueError("ctrl0_flat and free_mask_flat must have the same shape")
 
-    free_idx = np.flatnonzero(free_mask_flat)
+    if prepared is None:
+        prepared = prepare_masked_optimizer_jax(
+            value_and_grad=value_and_grad,
+            base_ctrl_flat=ctrl0_flat,
+            free_mask_flat=free_mask_flat,
+            bounds_full=bounds_full,
+        )
+
+    free_idx = prepared.free_idx
     if free_idx.size == 0:
         return MaskedOptimizationResult(
             x_full=ctrl0_flat.copy(), nit=0, nfev=0, success=True,
             message="No free variables.", snapshots=snapshots, best_value=float("nan"),
         )
 
-    scales_full = np.array(
-        [max(abs(lo), abs(hi), 1e-12) for lo, hi in bounds_full], dtype=np.float32,
-    )
-    scale_free_np = scales_full[free_idx]
-    x0_norm = (ctrl0_flat[free_idx] / scale_free_np).astype(np.float32)
-
-    lb = jnp.array([bounds_full[i][0] / scales_full[i] for i in free_idx], dtype=jnp.float32)
-    ub = jnp.array([bounds_full[i][1] / scales_full[i] for i in free_idx], dtype=jnp.float32)
-
-    # On-device merge + value_and_grad + grad extract
-    frozen_jax = jnp.asarray(ctrl0_flat, dtype=jnp.float32)
-    free_idx_jax = jnp.asarray(free_idx, dtype=jnp.int32)
-    scale_free_jax = jnp.asarray(scale_free_np, dtype=jnp.float32)
-
-    @jax.jit
-    def fg_jax(x_free_norm):
-        x_full = frozen_jax.at[free_idx_jax].set(x_free_norm * scale_free_jax)
-        val, grad_full = value_and_grad(x_full)
-        return val, grad_full[free_idx_jax] * scale_free_jax
+    x0_norm = prepared.free_norm_from_full(ctrl0_flat)
 
     snapshot_every = max(config.snapshot_every, 1)
     print_every = max(config.print_every, 1)
@@ -294,8 +345,7 @@ def optimize_masked_controls_jax(
         need_snap = nit % snapshot_every == 0
         need_prog = progress_fn is not None and (print_every <= 1 or nit % print_every == 0)
         if need_snap or need_prog:
-            x_full = ctrl0_flat.copy()
-            x_full[free_idx] = np.asarray(x_norm, dtype=np.float32) * scale_free_np
+            x_full = prepared.merge_free_norm(x_norm)
             if need_snap:
                 snapshots[nit] = x_full.copy()
             if need_prog:
@@ -305,16 +355,19 @@ def optimize_masked_controls_jax(
         return False
 
     try:
-        x_best, best_val, nit = minimize_lbfgsb(
-            fg_jax, jnp.array(x0_norm), (lb, ub),
-            maxiter=config.opt_steps, history_size=20, gtol=1e-8, callback=cb,
+        _x_best, _best_val, nit = prepared.solver(
+            jnp.array(x0_norm),
+            prepared.bounds,
+            maxiter=config.opt_steps,
+            gtol=1e-8,
+            callback=cb,
+            value_and_grad_args=value_and_grad_args,
         )
     finally:
         if bar is not None:
             bar.close()
 
-    best_x_full = ctrl0_flat.copy()
-    best_x_full[free_idx] = np.asarray(best_x_norm, dtype=np.float32) * scale_free_np
+    best_x_full = prepared.merge_free_norm(best_x_norm)
     snapshots[nit] = best_x_full.copy()
 
     return MaskedOptimizationResult(
@@ -326,7 +379,7 @@ def optimize_masked_controls_jax(
 
 
 def optimize_annealed(
-    vg_factory: Callable[[float], Callable],
+    value_and_grad: Callable,
     ctrl0_flat: np.ndarray,
     free_mask_flat: np.ndarray,
     bounds_full: list,
@@ -334,11 +387,11 @@ def optimize_annealed(
     progress_fn: Callable[[int, np.ndarray, float], None] | None = None,
     stop_requested_fn: Callable[[], bool] | None = None,
     show_progress_bar: bool = True,
+    stage_value_and_grad_args_fn: Callable[[AnnealStage], tuple] | None = None,
 ):
     """
     Multi-stage optimisation with smoothness annealing.
 
-    vg_factory(rf_smooth_mul) -> value_and_grad callable.
     Runs L-BFGS-B in stages with decreasing rf_smooth_pen multiplier,
     warm-starting each stage from the previous best.
     """
@@ -352,6 +405,12 @@ def optimize_annealed(
     best_value = float("inf")
     last_message = ""
     last_success = False
+    prepared = prepare_masked_optimizer_jax(
+        value_and_grad=value_and_grad,
+        base_ctrl_flat=ctrl0_flat,
+        free_mask_flat=free_mask_flat,
+        bounds_full=bounds_full,
+    )
 
     for stage_idx, stage in enumerate(schedule):
         stage_iters = max(1, int(config.opt_steps * stage.fraction))
@@ -365,7 +424,11 @@ def optimize_annealed(
         if show_progress_bar:
             print(f"\n  {label}, {stage_iters} iters")
 
-        value_and_grad = vg_factory(stage.rf_smooth_mul)
+        stage_value_and_grad_args = (
+            ()
+            if stage_value_and_grad_args_fn is None
+            else stage_value_and_grad_args_fn(stage)
+        )
 
         def offset_progress(nit, best_x, bv, _offset=iter_offset):
             if progress_fn is not None:
@@ -380,6 +443,8 @@ def optimize_annealed(
             progress_fn=offset_progress,
             stop_requested_fn=stop_requested_fn,
             show_progress_bar=show_progress_bar,
+            value_and_grad_args=stage_value_and_grad_args,
+            prepared=prepared,
         )
 
         for it, snap in res.snapshots.items():

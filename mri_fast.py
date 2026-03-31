@@ -269,6 +269,7 @@ def make_value_and_grad(
     legacy_gate = jnp.tile(legacy_gate, n_seg)
     E2 = jnp.float32(np.exp(-dt / T2))
     E1 = jnp.float32(np.exp(-dt / T1))
+    rf_smooth_pen32 = jnp.float32(rf_smooth_pen)
 
     def rodrigues(Bx, By, Bz, Mx, My, Mz):
         Bm = jnp.sqrt(Bx * Bx + By * By + Bz * Bz + 1e-30)
@@ -300,10 +301,11 @@ def make_value_and_grad(
             1.0 + (Mz - 1.0) * E1,
         )
 
-    def loss(ctrl_flat):
+    def loss(ctrl_flat, rf_smooth_mul=jnp.float32(1.0)):
         ctrl_dim = 5 if ctrl_flat.shape[0] == n_total * 5 else 4
         ctrl = ctrl_flat.reshape((n_total, ctrl_dim))
         gate = ctrl[:, 4] if ctrl_dim >= 5 else legacy_gate
+        smooth_weight = rf_smooth_pen32 * jnp.asarray(rf_smooth_mul, dtype=jnp.float32)
 
         def body(carry, xs):
             Mx, My, Mz, running_in, running_out = carry
@@ -359,7 +361,7 @@ def make_value_and_grad(
             - lam_out * J_out
             - lam_pow * power_out
             - rf_pen * rf_power
-            - rf_smooth_pen * rf_smooth
+            - smooth_weight * rf_smooth
             - gate_switch_pen * gate_switch
             - gate_binary_pen * gate_binary
         )
@@ -508,12 +510,14 @@ def make_value_and_grad_full(
         local_step_list.extend(list(range(ns)))
     seg_id_arr = jnp.array(seg_id_list, dtype=jnp.int32)
     local_step_arr = jnp.array(local_step_list, dtype=jnp.int32)
+    rf_smooth_pen32 = jnp.float32(rf_smooth_pen)
 
     N = prob.Gxm.shape[0]  # number of spatial points (flattened)
 
-    def loss(ctrl_flat):
+    def loss(ctrl_flat, rf_smooth_mul=jnp.float32(1.0)):
         ctrl = ctrl_flat.reshape((n_total, control_dim))
         gate = ctrl[:, 4] if control_dim >= 5 else legacy_gate_arr
+        smooth_weight = rf_smooth_pen32 * jnp.asarray(rf_smooth_mul, dtype=jnp.float32)
 
         def body(carry, xs):
             Mx, My, Mz, running_in, running_out, running_power_out = carry
@@ -607,7 +611,7 @@ def make_value_and_grad_full(
             - lam_out * J_out
             - lam_pow * power_out
             - rf_pen * rf_power
-            - rf_smooth_pen * rf_smooth
+            - smooth_weight * rf_smooth
             - gate_switch_pen * gate_switch
             - gate_binary_pen * gate_binary
         )
@@ -664,6 +668,7 @@ def make_value_and_grad_full_fast(
     dt_arr = jnp.array(dt_list, dtype=jnp.float32)
     seg_id_arr = jnp.array(seg_id_list, dtype=jnp.int32)
     local_step_arr = jnp.array(local_step_list, dtype=jnp.int32)
+    rf_smooth_pen32 = jnp.float32(rf_smooth_pen)
 
     N = prob.Gxm.shape[0]
 
@@ -675,9 +680,10 @@ def make_value_and_grad_full_fast(
     w_in = prob.w_in[None, :]  # (1, N) for signal sums
     w_out = prob.w_out[None, :]
 
-    def loss(ctrl_flat):
+    def loss(ctrl_flat, rf_smooth_mul=jnp.float32(1.0)):
         ctrl = ctrl_flat.reshape((n_total, control_dim))
         gate_raw = ctrl[:, 4] if control_dim >= 5 else legacy_gate
+        smooth_weight = rf_smooth_pen32 * jnp.asarray(rf_smooth_mul, dtype=jnp.float32)
 
         b1x = ctrl[:, 0:1]  # (T, 1)
         b1y = ctrl[:, 1:2]
@@ -790,7 +796,7 @@ def make_value_and_grad_full_fast(
              - lam_out * J_out
              - lam_pow * power_out
              - rf_pen * rf_power
-             - rf_smooth_pen * rf_smooth
+             - smooth_weight * rf_smooth
              - gate_switch_pen * gate_switch
              - gate_binary_pen * gate_binary)
         return -J

@@ -113,30 +113,27 @@ def optimize_scenario_worker(task):
         on_gpu = False
     vg_builder = make_value_and_grad_full_fast if on_gpu else make_value_and_grad_full
 
-    def vg_factory(rf_smooth_mul):
-        vg = vg_builder(
-            prob_jax,
-            seg_meta,
-            lam_out=12.0,
-            lam_pow=1.5,
-            rf_pen=0.05,
-            rf_smooth_pen=base_rf_smooth_pen * rf_smooth_mul,
-            gate_switch_pen=1.5,
-            gate_binary_pen=0.15,
-        )
-        return vg
+    value_and_grad = vg_builder(
+        prob_jax,
+        seg_meta,
+        lam_out=12.0,
+        lam_pow=1.5,
+        rf_pen=0.05,
+        rf_smooth_pen=base_rf_smooth_pen,
+        gate_switch_pen=1.5,
+        gate_binary_pen=0.15,
+    )
 
     ctrl0_flat = flatten_ctrl_list(base)
     free_mask_flat = flatten_mask_list(free_mask)
     # Warm up JIT with the first stage's objective
     first_mul = (search.anneal_schedule[0].rf_smooth_mul
                  if search and search.anneal_schedule else 10.0)
-    warmup_vg = vg_factory(first_mul)
-    _ = warmup_vg(jnp.asarray(ctrl0_flat, dtype=jnp.float32))
+    _ = value_and_grad(jnp.asarray(ctrl0_flat, dtype=jnp.float32), jnp.float32(first_mul))
     jax.block_until_ready(_)
 
     res = optimize_annealed(
-        vg_factory=vg_factory,
+        value_and_grad=value_and_grad,
         ctrl0_flat=ctrl0_flat,
         free_mask_flat=free_mask_flat,
         bounds_full=bounds_full,
@@ -150,6 +147,7 @@ def optimize_scenario_worker(task):
         ),
         stop_requested_fn=(None if stop_flag is None else stop_flag.is_set),
         show_progress_bar=progress_queue is None,
+        stage_value_and_grad_args_fn=lambda stage: (np.float32(stage.rf_smooth_mul),),
     )
     ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
     snapshots = {
@@ -549,10 +547,10 @@ def run():
             free_mask=mask_refocus,
             objective_kind="selective",
             search=SearchConfig(
-                opt_steps=1000,
+                opt_steps=10000,
                 snapshot_every=50,
                 print_every=50,
-                stall_patience=80,
+                stall_patience=0,
                 min_improvement=1e-4,
             ),
             log_metrics_prob=prob_np,
@@ -565,10 +563,10 @@ def run():
             free_mask=mask_all,
             objective_kind="full",
             search=SearchConfig(
-                opt_steps=1000,
+                opt_steps=10000,
                 snapshot_every=50,
                 print_every=50,
-                stall_patience=80,
+                stall_patience=0,
                 min_improvement=1e-4,
             ),
             log_metrics_prob=prob_np_full,
