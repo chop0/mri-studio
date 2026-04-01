@@ -30,6 +30,8 @@ public class PaneHeader extends HBox {
         setSpacing(6);
 
         titleLabel.getStyleClass().add("pane-title");
+        titleLabel.setManaged(false);
+        titleLabel.setVisible(false);
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
         menuButton.getStyleClass().add("pane-menu-button");
@@ -41,6 +43,8 @@ public class PaneHeader extends HBox {
 
     public void setTitle(String title) {
         titleLabel.setText(title);
+        setAccessibleText(title);
+        menuButton.setAccessibleText(title + " menu");
     }
 
     public void setTools(Node... tools) {

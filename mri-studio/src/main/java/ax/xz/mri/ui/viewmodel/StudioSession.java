@@ -7,6 +7,7 @@ import ax.xz.mri.ui.model.IsochromatSelectionModel;
 /** Composition root for the new workbench-facing UI view models and services. */
 public class StudioSession {
     public final DocumentSessionViewModel document = new DocumentSessionViewModel();
+    public final ProjectSessionViewModel project = new ProjectSessionViewModel();
     public final ViewportViewModel viewport = new ViewportViewModel();
     public final SphereViewModel sphere = new SphereViewModel();
     public final GeometryViewModel geometry = new GeometryViewModel();
@@ -29,6 +30,21 @@ public class StudioSession {
         new TracePlotViewModel("|M\u22a5|", "", 0, 1.08, new double[]{0, 0.25, 0.5, 0.75, 1}, TracePlotViewModel.PlotKind.MPERP);
 
     public StudioSession() {
+        project.activeCapture.activeCapture.addListener((obs, oldCapture, newCapture) -> {
+            if (newCapture == null || newCapture.blochData() == null) {
+                document.clearDocument();
+                updateViewportBounds(null);
+                return;
+            }
+            document.showCapture(
+                newCapture.sourceFile(),
+                newCapture.blochData(),
+                newCapture.scenarioName(),
+                newCapture.iterationKey()
+            );
+            updateViewportBounds(newCapture.blochData());
+        });
+
         document.currentPulse.addListener((obs, oldPulse, newPulse) -> {
             var data = document.blochData.get();
             points.setContext(data, newPulse);

@@ -199,12 +199,6 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             )
         );
 
-        g.setFill(TX);
-        g.setFont(UI_BOLD_9);
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(viewModel.title(), PAD_LEFT + plotWidth / 2, PAD_TOP - 3);
-        g.setTextAlign(TextAlignment.LEFT);
-
         double yMin = phaseMap.yArr()[0];
         double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
         g.setFont(UI_8);

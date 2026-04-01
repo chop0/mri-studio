@@ -232,12 +232,6 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         g.setGlobalAlpha(1);
         drawBadge(g, cursorX, PAD_TOP + 4, formatTime(cursorTime), CUR);
 
-        g.setFill(TX);
-        g.setFont(UI_BOLD_10);
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(viewModel.title(), PAD_LEFT + plotWidth / 2, PAD_TOP - 4);
-        g.setTextAlign(TextAlignment.LEFT);
-
         g.save();
         g.beginPath();
         g.rect(PAD_LEFT, PAD_TOP - 1, plotWidth, plotHeight + 2);

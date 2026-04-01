@@ -46,8 +46,14 @@ public class StudioShell extends BorderPane {
     private MenuBar buildMenuBar() {
         var fileMenu = new Menu("File");
         fileMenu.getItems().addAll(
-            menuItem("Open\u2026", CommandId.OPEN_FILE),
-            menuItem("Reload", CommandId.RELOAD_FILE),
+            menuItem("Open Project\u2026", CommandId.OPEN_PROJECT),
+            menuItem("Save Project", CommandId.SAVE_PROJECT),
+            menuItem("Save Project As\u2026", CommandId.SAVE_PROJECT_AS),
+            new SeparatorMenuItem(),
+            menuItem("Import JSON\u2026", CommandId.IMPORT_JSON),
+            menuItem("Reload Import", CommandId.RELOAD_FILE),
+            new SeparatorMenuItem(),
+            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE),
             new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
@@ -75,7 +81,9 @@ public class StudioShell extends BorderPane {
         var analysisMenu = new Menu("Analysis");
         analysisMenu.getItems().addAll(
             menuItem("Reset Points", CommandId.RESET_POINTS),
-            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS)
+            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS),
+            new SeparatorMenuItem(),
+            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE)
         );
 
         return new MenuBar(fileMenu, viewMenu, windowMenu, analysisMenu);

@@ -1,9 +1,11 @@
 package ax.xz.mri.ui.workbench;
 
-import ax.xz.mri.model.scenario.BlochData;
-import ax.xz.mri.service.io.BlochDataReader;
+import ax.xz.mri.project.ProjectNode;
+import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.ExplorerPane;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
+import ax.xz.mri.ui.workbench.pane.InspectorPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
 import ax.xz.mri.ui.workbench.pane.PhaseMapRPane;
 import ax.xz.mri.ui.workbench.pane.PhaseMapZPane;
@@ -24,6 +26,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.layout.BorderPane;
+import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import software.coley.bentofx.Bento;
@@ -149,18 +152,57 @@ public class WorkbenchController {
     public void saveLayoutToStore() {
     }
 
-    public void openFileChooser() {
+    public void importJsonChooser() {
         var chooser = new FileChooser();
-        chooser.setTitle("Open bloch_data.json");
+        chooser.setTitle("Import Legacy Bloch JSON");
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON", "*.json"));
         File file = chooser.showOpenDialog(mainStage);
         if (file != null) loadFile(file);
     }
 
+    public void openProjectChooser() {
+        var chooser = new DirectoryChooser();
+        chooser.setTitle("Open Project");
+        File directory = chooser.showDialog(mainStage);
+        if (directory == null) return;
+        try {
+            session.project.openProject(directory.toPath());
+            updateShellStatus();
+        } catch (Exception ex) {
+            showError("Failed to open project", ex.getMessage());
+        }
+    }
+
+    public void saveProject() {
+        try {
+            var root = session.project.projectRoot.get();
+            if (root == null) {
+                saveProjectAsChooser();
+            } else {
+                session.project.saveProject(root);
+                updateShellStatus();
+            }
+        } catch (Exception ex) {
+            showError("Failed to save project", ex.getMessage());
+        }
+    }
+
+    public void saveProjectAsChooser() {
+        var chooser = new DirectoryChooser();
+        chooser.setTitle("Save Project As");
+        File directory = chooser.showDialog(mainStage);
+        if (directory == null) return;
+        try {
+            session.project.saveProject(directory.toPath());
+            updateShellStatus();
+        } catch (Exception ex) {
+            showError("Failed to save project", ex.getMessage());
+        }
+    }
+
     public void loadFile(File file) {
         try {
-            BlochData data = BlochDataReader.read(file);
-            session.setDocument(file, data);
+            session.project.openImport(file);
             updateShellStatus();
         } catch (Exception ex) {
             showError("Failed to load file", ex.getMessage());
@@ -168,7 +210,12 @@ public class WorkbenchController {
     }
 
     public void reloadCurrentFile() {
-        Optional.ofNullable(session.document.currentFile.get()).ifPresent(this::loadFile);
+        try {
+            session.project.reloadSelectedImport();
+            updateShellStatus();
+        } catch (Exception ex) {
+            showError("Failed to reload import", ex.getMessage());
+        }
     }
 
     public void dispose() {
@@ -186,6 +233,7 @@ public class WorkbenchController {
             new javafx.scene.control.SeparatorMenuItem()
         );
         for (var paneId : PaneId.values()) {
+            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR) continue;
             var focus = new MenuItem("Focus " + paneId.title());
             focus.setOnAction(event -> focusPane(paneId));
             menu.getItems().add(focus);
@@ -193,50 +241,20 @@ public class WorkbenchController {
     }
 
     public Node buildMainToolStrip() {
-        var scenarioBox = new javafx.scene.control.ComboBox<String>();
-        scenarioBox.setPromptText("Scenario");
-        scenarioBox.setPrefWidth(180);
-        scenarioBox.setItems(session.document.scenarioKeys);
-        scenarioBox.valueProperty().bindBidirectional(session.document.currentScenario);
-
-        var iterSlider = new javafx.scene.control.Slider(0, 1, 0);
-        iterSlider.setPrefWidth(180);
-        iterSlider.setMinWidth(160);
-        iterSlider.setShowTickMarks(true);
-        iterSlider.setShowTickLabels(false);
-        iterSlider.setSnapToTicks(true);
-        iterSlider.setMajorTickUnit(1);
-        iterSlider.setMinorTickCount(0);
-        iterSlider.setBlockIncrement(1);
-        iterSlider.getStyleClass().add("shell-iteration-slider");
-        var iterLabel = new Label("\u2014");
-        var iterCountLabel = new Label("0/0");
-        iterCountLabel.getStyleClass().add("shell-iteration-count");
-        session.document.iterationKeys.addListener((javafx.collections.ListChangeListener<String>) change -> {
-            int size = session.document.iterationKeys.size();
-            iterSlider.setMin(0);
-            iterSlider.setMax(Math.max(0, size - 1));
-            iterSlider.setDisable(size == 0);
-            iterSlider.setOpacity(size == 0 ? 0.35 : 1.0);
-            iterLabel.setText(size > 0 ? session.document.iterationKeys.get(session.document.iterationIndex.get()) : "\u2014");
-            int index = size == 0 ? 0 : Math.max(0, Math.min(session.document.iterationIndex.get(), size - 1));
-            iterCountLabel.setText(size == 0 ? "0/0" : (index + 1) + "/" + size);
-        });
-        session.document.iterationIndex.addListener((obs, oldValue, newValue) -> {
-            iterSlider.setValue(newValue.doubleValue());
-            if (!session.document.iterationKeys.isEmpty()) {
-                int index = Math.max(0, Math.min(newValue.intValue(), session.document.iterationKeys.size() - 1));
-                iterLabel.setText(session.document.iterationKeys.get(index));
-                iterCountLabel.setText((index + 1) + "/" + session.document.iterationKeys.size());
-            } else {
-                iterLabel.setText("\u2014");
-                iterCountLabel.setText("0/0");
-            }
-        });
-        iterSlider.valueProperty().addListener((obs, oldValue, newValue) ->
-            session.document.iterationIndex.set((int) Math.round(newValue.doubleValue())));
-        iterSlider.setDisable(true);
-        iterSlider.setOpacity(0.35);
+        var projectLabel = new Label();
+        var objectLabel = new Label();
+        Runnable refreshLabels = () -> {
+            String projectName = session.project.repository.get().manifest().name();
+            projectLabel.setText(session.project.projectRoot.get() == null
+                ? "Project: " + projectName + " (unsaved)"
+                : "Project: " + projectName);
+            objectLabel.setText("Open: " + describeNode(session.project.workspace.activeNodeId.get()));
+        };
+        refreshLabels.run();
+        session.project.repository.addListener((obs, oldValue, newValue) -> refreshLabels.run());
+        session.project.workspace.activeNodeId.addListener((obs, oldValue, newValue) -> refreshLabels.run());
+        session.project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> refreshLabels.run());
+        session.project.projectRoot.addListener((obs, oldValue, newValue) -> refreshLabels.run());
 
         var activePaneLabel = new Label();
         session.docking.activePaneId.addListener((obs, oldValue, newValue) ->
@@ -249,11 +267,14 @@ public class WorkbenchController {
         computeStatus.setText("");
 
         var bar = new javafx.scene.layout.HBox(8,
-            new Button("Open") {{
-                setOnAction(event -> openFileChooser());
+            new Button("Open Project") {{
+                setOnAction(event -> openProjectChooser());
             }},
-            new Label("Scenario:"), scenarioBox,
-            new Label("Iter:"), iterSlider, iterLabel, iterCountLabel,
+            new Button("Import JSON") {{
+                setOnAction(event -> importJsonChooser());
+            }},
+            projectLabel,
+            objectLabel,
             new javafx.scene.layout.Region() {{
                 javafx.scene.layout.HBox.setHgrow(this, javafx.scene.layout.Priority.ALWAYS);
             }},
@@ -275,6 +296,8 @@ public class WorkbenchController {
     private WorkbenchPane createPane(PaneId paneId) {
         var context = new PaneContext(session, this, paneId);
         return switch (paneId) {
+            case EXPLORER -> new ExplorerPane(context);
+            case INSPECTOR -> new InspectorPane(context);
             case SPHERE -> new SphereWorkbenchPane(context);
             case CROSS_SECTION -> new GeometryPane(context);
             case POINTS -> new PointsWorkbenchPane(context);
@@ -288,8 +311,11 @@ public class WorkbenchController {
     }
 
     private void registerCommands() {
-        commandRegistry.register(new PaneAction(CommandId.OPEN_FILE, "Open\u2026", this::openFileChooser));
+        commandRegistry.register(new PaneAction(CommandId.OPEN_PROJECT, "Open Project\u2026", this::openProjectChooser));
+        commandRegistry.register(new PaneAction(CommandId.IMPORT_JSON, "Import JSON\u2026", this::importJsonChooser));
         commandRegistry.register(new PaneAction(CommandId.RELOAD_FILE, "Reload", this::reloadCurrentFile));
+        commandRegistry.register(new PaneAction(CommandId.SAVE_PROJECT, "Save Project", this::saveProject));
+        commandRegistry.register(new PaneAction(CommandId.SAVE_PROJECT_AS, "Save Project As\u2026", this::saveProjectAsChooser));
         commandRegistry.register(new PaneAction(CommandId.RESET_LAYOUT, "Reset Layout", this::resetLayout));
         commandRegistry.register(new PaneAction(CommandId.SAVE_LAYOUT, "Save Layout", this::saveLayoutToStore));
         commandRegistry.register(new PaneAction(CommandId.LOAD_LAYOUT, "Load Layout", this::loadLayoutFromStore));
@@ -307,11 +333,15 @@ public class WorkbenchController {
         }));
         commandRegistry.register(new PaneAction(CommandId.RESET_POINTS, "Reset Points", session.points::resetToDefaults));
         commandRegistry.register(new PaneAction(CommandId.CLEAR_USER_POINTS, "Clear User Points", session.points::clearUserPoints));
+        commandRegistry.register(new PaneAction(CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, "Promote to Sequence",
+            session.project::promoteActiveSnapshotToSequence));
     }
 
     private void installShellStatusBindings() {
-        session.document.currentScenario.addListener((obs, oldValue, newValue) -> updateShellStatus());
-        session.document.iterationIndex.addListener((obs, oldValue, newValue) -> updateShellStatus());
+        session.project.workspace.activeNodeId.addListener((obs, oldValue, newValue) -> updateShellStatus());
+        session.project.activeCapture.activeCapture.addListener((obs, oldValue, newValue) -> updateShellStatus());
+        session.project.runNavigation.activeCaptureIndex.addListener((obs, oldValue, newValue) -> updateShellStatus());
+        session.project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.viewport.tC.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.points.entries.addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.model.IsochromatEntry>) change ->
             updateShellStatus());
@@ -326,6 +356,9 @@ public class WorkbenchController {
 
         var builder = bento.dockBuilding();
         var root = builder.root("studio-root");
+        var explorer = registerLeaf(builder, PaneId.EXPLORER);
+        var inspector = registerLeaf(builder, PaneId.INSPECTOR);
+        var centreShell = builder.branch("centre-shell");
         var workspace = builder.branch("workspace");
         var upper = builder.branch("upper");
         var left = builder.branch("left");
@@ -343,7 +376,8 @@ public class WorkbenchController {
         var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
 
-        root.setOrientation(Orientation.VERTICAL);
+        root.setOrientation(Orientation.HORIZONTAL);
+        centreShell.setOrientation(Orientation.VERTICAL);
         workspace.setOrientation(Orientation.VERTICAL);
         upper.setOrientation(Orientation.HORIZONTAL);
         left.setOrientation(Orientation.HORIZONTAL);
@@ -351,7 +385,8 @@ public class WorkbenchController {
         phaseMaps.setOrientation(Orientation.HORIZONTAL);
         phaseTraces.setOrientation(Orientation.HORIZONTAL);
 
-        root.addContainers(timeline, workspace);
+        root.addContainers(explorer, centreShell, inspector);
+        centreShell.addContainers(timeline, workspace);
         workspace.addContainers(upper, lower);
         upper.addContainers(left, points);
         left.addContainers(sphere, geometry);
@@ -359,7 +394,8 @@ public class WorkbenchController {
         phaseMaps.addContainers(phaseMapZ, phaseMapR);
         phaseTraces.addContainers(tracePhase, tracePolar);
 
-        root.setDividerPositions(0.26);
+        root.setDividerPositions(0.14, 0.84);
+        centreShell.setDividerPositions(0.26);
         workspace.setDividerPositions(0.62);
         upper.setDividerPositions(0.58);
         left.setDividerPositions(0.52);
@@ -367,8 +403,12 @@ public class WorkbenchController {
         phaseMaps.setDividerPositions(0.5);
         phaseTraces.setDividerPositions(0.5);
 
-        root.setContainerResizable(timeline, false);
-        root.setContainerSizePx(timeline, 250);
+        root.setContainerResizable(explorer, false);
+        root.setContainerSizePx(explorer, 280);
+        root.setContainerResizable(inspector, false);
+        root.setContainerSizePx(inspector, 340);
+        centreShell.setContainerResizable(timeline, false);
+        centreShell.setContainerSizePx(timeline, 250);
 
         rootBranch = root;
         dockContainer.setCenter(rootBranch);
@@ -382,10 +422,11 @@ public class WorkbenchController {
         dockable.setTitle(paneId.title());
         dockable.setNode(panes.get(paneId));
         dockable.setClosable(false);
-        dockable.setCanBeDragged(true);
-        dockable.setCanBeDroppedToNewWindow(true);
+        boolean pinned = paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR;
+        dockable.setCanBeDragged(!pinned);
+        dockable.setCanBeDroppedToNewWindow(!pinned);
         dockable.setDragGroup(STUDIO_DRAG_GROUP);
-        dockable.setContextMenuFactory(ignored -> buildDockableMenu(paneId));
+        dockable.setContextMenuFactory(ignored -> pinned ? null : buildDockableMenu(paneId));
         dockables.put(paneId, dockable);
         homeLeaves.put(paneId, leaf);
         leaf.addDockable(dockable);
@@ -447,19 +488,20 @@ public class WorkbenchController {
     }
 
     private void updateShellStatus() {
-        String scenario = session.document.currentScenario.get() == null ? "\u2014" : session.document.currentScenario.get();
-        String iter = session.document.iterationKeys.isEmpty()
-            ? "\u2014"
-            : session.document.iterationKeys.get(Math.max(0,
-                Math.min(session.document.iterationIndex.get(), session.document.iterationKeys.size() - 1)));
+        var activeCapture = session.project.activeCapture.activeCapture.get();
+        String openObject = describeNode(session.project.workspace.activeNodeId.get());
+        String capture = activeCapture == null ? "\u2014" : activeCapture.name();
+        String iter = activeCapture == null || activeCapture.iterationKey() == null ? "\u2014" : activeCapture.iterationKey();
         String activePane = session.docking.activePaneId.get() == null ? "\u2014" : session.docking.activePaneId.get().title();
         String paneStatus = session.docking.activePaneId.get() == null
             ? ""
             : paneStatuses.getOrDefault(session.docking.activePaneId.get(), "");
         long visible = session.points.entries.stream().filter(ax.xz.mri.ui.model.IsochromatEntry::visible).count();
         shellStatus.set(String.format(
-            "Scenario: %s | Iter: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible) | Active: %s%s",
-            scenario,
+            "Project: %s | Open: %s | Capture: %s | Iter: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible) | Active: %s%s",
+            session.project.repository.get().manifest().name(),
+            openObject,
+            capture,
             iter,
             session.viewport.tC.get(),
             session.points.entries.size(),
@@ -467,6 +509,12 @@ public class WorkbenchController {
             activePane,
             paneStatus == null || paneStatus.isBlank() ? "" : " | " + paneStatus
         ));
+    }
+
+    private String describeNode(ProjectNodeId nodeId) {
+        if (nodeId == null) return "\u2014";
+        ProjectNode node = session.project.repository.get().node(nodeId);
+        return node == null ? nodeId.value() : ProjectDisplayNames.label(node);
     }
 
     private void showError(String title, String message) {

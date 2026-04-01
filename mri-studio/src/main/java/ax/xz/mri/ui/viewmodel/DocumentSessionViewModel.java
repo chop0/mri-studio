@@ -23,6 +23,7 @@ public class DocumentSessionViewModel {
     public final ObservableList<String> scenarioKeys = FXCollections.observableArrayList();
     public final ObservableList<String> iterationKeys = FXCollections.observableArrayList();
     public final ObjectProperty<List<PulseSegment>> currentPulse = new SimpleObjectProperty<>();
+    private boolean suppressRefresh;
 
     public DocumentSessionViewModel() {
         blochData.addListener((obs, oldData, newData) -> refreshScenarios());
@@ -35,17 +36,65 @@ public class DocumentSessionViewModel {
         blochData.set(data);
     }
 
+    public void showCapture(File file, BlochData data, String scenarioKey, String iterationKey) {
+        suppressRefresh = true;
+        try {
+            currentFile.set(file);
+            blochData.set(data);
+
+            if (data == null || data.scenarios() == null || data.scenarios().isEmpty()) {
+                scenarioKeys.clear();
+                iterationKeys.clear();
+                currentPulse.set(null);
+                currentScenario.set(null);
+                iterationIndex.set(0);
+                return;
+            }
+
+            var resolvedScenarioKeys = data.scenarios().keySet().stream().sorted().toList();
+            String resolvedScenario = scenarioKey != null && data.scenarios().containsKey(scenarioKey)
+                ? scenarioKey
+                : resolvedScenarioKeys.getFirst();
+            var scenario = data.scenarios().get(resolvedScenario);
+            var resolvedIterationKeys = scenario.iterationKeys();
+            int resolvedIndex = iterationKey == null ? resolvedIterationKeys.size() - 1 : resolvedIterationKeys.indexOf(iterationKey);
+            if (resolvedIndex < 0) resolvedIndex = resolvedIterationKeys.isEmpty() ? 0 : resolvedIterationKeys.size() - 1;
+            List<PulseSegment> resolvedPulse = resolvedIterationKeys.isEmpty()
+                ? null
+                : scenario.pulses().get(resolvedIterationKeys.get(resolvedIndex));
+
+            scenarioKeys.setAll(resolvedScenarioKeys);
+            currentScenario.set(resolvedScenario);
+            iterationKeys.setAll(resolvedIterationKeys);
+            if (resolvedIterationKeys.isEmpty()) {
+                iterationIndex.set(0);
+                currentPulse.set(null);
+                return;
+            }
+            iterationIndex.set(resolvedIndex);
+            currentPulse.set(resolvedPulse);
+        } finally {
+            suppressRefresh = false;
+        }
+    }
+
     public void clearDocument() {
-        currentFile.set(null);
-        blochData.set(null);
-        scenarioKeys.clear();
-        iterationKeys.clear();
-        currentScenario.set(null);
-        currentPulse.set(null);
-        iterationIndex.set(0);
+        suppressRefresh = true;
+        try {
+            currentFile.set(null);
+            blochData.set(null);
+            scenarioKeys.clear();
+            iterationKeys.clear();
+            currentScenario.set(null);
+            currentPulse.set(null);
+            iterationIndex.set(0);
+        } finally {
+            suppressRefresh = false;
+        }
     }
 
     private void refreshScenarios() {
+        if (suppressRefresh) return;
         scenarioKeys.clear();
         iterationKeys.clear();
         currentPulse.set(null);
@@ -61,6 +110,7 @@ public class DocumentSessionViewModel {
     }
 
     private void refreshIterations() {
+        if (suppressRefresh) return;
         iterationKeys.clear();
         currentPulse.set(null);
 
@@ -76,6 +126,7 @@ public class DocumentSessionViewModel {
     }
 
     private void refreshCurrentPulse() {
+        if (suppressRefresh) return;
         var data = blochData.get();
         var scenario = currentScenario.get();
         if (data == null || scenario == null || iterationKeys.isEmpty()) {

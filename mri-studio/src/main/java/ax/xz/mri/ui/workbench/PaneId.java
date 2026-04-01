@@ -2,6 +2,8 @@ package ax.xz.mri.ui.workbench;
 
 /** First-class panes in the studio workbench. */
 public enum PaneId {
+    EXPLORER("Explorer"),
+    INSPECTOR("Inspector"),
     SPHERE("Bloch Sphere"),
     CROSS_SECTION("Cross-sectional geometry"),
     POINTS("Points of Interest"),
