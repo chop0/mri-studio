@@ -14,16 +14,12 @@ import javafx.beans.property.SimpleStringProperty;
 public class GeometryViewModel {
     private static final double MIN_VISIBLE_SPAN = 2.0;
 
-    public enum ShadeMode { OFF, MP, SIGNAL }
-
     public final DoubleProperty halfHeight = new SimpleDoubleProperty(80);
     public final DoubleProperty zCenter = new SimpleDoubleProperty(0);
-    public final ObjectProperty<ShadeMode> shadeMode = new SimpleObjectProperty<>(ShadeMode.OFF);
     public final BooleanProperty showSliceOverlay = new SimpleBooleanProperty(true);
     public final BooleanProperty showLabels = new SimpleBooleanProperty(true);
     public final ObjectProperty<GeometryShadingSnapshot> shadingSnapshot = new SimpleObjectProperty<>();
     public final BooleanProperty shadingComputing = new SimpleBooleanProperty(false);
-    public final BooleanProperty signalModeBlocked = new SimpleBooleanProperty(false);
     public final StringProperty statusMessage = new SimpleStringProperty("");
 
     public double visibleStart() {

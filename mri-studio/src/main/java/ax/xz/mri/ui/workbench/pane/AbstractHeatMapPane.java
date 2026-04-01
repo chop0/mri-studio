@@ -1,9 +1,15 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.PhaseMapData;
+import ax.xz.mri.model.simulation.Trajectory;
 import ax.xz.mri.ui.canvas.ColourUtil;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.HeatMapViewModel;
+import ax.xz.mri.ui.viewmodel.MagnetisationColouringSupport;
+import ax.xz.mri.ui.viewmodel.MagnetisationColouringViewModel;
+import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
@@ -85,6 +91,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         );
 
         setPaneTitle(viewModel.title());
+        setToolNodes(MagnetisationColouringControls.newMenuButton(paneContext.session().colouring));
         bindRedraw(
             dataProperty,
             paneContext.session().viewport.tS,
@@ -92,7 +99,11 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.blochData,
-            paneContext.session().document.currentPulse
+            paneContext.session().document.currentPulse,
+            paneContext.session().colouring.hueSource,
+            paneContext.session().colouring.brightnessSource,
+            paneContext.session().reference.enabled,
+            paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
@@ -131,11 +142,23 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             if (overviewBounds().contains(event.getX(), event.getY())) {
                 var overview = new MenuItem("Overview");
                 overview.setDisable(true);
-                menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+                menu.getItems().addAll(
+                    overview,
+                    new SeparatorMenuItem(),
+                    MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+                    new SeparatorMenuItem(),
+                    overviewInteraction.newResetMenuItem()
+                );
             } else {
                 var setCursor = new MenuItem("Set cursor here");
                 setCursor.setOnAction(actionEvent -> moveCursor(event.getX()));
-                menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+                menu.getItems().addAll(
+                    setCursor,
+                    new SeparatorMenuItem(),
+                    MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+                    new SeparatorMenuItem(),
+                    overviewInteraction.newResetMenuItem()
+                );
             }
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
         });
@@ -153,6 +176,16 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         double tSpan = tMax - tMin;
         double plotWidth = width - PAD_LEFT - PAD_RIGHT;
         double plotHeight = height - PAD_TOP - PAD_BOTTOM;
+        var colouring = paneContext.session().colouring;
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
+        double[] referencePhaseOffsets = referencePhaseOffsets(phaseMap, referenceTrajectory);
+        boolean[] signalProjectionAvailable = signalProjectionAvailability(
+            phaseMap,
+            paneContext.session().document.blochData.get(),
+            paneContext.session().document.currentPulse.get()
+        );
         AxisScrubBar.draw(
             g,
             overviewBounds(width),
@@ -196,7 +229,18 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
                 double x = PAD_LEFT + (cell.tMicros() - tMin) / tSpan * plotWidth;
                 double nextT = (tIndex + 1 < row.length) ? row[tIndex + 1].tMicros() : cell.tMicros() + 40;
                 double cellWidth = Math.max(1, (nextT - cell.tMicros()) / tSpan * plotWidth + 1);
-                g.setFill(ColourUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.mPerp(), 0, 1)));
+                double phaseDeg = referencePhaseOffsets == null || tIndex >= referencePhaseOffsets.length
+                    ? cell.phaseDeg()
+                    : ReferenceFrameUtil.normalizeDegrees(cell.phaseDeg() - referencePhaseOffsets[tIndex]);
+                Color fill = cellColour(
+                    colouring,
+                    phaseDeg,
+                    cell.mPerp(),
+                    cell.signalProjection(),
+                    tIndex < signalProjectionAvailable.length && signalProjectionAvailable[tIndex]
+                );
+                if (fill == null) continue;
+                g.setFill(fill);
                 g.fillRect(x, y - cellHeight / 2, cellWidth, cellHeight + 1);
             }
         }
@@ -282,7 +326,17 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         double yMin = phaseMap.yArr()[0];
         double yMax = phaseMap.yArr()[phaseMap.nY() - 1];
         double yValue = yMax - ((mouseY - PAD_TOP) / plotHeight) * (yMax - yMin);
-        setPaneStatus(String.format("t=%.1f \u03bcs | y=%.2f", time, yValue));
+        String fallback = paneContext.session().colouring.brightnessSource.get() ==
+            MagnetisationColouringViewModel.BrightnessSource.SIGNAL_PROJECTION
+            ? " | RF windows use excitation brightness"
+            : "";
+        setPaneStatus(String.format(
+            "t=%.1f \u03bcs | y=%.2f | %s%s",
+            time,
+            yValue,
+            paneContext.session().colouring.statusLabel(),
+            fallback
+        ));
     }
 
     private static int niceTick(double span) {
@@ -352,5 +406,74 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
 
     private static AxisScrubBar.Bounds overviewBounds(double width) {
         return new AxisScrubBar.Bounds(PAD_LEFT, 2, Math.max(1, width - PAD_LEFT - PAD_RIGHT), OVERVIEW_H);
+    }
+
+    private static Color cellColour(
+        MagnetisationColouringViewModel colouring,
+        double phaseDeg,
+        double excitation,
+        double signalProjection,
+        boolean signalProjectionAvailable
+    ) {
+        if (colouring.isOff()) return null;
+        double brightness = MathUtil.clamp(
+            MagnetisationColouringSupport.brightnessValue(
+                colouring.brightnessSource.get(),
+                excitation,
+                signalProjection,
+                signalProjectionAvailable
+            ),
+            0,
+            1
+        );
+        return switch (colouring.hueSource.get()) {
+            case PHASE -> ColourUtil.hue2color(phaseDeg, brightness);
+            case NONE -> colouring.brightnessSource.get() == MagnetisationColouringViewModel.BrightnessSource.NONE
+                ? null
+                : ColourUtil.monochrome(brightness);
+        };
+    }
+
+    private static double[] referencePhaseOffsets(PhaseMapData phaseMap, Trajectory referenceTrajectory) {
+        if (phaseMap == null || referenceTrajectory == null || phaseMap.data().length == 0) return null;
+        PhaseMapData.Cell[] row = null;
+        for (var candidate : phaseMap.data()) {
+            if (candidate.length > 0) {
+                row = candidate;
+                break;
+            }
+        }
+        if (row == null) return null;
+        var offsets = new double[row.length];
+        for (int index = 0; index < row.length; index++) {
+            var referenceState = referenceTrajectory.interpolateAt(row[index].tMicros());
+            offsets[index] = referenceState != null ? referenceState.phaseDeg() : 0.0;
+        }
+        return offsets;
+    }
+
+    private static boolean[] signalProjectionAvailability(
+        PhaseMapData phaseMap,
+        BlochData data,
+        java.util.List<PulseSegment> pulse
+    ) {
+        if (phaseMap == null || data == null || data.field() == null || pulse == null) return new boolean[0];
+        PhaseMapData.Cell[] row = null;
+        for (var candidate : phaseMap.data()) {
+            if (candidate.length > 0) {
+                row = candidate;
+                break;
+            }
+        }
+        if (row == null) return new boolean[0];
+        var available = new boolean[row.length];
+        for (int index = 0; index < row.length; index++) {
+            available[index] = MagnetisationColouringSupport.isSignalProjectionAvailable(
+                data.field(),
+                pulse,
+                row[index].tMicros()
+            );
+        }
+        return available;
     }
 }

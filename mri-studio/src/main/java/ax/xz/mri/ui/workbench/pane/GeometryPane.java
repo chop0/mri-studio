@@ -6,13 +6,13 @@ import ax.xz.mri.ui.model.IsochromatId;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot;
 import ax.xz.mri.ui.viewmodel.GeometryViewModel;
-import ax.xz.mri.ui.viewmodel.ReferenceFrameViewModel;
+import ax.xz.mri.ui.viewmodel.MagnetisationColouringSupport;
+import ax.xz.mri.ui.viewmodel.MagnetisationColouringViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
 import javafx.scene.Cursor;
 import javafx.scene.control.CheckBox;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
@@ -44,12 +44,10 @@ public class GeometryPane extends CanvasWorkbenchPane {
         super(paneContext);
         setPaneTitle("Geometry");
 
-        var shadeMode = new ComboBox<GeometryViewModel.ShadeMode>();
-        shadeMode.getItems().addAll(GeometryViewModel.ShadeMode.values());
-        shadeMode.valueProperty().bindBidirectional(paneContext.session().geometry.shadeMode);
+        var colourMenu = MagnetisationColouringControls.newMenuButton(paneContext.session().colouring);
         var labels = new CheckBox("Labels");
         labels.selectedProperty().bindBidirectional(paneContext.session().geometry.showLabels);
-        setToolNodes(shadeMode, labels);
+        setToolNodes(colourMenu, labels);
 
         zRangeInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.VERTICAL,
@@ -104,12 +102,13 @@ public class GeometryPane extends CanvasWorkbenchPane {
             paneContext.session().selection.selectedIds,
             paneContext.session().geometry.halfHeight,
             paneContext.session().geometry.zCenter,
-            paneContext.session().geometry.shadeMode,
+            paneContext.session().colouring.hueSource,
+            paneContext.session().colouring.brightnessSource,
             paneContext.session().geometry.showLabels,
             paneContext.session().geometry.showSliceOverlay,
             paneContext.session().geometry.shadingSnapshot,
             paneContext.session().geometry.shadingComputing,
-            paneContext.session().geometry.signalModeBlocked,
+            paneContext.session().geometry.statusMessage,
             paneContext.session().reference.enabled,
             paneContext.session().reference.r,
             paneContext.session().reference.z,
@@ -230,10 +229,27 @@ public class GeometryPane extends CanvasWorkbenchPane {
         double plotHeight = plotHeight(height);
         if (plotWidth <= 0 || plotHeight <= 0) return;
 
-        if (paneContext.session().geometry.shadeMode.get() != GeometryViewModel.ShadeMode.OFF) {
+        boolean signalProjectionAvailable = MagnetisationColouringSupport.isSignalProjectionAvailable(
+            field,
+            pulse,
+            paneContext.session().viewport.tC.get()
+        );
+        if (!paneContext.session().colouring.isOff()) {
             var snapshot = paneContext.session().geometry.shadingSnapshot.get();
             if (snapshot != null) {
-                drawShading(g, snapshot, rMax, zMin, zMax, PAD_LEFT, PAD_TOP, plotWidth, plotHeight);
+                drawShading(
+                    g,
+                    snapshot,
+                    paneContext.session().colouring,
+                    signalProjectionAvailable,
+                    rMax,
+                    zMin,
+                    zMax,
+                    PAD_LEFT,
+                    PAD_TOP,
+                    plotWidth,
+                    plotHeight
+                );
             } else if (paneContext.session().geometry.shadingComputing.get()) {
                 g.setFill(Color.gray(0.2, 0.5));
                 g.fillText("Computing shading\u2026", PAD_LEFT + 8, PAD_TOP + 14);
@@ -385,6 +401,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
     private void drawShading(
         javafx.scene.canvas.GraphicsContext g,
         GeometryShadingSnapshot snapshot,
+        MagnetisationColouringViewModel colouring,
+        boolean signalProjectionAvailable,
         double rMax,
         double zMin,
         double zMax,
@@ -418,7 +436,9 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 var cell = snapshot.cells()[radialIndex][zIndex];
                 double y0 = padTop + plotHeight * (1 - (Math.min(zTop, zMax) - zMin) / (zMax - zMin));
                 double y1 = padTop + plotHeight * (1 - (Math.max(zBottom, zMin) - zMin) / (zMax - zMin));
-                g.setFill(ColourUtil.hue2color(cell.phaseDeg(), MathUtil.clamp(cell.brightness(), 0, 1)));
+                Color fill = shadingColour(colouring, cell, signalProjectionAvailable);
+                if (fill == null) continue;
+                g.setFill(fill);
                 g.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) + 1, Math.abs(y1 - y0) + 1);
             }
         }
@@ -432,20 +452,35 @@ public class GeometryPane extends CanvasWorkbenchPane {
             return;
         }
         if (scrubBounds().contains(mouseX, mouseY)) {
+            String colouringSuffix = " | " + paneContext.session().colouring.statusLabel();
             setPaneStatus(String.format(
-                "z view=[%.1f, %.1f] mm | double-click to zoom out%s",
+                "z view=[%.1f, %.1f] mm | double-click to zoom out%s%s",
                 paneContext.session().geometry.visibleStart(),
                 paneContext.session().geometry.visibleEnd(),
-                referenceSuffix()
+                referenceSuffix(),
+                colouringSuffix
             ));
             return;
         }
         var rz = screenToRz(mouseX, mouseY);
         long visible = paneContext.session().points.entries.stream().filter(IsochromatEntry::visible).count();
-        String suffix = paneContext.session().geometry.signalModeBlocked.get()
-            ? " | Signal shading blocked during RF"
-            : paneContext.session().geometry.statusMessage.get();
-        if (suffix == null) suffix = "";
+        boolean signalProjectionAvailable = MagnetisationColouringSupport.isSignalProjectionAvailable(
+            data.field(),
+            paneContext.session().document.currentPulse.get(),
+            paneContext.session().viewport.tC.get()
+        );
+        StringBuilder suffix = new StringBuilder();
+        suffix.append(" | ").append(paneContext.session().colouring.statusLabel());
+        if (MagnetisationColouringSupport.isSignalProjectionFallbackActive(
+            paneContext.session().colouring.brightnessSource.get(),
+            signalProjectionAvailable
+        )) {
+            suffix.append(" | RF: using excitation brightness");
+        }
+        String statusMessage = paneContext.session().geometry.statusMessage.get();
+        if (statusMessage != null && !statusMessage.isBlank()) {
+            suffix.append(" | ").append(statusMessage);
+        }
         setPaneStatus(String.format(
             "r=%.1f z=%.1f mm | %d points (%d visible)%s%s",
             rz[0],
@@ -453,7 +488,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
             paneContext.session().points.entries.size(),
             visible,
             referenceSuffix(),
-            suffix.isBlank() ? "" : suffix
+            suffix
         ));
     }
 
@@ -476,6 +511,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
             setBasis,
             clearBasis,
             new SeparatorMenuItem(),
+            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+            new SeparatorMenuItem(),
             zRangeInteraction.newResetMenuItem(),
             new SeparatorMenuItem(),
             resetDefaults,
@@ -488,14 +525,21 @@ public class GeometryPane extends CanvasWorkbenchPane {
         var menu = new ContextMenu();
         var label = new MenuItem("Z Axis");
         label.setDisable(true);
-        var centerSlice = new MenuItem("Center On Slice");
-        centerSlice.setOnAction(event -> paneContext.session().geometry.setVisibleRange(
+        var centreSlice = new MenuItem("Centre on Slice");
+        centreSlice.setOnAction(event -> paneContext.session().geometry.setVisibleRange(
             -paneContext.session().geometry.halfHeight.get(),
             paneContext.session().geometry.halfHeight.get(),
             zDomainStart(),
             zDomainEnd()
         ));
-        menu.getItems().addAll(label, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem(), centerSlice);
+        menu.getItems().addAll(
+            label,
+            new SeparatorMenuItem(),
+            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+            new SeparatorMenuItem(),
+            zRangeInteraction.newResetMenuItem(),
+            centreSlice
+        );
         return menu;
     }
 
@@ -523,6 +567,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
             duplicate,
             lock,
             new SeparatorMenuItem(),
+            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+            new SeparatorMenuItem(),
             delete,
             new SeparatorMenuItem(),
             zRangeInteraction.newResetMenuItem()
@@ -537,7 +583,14 @@ public class GeometryPane extends CanvasWorkbenchPane {
         label.setDisable(true);
         var clear = new MenuItem("Clear Basis Frame");
         clear.setOnAction(event -> reference.clear());
-        menu.getItems().addAll(label, new SeparatorMenuItem(), clear, new SeparatorMenuItem(), zRangeInteraction.newResetMenuItem());
+        menu.getItems().addAll(
+            label,
+            new SeparatorMenuItem(),
+            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
+            clear,
+            new SeparatorMenuItem(),
+            zRangeInteraction.newResetMenuItem()
+        );
         return menu;
     }
 
@@ -733,5 +786,29 @@ public class GeometryPane extends CanvasWorkbenchPane {
 
     private static double niceStart(double value, double step) {
         return Math.ceil(value / step) * step;
+    }
+
+    private static Color shadingColour(
+        MagnetisationColouringViewModel colouring,
+        GeometryShadingSnapshot.CellSample cell,
+        boolean signalProjectionAvailable
+    ) {
+        if (colouring.isOff()) return null;
+        double brightness = MathUtil.clamp(
+            MagnetisationColouringSupport.brightnessValue(
+                colouring.brightnessSource.get(),
+                cell.mPerp(),
+                cell.signalProjection(),
+                signalProjectionAvailable
+            ),
+            0,
+            1
+        );
+        return switch (colouring.hueSource.get()) {
+            case PHASE -> ColourUtil.hue2color(cell.phaseDeg(), brightness);
+            case NONE -> colouring.brightnessSource.get() == MagnetisationColouringViewModel.BrightnessSource.NONE
+                ? null
+                : ColourUtil.monochrome(brightness);
+        };
     }
 }

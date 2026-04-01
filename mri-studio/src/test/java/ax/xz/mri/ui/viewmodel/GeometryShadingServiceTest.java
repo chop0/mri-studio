@@ -7,36 +7,39 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GeometryShadingServiceTest {
     @Test
-    void signalShadingFallsBackToMperpDuringRfAndClearsOnceRfEnds() {
+    void geometryShadingProvidesExcitationAndSignalProjectionMetrics() {
         var service = new GeometryShadingService(new BlochSimulator(), (Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        geometry.shadeMode.set(GeometryViewModel.ShadeMode.SIGNAL);
         var reference = new ReferenceFrameViewModel();
 
-        service.request(geometry, TestBlochDataFactory.sampleDocument(), TestBlochDataFactory.pulseA(), 0.0, reference);
+        service.request(geometry, TestBlochDataFactory.incoherentTransverseDocument(), TestBlochDataFactory.freePrecessionPulse(), 0.0, reference);
 
-        assertNotNull(geometry.shadingSnapshot.get());
-        assertTrue(geometry.signalModeBlocked.get());
-        assertTrue(geometry.statusMessage.get().contains("free precession"));
-
-        service.request(geometry, TestBlochDataFactory.sampleDocument(), TestBlochDataFactory.pulseA(), 10.0, reference);
-
-        assertNotNull(geometry.shadingSnapshot.get());
-        assertFalse(geometry.signalModeBlocked.get());
+        var snapshot = geometry.shadingSnapshot.get();
+        assertNotNull(snapshot);
         assertTrue(geometry.statusMessage.get().isBlank());
+
+        boolean foundDifferentSignalProjection = false;
+        for (var row : snapshot.cells()) {
+            for (var cell : row) {
+                assertTrue(cell.signalProjection() >= 0);
+                assertTrue(cell.signalProjection() <= cell.mPerp() + 1e-9);
+                if (Math.abs(cell.signalProjection() - cell.mPerp()) > 1e-4) {
+                    foundDifferentSignalProjection = true;
+                }
+            }
+        }
+        assertTrue(foundDifferentSignalProjection);
     }
 
     @Test
     void mpShadingHueCanBeViewedRelativeToReferenceFrame() {
         var service = new GeometryShadingService(new BlochSimulator(), (Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        geometry.shadeMode.set(GeometryViewModel.ShadeMode.MP);
         var data = TestBlochDataFactory.sampleDocument();
         var pulse = TestBlochDataFactory.pulseA();
 

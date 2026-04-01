@@ -32,5 +32,10 @@ public final class ColourUtil {
         );
     }
 
+    /** Neutral ramp for brightness-only shading when phase hue is disabled. */
+    public static Color monochrome(double brightness) {
+        return Color.hsb(210, 0.12, clamp(0.28 + 0.52 * clamp(brightness)));
+    }
+
     private static double clamp(double v) { return Math.max(0, Math.min(1, v)); }
 }

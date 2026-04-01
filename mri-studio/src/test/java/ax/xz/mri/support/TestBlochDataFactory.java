@@ -72,6 +72,20 @@ public final class TestBlochDataFactory {
         );
     }
 
+    public static BlochData incoherentTransverseDocument() {
+        return new BlochData(
+            incoherentField(),
+            List.of(),
+            Map.of()
+        );
+    }
+
+    public static List<PulseSegment> freePrecessionPulse() {
+        return List.of(new PulseSegment(List.of(
+            new PulseStep(0, 0, 0, 0, 0)
+        )));
+    }
+
     private static FieldMap sampleField() {
         var field = new FieldMap();
         field.rMm = new double[]{0, 15, 30};
@@ -94,6 +108,43 @@ public final class TestBlochDataFactory {
         field.segments = List.of(
             new Segment(1.0e-6, 0, 2),
             new Segment(1.0e-6, 2, 0)
+        );
+        return field;
+    }
+
+    private static FieldMap incoherentField() {
+        var field = new FieldMap();
+        field.rMm = new double[]{0, 15, 30};
+        field.zMm = new double[]{-10, 0, 10};
+        field.b0n = 1.5;
+        field.dBzUt = new double[][]{
+            {0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0}
+        };
+        field.mx0 = new double[][]{
+            {1.0, -0.5, -0.5},
+            {-0.5, -0.5, 1.0},
+            {-0.5, 1.0, -0.5}
+        };
+        field.my0 = new double[][]{
+            {0.0, 0.8660254038, -0.8660254038},
+            {0.8660254038, -0.8660254038, 0.0},
+            {-0.8660254038, 0.0, 0.8660254038}
+        };
+        field.mz0 = new double[][]{
+            {0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0},
+            {0.0, 0.0, 0.0}
+        };
+        field.fovX = 0.04;
+        field.fovZ = 0.04;
+        field.gamma = 267.5e6;
+        field.t1 = 1.0e9;
+        field.t2 = 1.0e9;
+        field.sliceHalf = 0.005;
+        field.segments = List.of(
+            new Segment(1.0e-6, 1, 0)
         );
         return field;
     }

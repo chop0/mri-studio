@@ -590,7 +590,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
             double normalizedValue = signalMax <= 1e-9 ? 0.0 : measurement.averageSignal() / signalMax;
             double dotY = trackTop + trackHeight - MathUtil.clamp(normalizedValue, 0, 1) * trackHeight * 0.85;
             double labelY = trackTop + 4 + ((measurement.ordinal() - 1) % 2) * 12;
-            String label = String.format("<S>=%.2f", measurement.averageSignal());
+            String label = String.format("<S>=%.2f", measurement.normalizedAverage());
             double x0 = Math.max(PAD_L, timeToPixel(measurement.startMicros()));
             double x1 = Math.min(PAD_L + (canvas.getWidth() - PAD_L - PAD_R), timeToPixel(measurement.endMicros()));
 

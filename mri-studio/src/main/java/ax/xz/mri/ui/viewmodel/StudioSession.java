@@ -10,6 +10,7 @@ public class StudioSession {
     public final ViewportViewModel viewport = new ViewportViewModel();
     public final SphereViewModel sphere = new SphereViewModel();
     public final GeometryViewModel geometry = new GeometryViewModel();
+    public final MagnetisationColouringViewModel colouring = new MagnetisationColouringViewModel();
     public final TimelineViewModel timeline = new TimelineViewModel(viewport);
     public final DockingViewModel docking = new DockingViewModel();
     public final IsochromatSelectionModel selection = new IsochromatSelectionModel();
@@ -45,7 +46,6 @@ public class StudioSession {
         });
 
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
-        geometry.shadeMode.addListener((obs, oldMode, newMode) -> refreshGeometryShading());
         reference.enabled.addListener((obs, oldValue, newValue) -> {
             refreshReferenceFrame();
             refreshGeometryShading();

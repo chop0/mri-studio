@@ -6,5 +6,5 @@ package ax.xz.mri.model.simulation;
  */
 public record PhaseMapData(double[] yArr, Cell[][] data, int nY) {
 
-    public record Cell(double tMicros, double phaseDeg, double mPerp) {}
+    public record Cell(double tMicros, double phaseDeg, double mPerp, double signalProjection) {}
 }

@@ -83,6 +83,15 @@
     -fx-alignment: center-left;
 }
 
+.pane-tool-strip .menu-button,
+.pane-tool-strip .check-box {
+    -fx-font-size: 11px;
+}
+
+.pane-tool-menu {
+    -fx-padding: 2 8 2 8;
+}
+
 .pane-status-bar {
     -fx-background-color: linear-gradient(to bottom, #f7f9fb, #eef2f6);
     -fx-border-color: #e2e8f0 transparent transparent transparent;

@@ -27,8 +27,6 @@ public class GeometryShadingService {
     private static final int OUTER_BANDS = 24;
     private static final int GRID_CACHE_SIZE = 8;
 
-    private static final String SIGNAL_BLOCKED_MESSAGE = "Signal shading is only defined during free precession; showing |M⊥|.";
-
 	private final BlochSimulator  blochSimulator;
     private final Executor executor;
     private final Consumer<Runnable> uiDispatcher;
@@ -55,10 +53,9 @@ public class GeometryShadingService {
         ReferenceFrameViewModel reference
     ) {
         long currentGeneration = generation.incrementAndGet();
-        if (geometry.shadeMode.get() == GeometryViewModel.ShadeMode.OFF || data == null || pulse == null) {
+        if (data == null || pulse == null) {
             geometry.shadingSnapshot.set(null);
             geometry.shadingComputing.set(false);
-            geometry.signalModeBlocked.set(false);
             geometry.statusMessage.set("");
             return;
         }
@@ -70,21 +67,18 @@ public class GeometryShadingService {
                     data,
                     pulse,
                     cursorTimeMicros,
-                    geometry.shadeMode.get(),
                     reference != null && reference.enabled.get() ? reference.trajectory.get() : null
                 );
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     geometry.shadingSnapshot.set(snapshot);
-                    geometry.signalModeBlocked.set(snapshot != null && snapshot.signalModeBlocked());
-                    geometry.statusMessage.set(snapshot != null && snapshot.signalModeBlocked() ? SIGNAL_BLOCKED_MESSAGE : "");
+                    geometry.statusMessage.set("");
                     geometry.shadingComputing.set(false);
                 });
             } catch (Exception ex) {
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     geometry.shadingSnapshot.set(null);
-                    geometry.signalModeBlocked.set(false);
                     geometry.shadingComputing.set(false);
                     geometry.statusMessage.set("Shading failed: " + ex.getMessage());
                 });
@@ -100,16 +94,11 @@ public class GeometryShadingService {
         BlochData data,
         List<PulseSegment> pulse,
         double cursorTimeMicros,
-        GeometryViewModel.ShadeMode requestedMode,
         Trajectory referenceTrajectory
     ) {
         var field = data.field();
         var grid = trajectoryGridFor(data, pulse);
         var cells = new GeometryShadingSnapshot.CellSample[RADIAL_SAMPLES][grid.zSamples().size()];
-
-        boolean signalBlocked = requestedMode == GeometryViewModel.ShadeMode.SIGNAL
-            && rfGateAtTime(field, pulse, cursorTimeMicros) >= 0.5;
-        var effectiveMode = signalBlocked ? GeometryViewModel.ShadeMode.MP : requestedMode;
 
         double sumMx = 0;
         double sumMy = 0;
@@ -137,28 +126,13 @@ public class GeometryShadingService {
 
         for (int radialIndex = 0; radialIndex < RADIAL_SAMPLES; radialIndex++) {
             for (int zIndex = 0; zIndex < grid.zSamples().size(); zIndex++) {
-                double brightness = mp[radialIndex][zIndex];
-                if (effectiveMode == GeometryViewModel.ShadeMode.SIGNAL) {
-                    brightness = Math.max(0, mx[radialIndex][zIndex] * ux + my[radialIndex][zIndex] * uy);
-                }
+                double signalProjection = Math.max(0, mx[radialIndex][zIndex] * ux + my[radialIndex][zIndex] * uy);
                 cells[radialIndex][zIndex] =
-                    new GeometryShadingSnapshot.CellSample(phase[radialIndex][zIndex], brightness);
+                    new GeometryShadingSnapshot.CellSample(phase[radialIndex][zIndex], mp[radialIndex][zIndex], signalProjection);
             }
         }
 
-        return new GeometryShadingSnapshot(grid.zSamples(), cells, signalBlocked);
-    }
-
-    private static double rfGateAtTime(FieldMap field, List<PulseSegment> pulse, double cursorTimeMicros) {
-        double t = 0;
-        for (int segmentIndex = 0; segmentIndex < field.segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
-            var segment = field.segments.get(segmentIndex);
-            for (var step : pulse.get(segmentIndex).steps()) {
-                if (t * 1e6 >= cursorTimeMicros) return step.rfGate();
-                t += segment.dt();
-            }
-        }
-        return 0;
+        return new GeometryShadingSnapshot(grid.zSamples(), cells);
     }
 
     private static List<Double> buildZSamples(double zMax) {
