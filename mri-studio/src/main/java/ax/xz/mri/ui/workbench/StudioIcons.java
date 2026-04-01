@@ -2,6 +2,7 @@ package ax.xz.mri.ui.workbench;
 
 import javafx.scene.Node;
 import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 
 /** Small hand-drawn IDE-style icons without an external asset dependency. */
@@ -9,6 +10,8 @@ public final class StudioIcons {
     private static final Color INK = Color.web("#4c6278");
     private static final Color ACCENT = Color.web("#1976d2");
     private static final Color SOFT = Color.web("#dbe7f3");
+    private static final Color IMPORT_TINT = Color.web("#7b1fa2");
+    private static final Color SEQUENCE_TINT = Color.web("#2e7d32");
 
     private StudioIcons() {
     }
@@ -20,7 +23,9 @@ public final class StudioIcons {
         g.setStroke(INK);
         g.setFill(SOFT);
         switch (kind) {
-            case PROJECT, GROUP_IMPORTS, GROUP_SEQUENCES -> drawFolder(g);
+            case PROJECT -> drawFolder(g, INK);
+            case GROUP_IMPORTS -> drawFolder(g, IMPORT_TINT);
+            case GROUP_SEQUENCES -> drawFolder(g, SEQUENCE_TINT);
             case IMPORT -> drawDocument(g, true);
             case SCENARIO -> drawLayers(g);
             case RUN -> drawActivity(g);
@@ -34,15 +39,19 @@ public final class StudioIcons {
         return canvas;
     }
 
-    private static void drawFolder(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawFolder(GraphicsContext g, Color tint) {
         g.setFill(SOFT);
         g.fillRoundRect(1.5, 4, 11, 7.5, 2, 2);
+        g.setStroke(tint);
         g.strokeRoundRect(1.5, 4, 11, 7.5, 2, 2);
+        g.setFill(tint.deriveColor(0, 1, 1, 0.25));
         g.fillRoundRect(2.2, 2.5, 4.2, 2.6, 1.4, 1.4);
+        g.setStroke(tint);
         g.strokeRoundRect(2.2, 2.5, 4.2, 2.6, 1.4, 1.4);
+        g.setStroke(INK);
     }
 
-    private static void drawDocument(javafx.scene.canvas.GraphicsContext g, boolean accent) {
+    private static void drawDocument(GraphicsContext g, boolean accent) {
         g.fillRoundRect(2.3, 1.5, 9, 11, 2, 2);
         g.strokeRoundRect(2.3, 1.5, 9, 11, 2, 2);
         if (accent) {
@@ -54,13 +63,13 @@ public final class StudioIcons {
         }
     }
 
-    private static void drawLayers(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawLayers(GraphicsContext g) {
         g.strokeRoundRect(2.5, 2.2, 7.5, 3.8, 1.2, 1.2);
         g.strokeRoundRect(3.5, 5.2, 7.5, 3.8, 1.2, 1.2);
         g.strokeRoundRect(4.5, 8.2, 7.5, 3.2, 1.2, 1.2);
     }
 
-    private static void drawActivity(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawActivity(GraphicsContext g) {
         g.setStroke(ACCENT);
         g.strokePolyline(
             new double[]{1.5, 4.0, 5.2, 7.0, 8.4, 10.2, 12.0},
@@ -70,7 +79,7 @@ public final class StudioIcons {
         g.setStroke(INK);
     }
 
-    private static void drawWave(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawWave(GraphicsContext g) {
         g.setStroke(ACCENT);
         g.strokePolyline(
             new double[]{1.3, 3.2, 4.8, 6.3, 8.1, 9.8, 12.0},
@@ -80,7 +89,7 @@ public final class StudioIcons {
         g.setStroke(INK);
     }
 
-    private static void drawCamera(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawCamera(GraphicsContext g) {
         g.strokeRoundRect(2, 4.2, 10, 6.2, 2, 2);
         g.strokeOval(5.1, 5.2, 3.8, 3.8);
         g.setFill(ACCENT);
@@ -88,7 +97,7 @@ public final class StudioIcons {
         g.setFill(SOFT);
     }
 
-    private static void drawTimeline(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawTimeline(GraphicsContext g) {
         g.strokeLine(1.6, 10.5, 12.2, 10.5);
         for (int i = 0; i < 4; i++) {
             double x = 2.2 + i * 2.5;
@@ -98,7 +107,7 @@ public final class StudioIcons {
         }
     }
 
-    private static void drawSimulation(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawSimulation(GraphicsContext g) {
         g.strokeOval(2.3, 4.0, 9.0, 5.0);
         g.strokeOval(4.2, 2.1, 5.2, 8.8);
         g.strokeOval(3.0, 2.6, 7.6, 7.8);
@@ -107,7 +116,7 @@ public final class StudioIcons {
         g.setFill(SOFT);
     }
 
-    private static void drawSliders(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawSliders(GraphicsContext g) {
         g.strokeLine(2.2, 3.2, 11.4, 3.2);
         g.strokeLine(2.2, 7.0, 11.4, 7.0);
         g.strokeLine(2.2, 10.8, 11.4, 10.8);
@@ -118,7 +127,7 @@ public final class StudioIcons {
         g.setFill(SOFT);
     }
 
-    private static void drawPin(javafx.scene.canvas.GraphicsContext g) {
+    private static void drawPin(GraphicsContext g) {
         g.setStroke(ACCENT);
         g.strokeOval(3.2, 2.0, 5.2, 5.2);
         g.strokeLine(5.8, 7.2, 5.8, 11.3);

@@ -49,6 +49,6 @@ class LegacyImportServiceTest {
             .toList();
         assertEquals(2, bookmarks.size());
         assertEquals(BookmarkKind.FIRST, bookmarks.getFirst().bookmarkKind());
-        assertEquals(BookmarkKind.LATEST, bookmarks.getLast().bookmarkKind());
+        assertEquals(BookmarkKind.LAST, bookmarks.getLast().bookmarkKind());
     }
 }

@@ -74,6 +74,9 @@ public class StudioSession {
             refreshReferenceFrame();
             refreshGeometryShading();
         });
+
+        // Load default points of interest so the table is populated on startup.
+        points.resetToDefaults();
     }
 
     public void setDocument(java.io.File file, BlochData data) {

@@ -114,8 +114,8 @@ public final class ExplorerTreeBuilder {
             if (child.kind() == ProjectNodeKind.SIMULATION) simulations.getChildren().add(buildNode(repository, childId));
             if (child.kind() == ProjectNodeKind.OPTIMISATION_CONFIG) optimisations.getChildren().add(buildNode(repository, childId));
         }
-        item.getChildren().add(simulations);
-        item.getChildren().add(optimisations);
+        if (!simulations.getChildren().isEmpty()) item.getChildren().add(simulations);
+        if (!optimisations.getChildren().isEmpty()) item.getChildren().add(optimisations);
         item.setExpanded(true);
         return item;
     }

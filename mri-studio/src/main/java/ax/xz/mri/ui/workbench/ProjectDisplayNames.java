@@ -27,7 +27,7 @@ public final class ProjectDisplayNames {
     public static String bookmarkLabel(RunBookmarkDocument bookmark) {
         return switch (bookmark.bookmarkKind()) {
             case FIRST -> "First Iteration";
-            case LATEST -> "Last Iteration";
+            case LAST -> "Last Iteration";
             case BEST -> "Best Iteration";
             case MILESTONE -> bookmark.name();
         };

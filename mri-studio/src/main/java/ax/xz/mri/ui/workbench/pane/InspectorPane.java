@@ -1,23 +1,48 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.project.*;
+import ax.xz.mri.project.CaptureDocument;
+import ax.xz.mri.project.ImportLinkDocument;
+import ax.xz.mri.project.ImportedCaptureDocument;
+import ax.xz.mri.project.ImportedOptimisationRunDocument;
+import ax.xz.mri.project.ImportedScenarioDocument;
+import ax.xz.mri.project.OptimisationConfigDocument;
+import ax.xz.mri.project.OptimisationRunDocument;
+import ax.xz.mri.project.ProjectNode;
+import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.ProjectNodeKind;
+import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.project.RunBookmarkDocument;
+import ax.xz.mri.project.SequenceDocument;
+import ax.xz.mri.project.SequenceSnapshotDocument;
+import ax.xz.mri.project.SimulationDocument;
 import ax.xz.mri.ui.workbench.CommandId;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.ProjectDisplayNames;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import ax.xz.mri.ui.workbench.StudioIcons;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
-import javafx.beans.binding.Bindings;
+import javafx.beans.InvalidationListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
-import javafx.scene.control.*;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
+import javafx.scene.control.Slider;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /** Context-sensitive right sidebar for metadata, run scrubbing, and object actions. */
 public final class InspectorPane extends WorkbenchPane {
     private final VBox content = new VBox(10);
+
+    /** Listeners attached to session properties during the last refresh; detached on next refresh. */
+    private final List<ListenerBinding<?>> activeBindings = new ArrayList<>();
 
     public InspectorPane(PaneContext paneContext) {
         super(paneContext);
@@ -34,6 +59,10 @@ public final class InspectorPane extends WorkbenchPane {
     }
 
     private void refresh() {
+        // Detach listeners from the previous refresh cycle to prevent leaks.
+        for (var binding : activeBindings) binding.detach();
+        activeBindings.clear();
+
         content.getChildren().clear();
         var repo = paneContext.session().project.repository.get();
         ProjectNodeId nodeId = paneContext.session().project.inspector.inspectedNodeId.get();
@@ -81,7 +110,7 @@ public final class InspectorPane extends WorkbenchPane {
             content.getChildren().add(infoLine("Scenario", scenario.sourceScenarioName()));
             content.getChildren().add(infoLine("Iterations", Integer.toString(scenario.iterationKeys().size())));
             var run = (ImportedOptimisationRunDocument) repository.node(scenario.importedRunId());
-            populateRun(repository, ProjectDisplayNames.label(run), run.id(), run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
+            populateRun(repository, run.name(), run.id(), run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
         } else if (!scenario.directCaptureIds().isEmpty()) {
             var capture = repository.resolveCapture(scenario.directCaptureIds().getFirst());
             if (capture != null) {
@@ -118,39 +147,57 @@ public final class InspectorPane extends WorkbenchPane {
                 paneContext.session().project.seekRunCapture(captureId);
             }
         });
-        navigation.activeCaptureIndex.addListener((obs, oldValue, newValue) -> {
-            double desired = Math.max(0, Math.min(newValue.intValue(), captureIds.size() - 1));
+
+        // Bind slider to the run navigation index — track this listener for cleanup.
+        InvalidationListener indexListener = obs -> {
+            double desired = Math.max(0, Math.min(navigation.activeCaptureIndex.get(), captureIds.size() - 1));
             if (Math.abs(slider.getValue() - desired) > 1e-9) {
                 slider.setValue(desired);
             }
-        });
+        };
+        navigation.activeCaptureIndex.addListener(indexListener);
+        activeBindings.add(new ListenerBinding<>(navigation.activeCaptureIndex, indexListener));
+
         var iterationLabel = new Label();
-        iterationLabel.textProperty().bind(Bindings.createStringBinding(() -> {
+        InvalidationListener iterLabelListener = obs -> {
             int index = navigation.activeCaptureIndex.get();
-            if (index < 0 || index >= captureIds.size()) return "\u2014";
+            if (index < 0 || index >= captureIds.size()) {
+                iterationLabel.setText("\u2014");
+                return;
+            }
             var capture = repository.resolveCapture(captureIds.get(index));
-            return capture == null || capture.iterationKey() == null ? "\u2014" : capture.iterationKey();
-        }, navigation.activeCaptureIndex));
+            iterationLabel.setText(capture == null || capture.iterationKey() == null ? "\u2014" : capture.iterationKey());
+        };
+        iterLabelListener.invalidated(null); // initial value
+        navigation.activeCaptureIndex.addListener(iterLabelListener);
+        activeBindings.add(new ListenerBinding<>(navigation.activeCaptureIndex, iterLabelListener));
+
         content.getChildren().add(section("Iteration", slider, infoLine("Key", iterationLabel)));
 
         var activeCaptureLabel = new Label();
-        activeCaptureLabel.textProperty().bind(Bindings.createStringBinding(() -> {
+        InvalidationListener captureListener = obs -> {
             var capture = paneContext.session().project.activeCapture.activeCapture.get();
-            return capture == null ? "\u2014" : capture.name();
-        }, paneContext.session().project.activeCapture.activeCapture));
+            activeCaptureLabel.setText(capture == null ? "\u2014" : capture.name());
+        };
+        captureListener.invalidated(null);
+        paneContext.session().project.activeCapture.activeCapture.addListener(captureListener);
+        activeBindings.add(new ListenerBinding<>(paneContext.session().project.activeCapture.activeCapture, captureListener));
         content.getChildren().add(infoLine("Active Capture", activeCaptureLabel));
 
         var iterationKeyLabel = new Label();
-        iterationKeyLabel.textProperty().bind(Bindings.createStringBinding(() -> {
+        InvalidationListener iterKeyListener = obs -> {
             var capture = paneContext.session().project.activeCapture.activeCapture.get();
-            return capture == null || capture.iterationKey() == null ? "\u2014" : capture.iterationKey();
-        }, paneContext.session().project.activeCapture.activeCapture));
+            iterationKeyLabel.setText(capture == null || capture.iterationKey() == null ? "\u2014" : capture.iterationKey());
+        };
+        iterKeyListener.invalidated(null);
+        paneContext.session().project.activeCapture.activeCapture.addListener(iterKeyListener);
+        activeBindings.add(new ListenerBinding<>(paneContext.session().project.activeCapture.activeCapture, iterKeyListener));
         content.getChildren().add(infoLine("Iteration Key", iterationKeyLabel));
 
-        var actions = new java.util.ArrayList<Node>();
-        if (firstCaptureId != null) actions.add(button("First", () -> paneContext.session().project.seekRunCapture(firstCaptureId)));
-        if (latestCaptureId != null) actions.add(button("Last", () -> paneContext.session().project.seekRunCapture(latestCaptureId)));
-        if (bestCaptureId != null) actions.add(button("Best", () -> paneContext.session().project.seekRunCapture(bestCaptureId)));
+        var actions = new ArrayList<Node>();
+        if (firstCaptureId != null) actions.add(button("First Iteration", () -> paneContext.session().project.seekRunCapture(firstCaptureId)));
+        if (latestCaptureId != null) actions.add(button("Last Iteration", () -> paneContext.session().project.seekRunCapture(latestCaptureId)));
+        if (bestCaptureId != null) actions.add(button("Best Iteration", () -> paneContext.session().project.seekRunCapture(bestCaptureId)));
         if (!actions.isEmpty()) content.getChildren().add(actionRow(actions.toArray(Node[]::new)));
 
         content.getChildren().add(actionRow(
@@ -187,7 +234,13 @@ public final class InspectorPane extends WorkbenchPane {
         content.getChildren().add(infoLine("Kind", "Sequence"));
         content.getChildren().add(infoLine("Segments", Integer.toString(sequence.segments().size())));
         content.getChildren().add(infoLine("Pulse Segments", Integer.toString(sequence.pulse().size())));
-        content.getChildren().add(actionRow(button("Rename", () -> renameSequence(sequence.id()))));
+        content.getChildren().add(actionRow(
+            button("Rename", () -> renameSequence(sequence.id())),
+            button("Delete", () -> {
+                paneContext.session().project.selectNode(sequence.id());
+                paneContext.controller().commandRegistry().execute(CommandId.DELETE_SEQUENCE);
+            })
+        ));
     }
 
     private void populateBookmark(RunBookmarkDocument bookmark) {
@@ -229,16 +282,14 @@ public final class InspectorPane extends WorkbenchPane {
         name.getStyleClass().add("inspector-key");
         var body = new Label(value == null ? "\u2014" : value);
         body.setWrapText(true);
-        var box = new VBox(2, name, body);
-        return box;
+        return new VBox(2, name, body);
     }
 
     private Node infoLine(String label, Label body) {
         var name = new Label(label + ":");
         name.getStyleClass().add("inspector-key");
         body.setWrapText(true);
-        var box = new VBox(2, name, body);
-        return box;
+        return new VBox(2, name, body);
     }
 
     private Node section(String title, Node... children) {
@@ -270,10 +321,14 @@ public final class InspectorPane extends WorkbenchPane {
         dialog.setTitle("Rename Sequence");
         dialog.setHeaderText("Rename sequence");
         dialog.setContentText("Name:");
-        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value -> {
-            repository.renameSequence(sequenceId, value);
-            paneContext.session().project.explorer.refresh();
-            paneContext.session().project.selectNode(sequenceId);
-        });
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
+            paneContext.session().project.renameSequence(sequenceId, value));
+    }
+
+    /** Tracks a listener attached to an observable so it can be cleanly detached later. */
+    private record ListenerBinding<T extends javafx.beans.Observable>(T observable, InvalidationListener listener) {
+        void detach() {
+            observable.removeListener(listener);
+        }
     }
 }

@@ -7,6 +7,7 @@ import javafx.scene.control.Menu;
 import javafx.scene.control.MenuBar;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 
@@ -46,14 +47,12 @@ public class StudioShell extends BorderPane {
     private MenuBar buildMenuBar() {
         var fileMenu = new Menu("File");
         fileMenu.getItems().addAll(
-            menuItem("Open Project\u2026", CommandId.OPEN_PROJECT),
-            menuItem("Save Project", CommandId.SAVE_PROJECT),
-            menuItem("Save Project As\u2026", CommandId.SAVE_PROJECT_AS),
+            menuItem("Open Project\u2026", CommandId.OPEN_PROJECT, KeyCombination.keyCombination("Shortcut+O")),
+            menuItem("Save Project", CommandId.SAVE_PROJECT, KeyCombination.keyCombination("Shortcut+S")),
+            menuItem("Save Project As\u2026", CommandId.SAVE_PROJECT_AS, KeyCombination.keyCombination("Shortcut+Shift+S")),
             new SeparatorMenuItem(),
-            menuItem("Import JSON\u2026", CommandId.IMPORT_JSON),
-            menuItem("Reload Import", CommandId.RELOAD_FILE),
-            new SeparatorMenuItem(),
-            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE),
+            menuItem("Import JSON\u2026", CommandId.IMPORT_JSON, KeyCombination.keyCombination("Shortcut+I")),
+            menuItem("Reload Import", CommandId.RELOAD_FILE, KeyCombination.keyCombination("Shortcut+R")),
             new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
@@ -65,25 +64,25 @@ public class StudioShell extends BorderPane {
 
         var viewMenu = new Menu("View");
         viewMenu.getItems().addAll(
-            menuItem("Reset Layout", CommandId.RESET_LAYOUT),
-            menuItem("Save Layout", CommandId.SAVE_LAYOUT),
-            menuItem("Load Layout", CommandId.LOAD_LAYOUT)
+            menuItem("Reset Layout", CommandId.RESET_LAYOUT, null),
+            menuItem("Save Layout", CommandId.SAVE_LAYOUT, null),
+            menuItem("Load Layout", CommandId.LOAD_LAYOUT, null)
         );
 
         var windowMenu = new Menu("Window");
         windowMenu.setOnShowing(event -> controller.populateWindowMenu(windowMenu));
         windowMenu.getItems().addAll(
-            menuItem("Float Active Pane", CommandId.FLOAT_ACTIVE_PANE),
-            menuItem("Dock Active Pane", CommandId.DOCK_ACTIVE_PANE),
-            menuItem("Focus Active Pane", CommandId.FOCUS_ACTIVE_PANE)
+            menuItem("Float Active Pane", CommandId.FLOAT_ACTIVE_PANE, null),
+            menuItem("Dock Active Pane", CommandId.DOCK_ACTIVE_PANE, null),
+            menuItem("Focus Active Pane", CommandId.FOCUS_ACTIVE_PANE, null)
         );
 
         var analysisMenu = new Menu("Analysis");
         analysisMenu.getItems().addAll(
-            menuItem("Reset Points", CommandId.RESET_POINTS),
-            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS),
+            menuItem("Reset Points", CommandId.RESET_POINTS, null),
+            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS, null),
             new SeparatorMenuItem(),
-            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE)
+            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, null)
         );
 
         return new MenuBar(fileMenu, viewMenu, windowMenu, analysisMenu);
@@ -98,9 +97,10 @@ public class StudioShell extends BorderPane {
         return bar;
     }
 
-    private MenuItem menuItem(String label, CommandId id) {
+    private MenuItem menuItem(String label, CommandId id, KeyCombination accelerator) {
         var item = new MenuItem(label);
         item.setOnAction(event -> controller.commandRegistry().execute(id));
+        if (accelerator != null) item.setAccelerator(accelerator);
         return item;
     }
 }

@@ -111,6 +111,26 @@ public final class ProjectRepository {
         return sequence;
     }
 
+    public void removeSequence(ProjectNodeId sequenceId) {
+        var node = nodes.get(sequenceId);
+        if (!(node instanceof SequenceDocument)) {
+            throw new IllegalArgumentException("Node " + sequenceId + " is not a sequence");
+        }
+        // Remove children (simulations, configs, etc.) recursively
+        Deque<ProjectNodeId> stack = new ArrayDeque<>();
+        stack.push(sequenceId);
+        while (!stack.isEmpty()) {
+            var current = stack.pop();
+            for (var child : new ArrayList<>(children.getOrDefault(current, List.of()))) {
+                stack.push(child);
+            }
+            children.remove(current);
+            parent.remove(current);
+            nodes.remove(current);
+        }
+        sequenceIds.remove(sequenceId);
+    }
+
     public SequenceDocument renameSequence(ProjectNodeId sequenceId, String newName) {
         var node = nodes.get(sequenceId);
         if (!(node instanceof SequenceDocument sequence)) {
@@ -218,12 +238,9 @@ public final class ProjectRepository {
     }
 
     public ProjectNodeId firstOpenableNodeForImport(ProjectNodeId importLinkId) {
-        for (var scenarioId : importIndexes.getOrDefault(importLinkId, new ImportIndexDocument(
-            new ProjectNodeId("missing"),
-            importLinkId,
-            List.of()
-        )).scenarioIds()) {
-            return scenarioId;
+        var index = importIndexes.get(importLinkId);
+        if (index != null && !index.scenarioIds().isEmpty()) {
+            return index.scenarioIds().getFirst();
         }
         return importLinkId;
     }

@@ -1,6 +1,21 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.project.*;
+import ax.xz.mri.project.CaptureDocument;
+import ax.xz.mri.project.ImportLinkDocument;
+import ax.xz.mri.project.ImportedCaptureDocument;
+import ax.xz.mri.project.ImportedOptimisationRunDocument;
+import ax.xz.mri.project.ImportedProjectBundle;
+import ax.xz.mri.project.ImportedScenarioDocument;
+import ax.xz.mri.project.LegacyImportService;
+import ax.xz.mri.project.OptimisationRunDocument;
+import ax.xz.mri.project.ProjectManifest;
+import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.project.ProjectSerialiser;
+import ax.xz.mri.project.RunBookmarkDocument;
+import ax.xz.mri.project.SequenceDocument;
+import ax.xz.mri.project.SequenceSnapshotDocument;
+import ax.xz.mri.project.SimulationDocument;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
@@ -24,11 +39,7 @@ public final class ProjectSessionViewModel {
     private final ProjectSerialiser serialiser = new ProjectSerialiser();
 
     public ProjectSessionViewModel() {
-        explorer.repository.set(repository.get());
-        repository.addListener((obs, oldValue, newValue) -> {
-            explorer.repository.set(newValue);
-            explorer.refresh();
-        });
+        repository.addListener((obs, oldValue, newValue) -> explorer.refresh());
         runNavigation.activeCaptureId.addListener((obs, oldValue, newValue) -> {
             if (newValue == null) {
                 if (runNavigation.activeRunId.get() != null) {
@@ -129,6 +140,12 @@ public final class ProjectSessionViewModel {
         openImport(new File(link.sourcePath()));
     }
 
+    public void reloadImport(ProjectNodeId importLinkId) throws IOException {
+        var node = repository.get().node(importLinkId);
+        if (!(node instanceof ImportLinkDocument link)) return;
+        openImport(new File(link.sourcePath()));
+    }
+
     public void selectNode(ProjectNodeId nodeId) {
         explorer.selectedNodeId.set(nodeId);
         inspector.inspectedNodeId.set(nodeId);
@@ -148,7 +165,7 @@ public final class ProjectSessionViewModel {
                 inspector.inspectedNodeId.set(visibleOwner);
                 syncActiveCaptureFromRun();
             }
-            case ax.xz.mri.project.ImportedScenarioDocument scenario -> {
+            case ImportedScenarioDocument scenario -> {
                 if (scenario.iterative() && scenario.importedRunId() != null) {
                     runNavigation.openRun(repo, scenario.importedRunId(), null);
                     workspace.activeNodeId.set(nodeId);
@@ -164,13 +181,13 @@ public final class ProjectSessionViewModel {
                     activeCapture.activeCapture.set(null);
                 }
             }
-            case ax.xz.mri.project.ImportedOptimisationRunDocument ignored -> {
+            case ImportedOptimisationRunDocument _ -> {
                 runNavigation.openRun(repo, nodeId, null);
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 syncActiveCaptureFromRun();
             }
-            case OptimisationRunDocument ignored -> {
+            case OptimisationRunDocument _ -> {
                 runNavigation.openRun(repo, nodeId, null);
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
@@ -182,14 +199,14 @@ public final class ProjectSessionViewModel {
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(repo.resolveCapture(nodeId));
             }
-            case ax.xz.mri.project.SequenceSnapshotDocument _ -> {
+            case SequenceSnapshotDocument _ -> {
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 runNavigation.clear();
                 activeCapture.activeCapture.set(null);
             }
-            case ax.xz.mri.project.SimulationDocument simulation -> openNode(simulation.captureId());
-            case ax.xz.mri.project.ImportLinkDocument ignored -> {
+            case SimulationDocument simulation -> openNode(simulation.captureId());
+            case ImportLinkDocument _ -> {
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(null);
@@ -203,16 +220,36 @@ public final class ProjectSessionViewModel {
         }
     }
 
+    public void renameSequence(ProjectNodeId sequenceId, String newName) {
+        repository.get().renameSequence(sequenceId, newName);
+        explorer.refresh();
+        selectNode(sequenceId);
+    }
+
+    public void deleteSequence(ProjectNodeId sequenceId) {
+        repository.get().removeSequence(sequenceId);
+        // If the deleted sequence was the active workspace object, clear state.
+        if (sequenceId.equals(workspace.activeNodeId.get())) {
+            workspace.activeNodeId.set(null);
+            activeCapture.activeCapture.set(null);
+            runNavigation.clear();
+        }
+        if (sequenceId.equals(inspector.inspectedNodeId.get())) {
+            inspector.inspectedNodeId.set(null);
+        }
+        explorer.refresh();
+    }
+
     public void promoteSelectedSnapshotToSequence() {
         promoteSnapshotForNode(inspector.inspectedNodeId.get());
     }
 
     public void promoteActiveSnapshotToSequence() {
-        if (workspace.activeNodeId.get() != null) {
-            promoteSnapshotForNode(workspace.activeNodeId.get());
-            return;
-        }
-        promoteSnapshotForNode(inspector.inspectedNodeId.get());
+        // Prefer the inspected node (what the user is looking at in the Inspector),
+        // falling back to the workspace active node.
+        var target = inspector.inspectedNodeId.get();
+        if (target == null) target = workspace.activeNodeId.get();
+        promoteSnapshotForNode(target);
     }
 
     public void seekRunCapture(ProjectNodeId captureId) {

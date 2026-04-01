@@ -12,7 +12,8 @@ public enum PaneId {
     PHASE_MAP_R("Phase Map R"),
     TRACE_PHASE("Phase Trace"),
     TRACE_POLAR("Polar Trace"),
-    TRACE_MAGNITUDE("Magnitude Trace");
+    TRACE_MAGNITUDE("Magnitude Trace"),
+    SEQUENCE_EDITOR("Sequence Editor");
 
     private final String title;
 

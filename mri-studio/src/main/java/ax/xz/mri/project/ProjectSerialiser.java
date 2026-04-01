@@ -83,7 +83,11 @@ public final class ProjectSerialiser {
             String key = line.substring(0, split).trim();
             String value = line.substring(split + 1).trim();
             if (value.startsWith("\"") && value.endsWith("\"") && value.length() >= 2) {
-                value = value.substring(1, value.length() - 1).replace("\\\"", "\"");
+                value = value.substring(1, value.length() - 1)
+                    .replace("\\n", "\n")
+                    .replace("\\t", "\t")
+                    .replace("\\\\", "\\")
+                    .replace("\\\"", "\"");
             }
             values.put(key, value);
         }
@@ -91,6 +95,9 @@ public final class ProjectSerialiser {
     }
 
     private static String escape(String value) {
-        return value.replace("\"", "\\\"");
+        return value.replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t");
     }
 }

@@ -69,7 +69,7 @@ public final class LegacyImportService {
                 }
 
                 var firstCaptureId = captureIds.get(0);
-                var latestCaptureId = captureIds.get(captureIds.size() - 1);
+                var lastCaptureId = captureIds.get(captureIds.size() - 1);
                 nodeMap.put(runId, new ImportedOptimisationRunDocument(
                     runId,
                     importLinkId,
@@ -77,12 +77,12 @@ public final class LegacyImportService {
                     scenarioName,
                     captureIds,
                     firstCaptureId,
-                    latestCaptureId,
+                    lastCaptureId,
                     null,
                     List.of()
                 ));
                 var firstBookmarkId = stableId("bookmark-first", importSeed, scenarioName);
-                var latestBookmarkId = stableId("bookmark-latest", importSeed, scenarioName);
+                var lastBookmarkId = stableId("bookmark-latest", importSeed, scenarioName);
                 nodeMap.put(firstBookmarkId, new RunBookmarkDocument(
                     firstBookmarkId,
                     "First Iteration",
@@ -91,15 +91,15 @@ public final class LegacyImportService {
                     BookmarkKind.FIRST,
                     iterationKeys.get(0)
                 ));
-                nodeMap.put(latestBookmarkId, new RunBookmarkDocument(
-                    latestBookmarkId,
+                nodeMap.put(lastBookmarkId, new RunBookmarkDocument(
+                    lastBookmarkId,
                     "Last Iteration",
                     runId,
-                    latestCaptureId,
-                    BookmarkKind.LATEST,
+                    lastCaptureId,
+                    BookmarkKind.LAST,
                     iterationKeys.get(iterationKeys.size() - 1)
                 ));
-                childMap.put(runId, List.of(firstBookmarkId, latestBookmarkId));
+                childMap.put(runId, List.of(firstBookmarkId, lastBookmarkId));
             } else {
                 String iterationKey = iterationKeys.isEmpty() ? "0" : iterationKeys.get(0);
                 var captureId = stableId("capture", importSeed, scenarioName, iterationKey);

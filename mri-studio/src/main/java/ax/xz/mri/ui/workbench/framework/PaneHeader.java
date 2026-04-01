@@ -29,6 +29,8 @@ public class PaneHeader extends HBox {
         setPadding(new Insets(2, 4, 2, 4));
         setSpacing(6);
 
+        // The title label is hidden because BentoFX tab headers already display the pane name.
+        // It remains in the scene graph for accessibility (screen readers) via setTitle().
         titleLabel.getStyleClass().add("pane-title");
         titleLabel.setManaged(false);
         titleLabel.setVisible(false);

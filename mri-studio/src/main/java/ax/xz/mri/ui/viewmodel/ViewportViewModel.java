@@ -36,7 +36,7 @@ public class ViewportViewModel {
         vE.set(max);
         tS.set(0);
         tE.set(max);
-        tC.set(0);
+        tC.set(max / 2.0);
         normalize();
     }
 

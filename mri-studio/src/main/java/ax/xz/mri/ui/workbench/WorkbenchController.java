@@ -1,9 +1,8 @@
 package ax.xz.mri.ui.workbench;
 
-import ax.xz.mri.project.ProjectNode;
-import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.ExplorerPane;
+import ax.xz.mri.ui.workbench.pane.SequenceEditorPane;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
 import ax.xz.mri.ui.workbench.pane.InspectorPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
@@ -54,6 +53,11 @@ public class WorkbenchController {
 
     private Bento bento;
     private DockContainerRootBranch rootBranch;
+    /** The centre-shell branch that holds analysis panes (timeline + workspace). */
+    private software.coley.bentofx.layout.container.DockContainerBranch centreShellBranch;
+    /** The sequence editor leaf, swapped into the root when editing a sequence. */
+    private DockContainerLeaf sequenceEditorLeaf;
+    private boolean inSequenceEditorMode;
     private Stage mainStage;
     private boolean disposed;
 
@@ -62,6 +66,7 @@ public class WorkbenchController {
         initializePanes();
         registerCommands();
         installShellStatusBindings();
+        installWorkspaceSwitching();
     }
 
     public void initialize(Stage stage) {
@@ -233,7 +238,7 @@ public class WorkbenchController {
             new javafx.scene.control.SeparatorMenuItem()
         );
         for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR) continue;
+            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR) continue;
             var focus = new MenuItem("Focus " + paneId.title());
             focus.setOnAction(event -> focusPane(paneId));
             menu.getItems().add(focus);
@@ -241,46 +246,42 @@ public class WorkbenchController {
     }
 
     public Node buildMainToolStrip() {
-        var projectLabel = new Label();
-        var objectLabel = new Label();
-        Runnable refreshLabels = () -> {
-            String projectName = session.project.repository.get().manifest().name();
-            projectLabel.setText(session.project.projectRoot.get() == null
-                ? "Project: " + projectName + " (unsaved)"
-                : "Project: " + projectName);
-            objectLabel.setText("Open: " + describeNode(session.project.workspace.activeNodeId.get()));
-        };
-        refreshLabels.run();
-        session.project.repository.addListener((obs, oldValue, newValue) -> refreshLabels.run());
-        session.project.workspace.activeNodeId.addListener((obs, oldValue, newValue) -> refreshLabels.run());
-        session.project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> refreshLabels.run());
-        session.project.projectRoot.addListener((obs, oldValue, newValue) -> refreshLabels.run());
-
-        var activePaneLabel = new Label();
-        session.docking.activePaneId.addListener((obs, oldValue, newValue) ->
-            activePaneLabel.setText(newValue == null ? "No active pane" : "Active: " + newValue.title()));
-        activePaneLabel.setText("No active pane");
-
+        var contextLabel = new Label();
         var computeStatus = new Label();
         session.derived.computing.addListener((obs, oldValue, newValue) ->
             computeStatus.setText(newValue ? "Computing\u2026" : ""));
-        computeStatus.setText("");
 
-        var bar = new javafx.scene.layout.HBox(8,
-            new Button("Open Project") {{
-                setOnAction(event -> openProjectChooser());
-            }},
-            new Button("Import JSON") {{
-                setOnAction(event -> importJsonChooser());
-            }},
-            projectLabel,
-            objectLabel,
-            new javafx.scene.layout.Region() {{
-                javafx.scene.layout.HBox.setHgrow(this, javafx.scene.layout.Priority.ALWAYS);
-            }},
-            activePaneLabel,
-            computeStatus
-        );
+        Runnable refreshContext = () -> {
+            var nodeId = session.project.workspace.activeNodeId.get();
+            var repo = session.project.repository.get();
+            var node = nodeId == null ? null : repo.node(nodeId);
+            if (node instanceof ax.xz.mri.project.SequenceDocument seq) {
+                contextLabel.setText("Editing: " + seq.name()
+                    + " \u2014 " + seq.segments().size() + " segments, "
+                    + seq.pulse().stream().mapToInt(p -> p.steps().size()).sum() + " steps");
+            } else {
+                var capture = session.project.activeCapture.activeCapture.get();
+                String projectName = repo.manifest().name();
+                if (capture != null) {
+                    contextLabel.setText(projectName + " \u203a " + capture.name()
+                        + (capture.iterationKey() != null ? " \u203a Iter " + capture.iterationKey() : ""));
+                } else if (node != null) {
+                    contextLabel.setText(projectName + " \u203a " + node.name());
+                } else {
+                    contextLabel.setText(projectName);
+                }
+            }
+        };
+        refreshContext.run();
+        session.project.workspace.activeNodeId.addListener((obs, o, n) -> refreshContext.run());
+        session.project.activeCapture.activeCapture.addListener((obs, o, n) -> refreshContext.run());
+        session.project.repository.addListener((obs, o, n) -> refreshContext.run());
+        session.project.explorer.structureRevision.addListener((obs, o, n) -> refreshContext.run());
+
+        var spacer = new javafx.scene.layout.Region();
+        javafx.scene.layout.HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
+
+        var bar = new javafx.scene.layout.HBox(8, contextLabel, spacer, computeStatus);
         bar.getStyleClass().add("shell-tool-strip");
         bar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         bar.setPadding(new javafx.geometry.Insets(4, 6, 4, 6));
@@ -307,6 +308,7 @@ public class WorkbenchController {
             case TRACE_PHASE -> new PhaseTracePane(context);
             case TRACE_POLAR -> new PolarTracePane(context);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
+            case SEQUENCE_EDITOR -> new SequenceEditorPane(context);
         };
     }
 
@@ -335,17 +337,20 @@ public class WorkbenchController {
         commandRegistry.register(new PaneAction(CommandId.CLEAR_USER_POINTS, "Clear User Points", session.points::clearUserPoints));
         commandRegistry.register(new PaneAction(CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, "Promote to Sequence",
             session.project::promoteActiveSnapshotToSequence));
+        commandRegistry.register(new PaneAction(CommandId.DELETE_SEQUENCE, "Delete Sequence", () -> {
+            var nodeId = session.project.inspector.inspectedNodeId.get();
+            if (nodeId != null && session.project.repository.get().node(nodeId) instanceof ax.xz.mri.project.SequenceDocument) {
+                session.project.deleteSequence(nodeId);
+            }
+        }));
     }
 
     private void installShellStatusBindings() {
-        session.project.workspace.activeNodeId.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.project.activeCapture.activeCapture.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.project.runNavigation.activeCaptureIndex.addListener((obs, oldValue, newValue) -> updateShellStatus());
-        session.project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.viewport.tC.addListener((obs, oldValue, newValue) -> updateShellStatus());
         session.points.entries.addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.model.IsochromatEntry>) change ->
             updateShellStatus());
-        session.docking.activePaneId.addListener((obs, oldValue, newValue) -> updateShellStatus());
     }
 
     private void rebuildWorkbench() {
@@ -375,6 +380,7 @@ public class WorkbenchController {
         var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
         var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
+        var seqEditor = registerLeaf(builder, PaneId.SEQUENCE_EDITOR);
 
         root.setOrientation(Orientation.HORIZONTAL);
         centreShell.setOrientation(Orientation.VERTICAL);
@@ -385,6 +391,9 @@ public class WorkbenchController {
         phaseMaps.setOrientation(Orientation.HORIZONTAL);
         phaseTraces.setOrientation(Orientation.HORIZONTAL);
 
+        // Layout: Explorer | centreShell | Inspector
+        // In analysis mode, centreShell = timeline + workspace.
+        // In sequence editor mode, centreShell is replaced by seqEditor in the root branch.
         root.addContainers(explorer, centreShell, inspector);
         centreShell.addContainers(timeline, workspace);
         workspace.addContainers(upper, lower);
@@ -411,8 +420,43 @@ public class WorkbenchController {
         centreShell.setContainerSizePx(timeline, 250);
 
         rootBranch = root;
+        centreShellBranch = centreShell;
+        sequenceEditorLeaf = seqEditor;
+        inSequenceEditorMode = false;
+
         dockContainer.setCenter(rootBranch);
         activatePane(PaneId.TIMELINE);
+    }
+
+    private void installWorkspaceSwitching() {
+        session.project.workspace.activeNodeId.addListener((obs, oldNodeId, newNodeId) -> {
+            if (newNodeId != null && session.project.repository.get().node(newNodeId)
+                    instanceof ax.xz.mri.project.SequenceDocument seq) {
+                showSequenceEditor(seq);
+            } else {
+                showAnalysisWorkspace();
+            }
+        });
+    }
+
+    private void showSequenceEditor(ax.xz.mri.project.SequenceDocument document) {
+        var editorPane = (SequenceEditorPane) panes.get(PaneId.SEQUENCE_EDITOR);
+        editorPane.open(document);
+        if (!inSequenceEditorMode) {
+            // Swap the centre: replace centreShell with the sequence editor leaf in the root branch.
+            rootBranch.replaceContainer(centreShellBranch, sequenceEditorLeaf);
+            inSequenceEditorMode = true;
+        }
+        activatePane(PaneId.SEQUENCE_EDITOR);
+    }
+
+    private void showAnalysisWorkspace() {
+        if (inSequenceEditorMode) {
+            // Swap back: replace the sequence editor leaf with centreShell in the root branch.
+            rootBranch.replaceContainer(sequenceEditorLeaf, centreShellBranch);
+            inSequenceEditorMode = false;
+            activatePane(PaneId.TIMELINE);
+        }
     }
 
     private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
@@ -422,7 +466,7 @@ public class WorkbenchController {
         dockable.setTitle(paneId.title());
         dockable.setNode(panes.get(paneId));
         dockable.setClosable(false);
-        boolean pinned = paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR;
+        boolean pinned = paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR;
         dockable.setCanBeDragged(!pinned);
         dockable.setCanBeDroppedToNewWindow(!pinned);
         dockable.setDragGroup(STUDIO_DRAG_GROUP);
@@ -489,33 +533,23 @@ public class WorkbenchController {
 
     private void updateShellStatus() {
         var activeCapture = session.project.activeCapture.activeCapture.get();
-        String openObject = describeNode(session.project.workspace.activeNodeId.get());
         String capture = activeCapture == null ? "\u2014" : activeCapture.name();
         String iter = activeCapture == null || activeCapture.iterationKey() == null ? "\u2014" : activeCapture.iterationKey();
-        String activePane = session.docking.activePaneId.get() == null ? "\u2014" : session.docking.activePaneId.get().title();
         String paneStatus = session.docking.activePaneId.get() == null
             ? ""
             : paneStatuses.getOrDefault(session.docking.activePaneId.get(), "");
         long visible = session.points.entries.stream().filter(ax.xz.mri.ui.model.IsochromatEntry::visible).count();
         shellStatus.set(String.format(
-            "Project: %s | Open: %s | Capture: %s | Iter: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible) | Active: %s%s",
-            session.project.repository.get().manifest().name(),
-            openObject,
+            "Capture: %s | Iter: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible)%s",
             capture,
             iter,
             session.viewport.tC.get(),
             session.points.entries.size(),
             visible,
-            activePane,
             paneStatus == null || paneStatus.isBlank() ? "" : " | " + paneStatus
         ));
     }
 
-    private String describeNode(ProjectNodeId nodeId) {
-        if (nodeId == null) return "\u2014";
-        ProjectNode node = session.project.repository.get().node(nodeId);
-        return node == null ? nodeId.value() : ProjectDisplayNames.label(node);
-    }
 
     private void showError(String title, String message) {
         new Alert(Alert.AlertType.ERROR, message).showAndWait();

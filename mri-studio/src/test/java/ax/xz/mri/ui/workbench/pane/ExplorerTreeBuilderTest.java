@@ -43,7 +43,7 @@ class ExplorerTreeBuilderTest {
 
         var sequences = root.getChildren().get(1);
         assertEquals("Sequence: Promoted", sequences.getChildren().getFirst().getValue().label());
-        assertEquals("Simulations", sequences.getChildren().getFirst().getChildren().get(0).getValue().label());
-        assertEquals("Optimisations", sequences.getChildren().getFirst().getChildren().get(1).getValue().label());
+        // Empty placeholder folders (Simulations, Optimisations) are hidden when they have no children.
+        assertTrue(sequences.getChildren().getFirst().getChildren().isEmpty());
     }
 }
