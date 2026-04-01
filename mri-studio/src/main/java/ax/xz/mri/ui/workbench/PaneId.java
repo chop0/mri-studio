@@ -6,8 +6,10 @@ public enum PaneId {
     CROSS_SECTION("Cross-sectional geometry"),
     POINTS("Points of Interest"),
     TIMELINE("Timeline"),
-    PHASE_MAPS("Phase Maps"),
-    TRACE_ANGLES("Phase Traces"),
+    PHASE_MAP_Z("Phase Map Z"),
+    PHASE_MAP_R("Phase Map R"),
+    TRACE_PHASE("Phase Trace"),
+    TRACE_POLAR("Polar Trace"),
     TRACE_MAGNITUDE("Magnitude Trace");
 
     private final String title;

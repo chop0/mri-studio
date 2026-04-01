@@ -5,8 +5,10 @@ import ax.xz.mri.service.io.BlochDataReader;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
-import ax.xz.mri.ui.workbench.pane.PhaseMapsWorkbenchPane;
-import ax.xz.mri.ui.workbench.pane.PhaseTracesWorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.PhaseMapRPane;
+import ax.xz.mri.ui.workbench.pane.PhaseMapZPane;
+import ax.xz.mri.ui.workbench.pane.PhaseTracePane;
+import ax.xz.mri.ui.workbench.pane.PolarTracePane;
 import ax.xz.mri.ui.workbench.pane.PointsWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.SphereWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.TimelineWorkbenchPane;
@@ -277,8 +279,10 @@ public class WorkbenchController {
             case CROSS_SECTION -> new GeometryPane(context);
             case POINTS -> new PointsWorkbenchPane(context);
             case TIMELINE -> new TimelineWorkbenchPane(context);
-            case PHASE_MAPS -> new PhaseMapsWorkbenchPane(context);
-            case TRACE_ANGLES -> new PhaseTracesWorkbenchPane(context);
+            case PHASE_MAP_Z -> new PhaseMapZPane(context);
+            case PHASE_MAP_R -> new PhaseMapRPane(context);
+            case TRACE_PHASE -> new PhaseTracePane(context);
+            case TRACE_POLAR -> new PolarTracePane(context);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
         };
     }
@@ -326,13 +330,17 @@ public class WorkbenchController {
         var upper = builder.branch("upper");
         var left = builder.branch("left");
         var lower = builder.branch("lower");
+        var phaseMaps = builder.branch("phase-maps");
+        var phaseTraces = builder.branch("phase-traces");
 
         var timeline = registerLeaf(builder, PaneId.TIMELINE);
         var sphere = registerLeaf(builder, PaneId.SPHERE);
         var geometry = registerLeaf(builder, PaneId.CROSS_SECTION);
         var points = registerLeaf(builder, PaneId.POINTS);
-        var phaseMaps = registerLeaf(builder, PaneId.PHASE_MAPS);
-        var traceAngles = registerLeaf(builder, PaneId.TRACE_ANGLES);
+        var phaseMapZ = registerLeaf(builder, PaneId.PHASE_MAP_Z);
+        var phaseMapR = registerLeaf(builder, PaneId.PHASE_MAP_R);
+        var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
+        var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
 
         root.setOrientation(Orientation.VERTICAL);
@@ -340,18 +348,24 @@ public class WorkbenchController {
         upper.setOrientation(Orientation.HORIZONTAL);
         left.setOrientation(Orientation.HORIZONTAL);
         lower.setOrientation(Orientation.HORIZONTAL);
+        phaseMaps.setOrientation(Orientation.HORIZONTAL);
+        phaseTraces.setOrientation(Orientation.HORIZONTAL);
 
         root.addContainers(timeline, workspace);
         workspace.addContainers(upper, lower);
         upper.addContainers(left, points);
         left.addContainers(sphere, geometry);
-        lower.addContainers(phaseMaps, traceAngles, traceMagnitude);
+        lower.addContainers(phaseMaps, phaseTraces, traceMagnitude);
+        phaseMaps.addContainers(phaseMapZ, phaseMapR);
+        phaseTraces.addContainers(tracePhase, tracePolar);
 
         root.setDividerPositions(0.26);
         workspace.setDividerPositions(0.62);
         upper.setDividerPositions(0.58);
         left.setDividerPositions(0.52);
-        lower.setDividerPositions(0.38, 0.74);
+        lower.setDividerPositions(0.44, 0.76);
+        phaseMaps.setDividerPositions(0.5);
+        phaseTraces.setDividerPositions(0.5);
 
         root.setContainerResizable(timeline, false);
         root.setContainerSizePx(timeline, 250);

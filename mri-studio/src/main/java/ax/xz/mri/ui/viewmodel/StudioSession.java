@@ -25,7 +25,7 @@ public class StudioSession {
     public final TracePlotViewModel tracePolar =
         new TracePlotViewModel("Polar \u03b8", "\u00b0", 0, 180, new double[]{0, 45, 90, 135, 180}, TracePlotViewModel.PlotKind.POLAR);
     public final TracePlotViewModel traceMagnitude =
-        new TracePlotViewModel("|M\u22a5|", "", 0, 1, new double[]{0, 0.25, 0.5, 0.75, 1}, TracePlotViewModel.PlotKind.MPERP);
+        new TracePlotViewModel("|M\u22a5|", "", 0, 1.08, new double[]{0, 0.25, 0.5, 0.75, 1}, TracePlotViewModel.PlotKind.MPERP);
 
     public StudioSession() {
         document.currentPulse.addListener((obs, oldPulse, newPulse) -> {

@@ -28,15 +28,33 @@ import static ax.xz.mri.ui.theme.StudioTheme.UI_BOLD_10;
 public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     private static final double OVERVIEW_H = 10;
     private static final double OVERVIEW_GAP = 6;
+    private static final double LEGEND_H = 16;
+    private static final double TITLE_H = 14;
     private static final double PAD_LEFT = 40;
     private static final double PAD_RIGHT = 8;
-    private static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP;
+    private static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP + LEGEND_H + TITLE_H;
     private static final double PAD_BOTTOM = 18;
     private static final double PLOT_GAP = 14;
+
+    private record HoverTarget(
+        IsochromatEntry entry,
+        int plotIndex,
+        double timeMicros,
+        double value,
+        double x,
+        double y,
+        double mx,
+        double my,
+        double mz
+    ) {
+    }
 
     private final AxisScrubBar.Interaction overviewInteraction;
     private int hoveredPlot = -1;
     private double hoveredTimeMicros;
+    private double hoveredMouseX;
+    private double hoveredMouseY;
+    private HoverTarget hoveredTarget;
 
     public PhaseTracesWorkbenchPane(PaneContext paneContext) {
         super(paneContext);
@@ -131,16 +149,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             }
         });
         canvas.setOnContextMenuRequested(event -> {
-            var menu = new ContextMenu();
-            if (overviewBounds().contains(event.getX(), event.getY())) {
-                var overview = new MenuItem("Overview");
-                overview.setDisable(true);
-                menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
-            } else {
-                var setCursor = new MenuItem("Set cursor here");
-                setCursor.setOnAction(actionEvent -> moveCursor(event.getX(), event.getY()));
-                menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
-            }
+            var menu = buildContextMenu(event.getX(), event.getY());
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
         });
     }
@@ -175,6 +184,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         drawTracePlot(g, plots[0], paneContext.session().tracePhase, referenceTrajectory, hoveredPlot == 0);
         drawTracePlot(g, plots[1], paneContext.session().tracePolar, referenceTrajectory, hoveredPlot == 1);
         drawLegend(g, width);
+        drawHoverOverlay(g);
     }
 
     private void drawTracePlot(
@@ -245,7 +255,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         g.setFill(TX);
         g.setFont(UI_BOLD_10);
         g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(viewModel.title(), rect.x() + rect.width() / 2, rect.y() - 3);
+        g.fillText(viewModel.title(), rect.x() + rect.width() / 2, rect.y() - 4);
         g.setTextAlign(TextAlignment.LEFT);
 
         g.save();
@@ -308,6 +318,16 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             g.strokeLine(hoverX, rect.y(), hoverX, rect.y() + rect.height());
             g.setLineDashes();
         }
+        if (hoveredTarget != null && hoveredTarget.plotIndex() == (viewModel.kind() == TracePlotViewModel.PlotKind.PHASE ? 0 : 1)) {
+            g.setStroke(Color.color(
+                hoveredTarget.entry().colour().getRed(),
+                hoveredTarget.entry().colour().getGreen(),
+                hoveredTarget.entry().colour().getBlue(),
+                0.95
+            ));
+            g.setLineWidth(1.4);
+            g.strokeOval(hoveredTarget.x() - 5, hoveredTarget.y() - 5, 10, 10);
+        }
         g.restore();
     }
 
@@ -324,8 +344,9 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     private void updateHover(double mouseX, double mouseY) {
         int next = plotIndexAt(mouseX, mouseY);
         if (next < 0) {
-            if (hoveredPlot != -1) {
+            if (hoveredPlot != -1 || hoveredTarget != null) {
                 hoveredPlot = -1;
+                hoveredTarget = null;
                 scheduleRedraw();
             }
             return;
@@ -333,7 +354,10 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         var rect = plotRects(canvas.getWidth(), canvas.getHeight())[next];
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        hoveredMouseX = mouseX;
+        hoveredMouseY = mouseY;
         hoveredTimeMicros = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
+        hoveredTarget = findHoveredTarget(next, mouseX, mouseY, rect, tMin, tMax);
         if (hoveredPlot != next) hoveredPlot = next;
         scheduleRedraw();
     }
@@ -342,6 +366,22 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         long visible = paneContext.session().points.entries.stream()
             .filter(entry -> entry.visible() && entry.trajectory() != null)
             .count();
+        if (hoveredTarget != null) {
+            String label = hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
+            setPaneStatus(String.format(
+                "%s | t=%.1f \u03bcs | %s=%s | M=(%.3f, %.3f, %.3f) | (r=%.1f mm, z=%.1f mm)",
+                hoveredTarget.entry().name(),
+                hoveredTarget.timeMicros(),
+                label,
+                formatPlotValue(label, hoveredTarget.value()),
+                hoveredTarget.mx(),
+                hoveredTarget.my(),
+                hoveredTarget.mz(),
+                hoveredTarget.entry().r(),
+                hoveredTarget.entry().z()
+            ));
+            return;
+        }
         if (hoveredPlot < 0) {
             setPaneStatus(String.format("cursor=%.1f \u03bcs | %d traces visible", paneContext.session().viewport.tC.get(), visible));
             return;
@@ -352,7 +392,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
 
     private void drawLegend(GraphicsContext g, double width) {
         double x = PAD_LEFT + 4;
-        double y = PAD_TOP + 4;
+        double y = PAD_TOP - TITLE_H - LEGEND_H + 2;
         int drawn = 0;
         for (var entry : paneContext.session().points.entries) {
             if (!entry.visible() || entry.trajectory() == null) continue;
@@ -373,6 +413,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             drawn++;
         }
     }
+
     private static double evalPlot(TracePlotViewModel.PlotKind kind, double mx, double my, double mz) {
         return switch (kind) {
             case PHASE -> {
@@ -411,6 +452,120 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
 
     private static int niceTick(double span) {
         return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
+    }
+
+    private ContextMenu buildContextMenu(double mouseX, double mouseY) {
+        var menu = new ContextMenu();
+        if (overviewBounds().contains(mouseX, mouseY)) {
+            var overview = new MenuItem("Overview");
+            overview.setDisable(true);
+            menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+            return menu;
+        }
+        if (hoveredTarget != null) {
+            String label = hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
+            var title = new MenuItem(label + ": " + hoveredTarget.entry().name());
+            title.setDisable(true);
+            var select = new MenuItem("Select " + hoveredTarget.entry().name());
+            select.setOnAction(actionEvent -> paneContext.session().selection.setSingle(hoveredTarget.entry().id()));
+            var toggle = new MenuItem(hoveredTarget.entry().visible()
+                ? "Hide " + hoveredTarget.entry().name()
+                : "Show " + hoveredTarget.entry().name());
+            toggle.setOnAction(actionEvent -> paneContext.session().points.toggleVisibility(hoveredTarget.entry().id()));
+            var setCursor = new MenuItem("Set Cursor Here");
+            setCursor.setOnAction(actionEvent -> paneContext.session().viewport.setCursor(hoveredTarget.timeMicros()));
+            menu.getItems().addAll(title, new SeparatorMenuItem(), select, toggle, setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+            return menu;
+        }
+        var setCursor = new MenuItem("Set Cursor Here");
+        setCursor.setOnAction(actionEvent -> moveCursor(mouseX, mouseY));
+        menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+        return menu;
+    }
+
+    private HoverTarget findHoveredTarget(int plotIndex, double mouseX, double mouseY, PlotRect rect, double tMin, double tMax) {
+        var referenceTrajectory = paneContext.session().reference.enabled.get()
+            ? paneContext.session().reference.trajectory.get()
+            : null;
+        var viewModel = plotIndex == 0 ? paneContext.session().tracePhase : paneContext.session().tracePolar;
+        HoverTarget best = null;
+        double bestDistanceSq = 9.0 * 9.0;
+        double tSpan = Math.max(1.0, tMax - tMin);
+        for (var entry : paneContext.session().points.entries) {
+            if (!entry.visible() || entry.trajectory() == null) continue;
+            var state = entry.trajectory().interpolateAt(hoveredTimeMicros);
+            if (state == null) continue;
+            var rotated = ReferenceFrameUtil.rotateIntoReferenceFrame(state, referenceTrajectory, hoveredTimeMicros);
+            double value = evalPlot(viewModel.kind(), rotated.mx(), rotated.my(), rotated.mz());
+            if (Double.isNaN(value)) continue;
+            double x = rect.x() + (hoveredTimeMicros - tMin) / tSpan * rect.width();
+            double y = rect.y() + rect.height() - (value - viewModel.min()) / (viewModel.max() - viewModel.min()) * rect.height();
+            double dx = mouseX - x;
+            double dy = mouseY - y;
+            double distanceSq = dx * dx + dy * dy;
+            if (distanceSq <= bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                best = new HoverTarget(
+                    entry,
+                    plotIndex,
+                    hoveredTimeMicros,
+                    value,
+                    x,
+                    y,
+                    rotated.mx(),
+                    rotated.my(),
+                    rotated.mz()
+                );
+            }
+        }
+        return best;
+    }
+
+    private void drawHoverOverlay(GraphicsContext g) {
+        if (hoveredTarget == null) return;
+        drawInfoCard(
+            g,
+            hoveredMouseX,
+            hoveredMouseY,
+            hoveredTarget.entry().colour(),
+            List.of(
+                hoveredTarget.entry().name(),
+                String.format("t = %.1f \u03bcs", hoveredTarget.timeMicros()),
+                String.format(
+                    "%s = %s",
+                    hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title(),
+                    formatPlotValue(hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title(), hoveredTarget.value())
+                ),
+                String.format("Mx = %.3f, My = %.3f", hoveredTarget.mx(), hoveredTarget.my()),
+                String.format("Mz = %.3f", hoveredTarget.mz()),
+                String.format("r = %.1f mm, z = %.1f mm", hoveredTarget.entry().r(), hoveredTarget.entry().z())
+            )
+        );
+    }
+
+    private void drawInfoCard(GraphicsContext g, double anchorX, double anchorY, Color accent, List<String> lines) {
+        if (lines == null || lines.isEmpty()) return;
+        g.setFont(UI_7);
+        int maxLength = lines.stream().mapToInt(String::length).max().orElse(8);
+        double width = Math.max(96, maxLength * 5.2 + 16);
+        double height = lines.size() * 11 + 10;
+        double x = MathUtil.clamp(anchorX + 10, 6, canvas.getWidth() - width - 6);
+        double y = MathUtil.clamp(anchorY - height - 6, 6, canvas.getHeight() - height - 6);
+        g.setFill(Color.color(0.97, 0.98, 0.99, 1.0));
+        g.fillRoundRect(x, y, width, height, 8, 8);
+        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.55));
+        g.setLineWidth(0.8);
+        g.strokeRoundRect(x, y, width, height, 8, 8);
+        g.setFill(Color.color(0.15, 0.17, 0.20, 0.96));
+        for (int index = 0; index < lines.size(); index++) {
+            g.fillText(lines.get(index), x + 8, y + 14 + index * 11);
+        }
+    }
+
+    private String formatPlotValue(String label, double value) {
+        return label.contains("\u03c6") || label.contains("\u03b8")
+            ? String.format("%.1f\u00b0", value)
+            : String.format("%.3f", value);
     }
 
     private record PlotRect(double x, double y, double width, double height) {

@@ -24,7 +24,11 @@ GX_MAX = 30e-3
 GZ_MAX = 30e-3
 B1_MAX = 200e-6
 T1 = 300e-3
-T2 = 100e-3
+T2 = 300e-3
+SEQUENCE_TIME_SCALE = 10.0
+EXC_DT_BASE = 2e-6
+EXC_DURATION_BASE = 400e-6
+EXC_TBW = 2.0 * SEQUENCE_TIME_SCALE
 
 
 def _normalized_objective_terms(
@@ -148,17 +152,40 @@ def z_step_numpy(Mx, My, Mz, omega, dt, E1, E2):
     )
 
 
+def selective_excitation_timing():
+    dt_exc = EXC_DT_BASE * SEQUENCE_TIME_SCALE
+    T_exc = EXC_DURATION_BASE * SEQUENCE_TIME_SCALE
+    N_exc = int(round(T_exc / dt_exc))
+    N_reph = N_exc // 2
+    return dt_exc, T_exc, N_exc, N_reph
+
+
+def selective_excitation_envelope(dt_exc=None, T_exc=None, N_exc=None):
+    if dt_exc is None or T_exc is None or N_exc is None:
+        dt_exc, T_exc, N_exc, _ = selective_excitation_timing()
+    t = np.linspace(-T_exc / 2, T_exc / 2, N_exc)
+    rf = np.sinc(t / (T_exc / EXC_TBW)) * (0.54 + 0.46 * np.cos(2 * np.pi * t / T_exc))
+    rf *= (np.pi / 2) / (GAMMA * np.sum(rf) * dt_exc)
+    return rf.astype(np.float32)
+
+
+def build_selective_excitation_segment():
+    dt_exc, T_exc, N_exc, N_reph = selective_excitation_timing()
+    rf = selective_excitation_envelope(dt_exc, T_exc, N_exc)
+    steps = np.zeros((N_exc + N_reph, 5), dtype=np.float32)
+    steps[:N_exc, 0] = rf
+    steps[:N_exc, 3] = GZ_MAX
+    steps[:N_exc, 4] = 1.0
+    steps[N_exc:, 3] = -GZ_MAX
+    return steps, dt_exc, T_exc, N_exc, N_reph
+
+
 def excite_sinc_numpy(dBz, Gzm, B1s):
-    dt_exc = 2e-6
-    T_exc = 400e-6
+    dt_exc, T_exc, N, _ = selective_excitation_timing()
     Gz_ss = GZ_MAX
-    TBW = 2
     E2 = np.exp(-dt_exc / T2)
     E1 = np.exp(-dt_exc / T1)
-    N = int(T_exc / dt_exc)
-    t = np.linspace(-T_exc / 2, T_exc / 2, N)
-    rf = np.sinc(t / (T_exc / TBW)) * (0.54 + 0.46 * np.cos(2 * np.pi * t / T_exc))
-    rf *= (np.pi / 2) / (GAMMA * np.sum(rf) * dt_exc)
+    rf = selective_excitation_envelope(dt_exc, T_exc, N)
     Bzf = dBz + Gz_ss * Gzm
     Mx = np.zeros_like(dBz)
     My = np.zeros_like(dBz)
@@ -172,18 +199,25 @@ def excite_sinc_numpy(dBz, Gzm, B1s):
 
 
 def build_cpmg_warm(n_seg, n_free, n_pulse, dt):
-    n_rf = n_pulse * 2 // 3
+    if n_pulse < 2:
+        raise ValueError("Selective CPMG warm pulse requires at least 2 pulse steps")
+
+    # Keep the selective refocus gradient moment balanced so the slice is rewound
+    # instead of accumulating a residual z-phase ramp every segment.
+    n_rf = n_pulse // 2
+    n_rephase = n_pulse - n_rf
     T_rf = n_rf * dt
     t_rf = np.linspace(-T_rf / 2, T_rf / 2, n_rf)
     env = np.sinc(t_rf / (T_rf / 2)) * (0.54 + 0.46 * np.cos(2 * np.pi * t_rf / T_rf))
     env *= np.pi / (GAMMA * np.sum(np.abs(env)) * dt)
     env = np.clip(env, -B1_MAX, B1_MAX)
+    gz_rephase = -GZ_MAX * (n_rf / n_rephase)
 
     ctrl = np.zeros((n_seg, n_free + n_pulse, 5), dtype=np.float32)
     ctrl[:, n_free:n_free + n_rf, 0] = env
     ctrl[:, n_free:n_free + n_rf, 3] = GZ_MAX
-    ctrl[:, n_free + n_rf:, 3] = -GZ_MAX
-    ctrl[:, n_free:, 4] = 1.0
+    ctrl[:, n_free:n_free + n_rf, 4] = 1.0
+    ctrl[:, n_free + n_rf:, 3] = gz_rephase
     return ctrl
 
 
@@ -799,6 +833,218 @@ def make_value_and_grad_full_fast(
              - smooth_weight * rf_smooth
              - gate_switch_pen * gate_switch
              - gate_binary_pen * gate_binary)
+        return -J
+
+    return jax.jit(jax.value_and_grad(loss))
+
+
+def make_value_and_grad_periodic_cycle(
+    prob,
+    segments,
+    prefix_segment_count,
+    lam_out,
+    lam_pow,
+    rf_pen,
+    rf_smooth_pen=0.0,
+    gate_switch_pen=0.0,
+    gate_binary_pen=0.0,
+    handoff_pen=1.0,
+):
+    """
+    Build JIT-compiled value+grad for a non-periodic prefix followed by a
+    single repeated cycle scored at its steady-state Floquet fixed point.
+
+    The provided ``segments`` are the reduced controls:
+    ``segments[:prefix_segment_count]`` run once, and the remaining segments
+    define one cycle that repeats indefinitely.
+    """
+    gamma_dt_list, E1_list, E2_list = [], [], []
+    is_free_list, legacy_gate_list, dt_list = [], [], []
+    seg_id_list, local_step_list = [], []
+
+    cycle_start_step = 0
+    for si, seg in enumerate(segments):
+        if si < prefix_segment_count:
+            cycle_start_step += seg["n_free"] + seg["n_pulse"]
+        dt_s = seg["dt"]
+        nf = seg["n_free"]
+        ns = nf + seg["n_pulse"]
+        for j in range(ns):
+            gamma_dt_list.append(GAMMA * dt_s)
+            E1_list.append(np.exp(-dt_s / T1))
+            E2_list.append(np.exp(-dt_s / T2))
+            is_free_list.append(j < nf)
+            legacy_gate_list.append(0.0 if j < nf else 1.0)
+            dt_list.append(dt_s)
+            seg_id_list.append(si)
+            local_step_list.append(j)
+
+    n_total = len(gamma_dt_list)
+    if cycle_start_step >= n_total:
+        raise ValueError("Periodic cycle objective requires at least one cycle step")
+
+    control_dim = max(seg.get("n_ctrl", 4) for seg in segments)
+    gdt = jnp.array(gamma_dt_list, dtype=jnp.float32)
+    E1 = jnp.array(E1_list, dtype=jnp.float32)
+    E2 = jnp.array(E2_list, dtype=jnp.float32)
+    is_free = jnp.array(is_free_list, dtype=jnp.bool_)
+    legacy_gate = jnp.array(legacy_gate_list, dtype=jnp.float32)
+    dt_arr = jnp.array(dt_list, dtype=jnp.float32)
+    seg_id_arr = jnp.array(seg_id_list, dtype=jnp.int32)
+    local_step_arr = jnp.array(local_step_list, dtype=jnp.int32)
+    cycle_start_step = int(cycle_start_step)
+
+    rf_smooth_pen32 = jnp.float32(rf_smooth_pen)
+    handoff_pen32 = jnp.float32(handoff_pen)
+
+    N = prob.Gxm.shape[0]
+    dBz = prob.dBz[None, :]
+    Gxm = prob.Gxm[None, :]
+    Gzm = prob.Gzm[None, :]
+    B1s = prob.B1s[None, :]
+    w_in = prob.w_in[None, :]
+    w_out = prob.w_out[None, :]
+    handoff_w = prob.w_in + jnp.float32(0.25) * prob.w_out
+    handoff_ref = jnp.float32(max(prob.s_max, 1.0))
+    eye3 = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (N, 3, 3))
+    init = jnp.array([0.0, 0.0, 1.0, 1.0], dtype=jnp.float32)
+
+    def compose(a, b):
+        return jnp.matmul(b, a)
+
+    def loss(ctrl_flat, rf_smooth_mul=jnp.float32(1.0)):
+        ctrl = ctrl_flat.reshape((n_total, control_dim))
+        gate_raw = ctrl[:, 4] if control_dim >= 5 else legacy_gate
+        smooth_weight = rf_smooth_pen32 * jnp.asarray(rf_smooth_mul, dtype=jnp.float32)
+
+        b1x = ctrl[:, 0:1]
+        b1y = ctrl[:, 1:2]
+        ux = ctrl[:, 2:3]
+        uz = ctrl[:, 3:4]
+
+        rf_gate = jnp.clip(gate_raw, 0.0, 1.0)
+        default_gate = jnp.where(is_free, 0.0, 1.0)
+        rf_gate = jnp.where(control_dim >= 5, rf_gate, default_gate)
+        sig_gate = 1.0 - rf_gate
+
+        gdt2 = gdt[:, None]
+        e1 = E1[:, None] * jnp.ones((1, N))
+        e2 = E2[:, None] * jnp.ones((1, N))
+
+        omega = dBz + ux * Gxm + uz * Gzm
+
+        th_f = gdt2 * omega
+        cf = jnp.cos(th_f) * e2
+        sf = jnp.sin(th_f) * e2
+        z = jnp.zeros_like(cf)
+        o = jnp.ones_like(cf)
+
+        row0_f = jnp.stack([cf, -sf, z, z], axis=-1)
+        row1_f = jnp.stack([sf, cf, z, z], axis=-1)
+        row2_f = jnp.stack([z, z, e1, 1.0 - e1], axis=-1)
+        row3 = jnp.stack([z, z, z, o], axis=-1)
+        A_f = jnp.stack([row0_f, row1_f, row2_f, row3], axis=-2)
+
+        bx = b1x * B1s
+        by = b1y * B1s
+        bz = omega
+        Bm = jnp.sqrt(bx * bx + by * by + bz * bz + 1e-30)
+        invBm = 1.0 / Bm
+        nx, ny, nz_ = bx * invBm, by * invBm, bz * invBm
+        th = gdt2 * Bm
+        cv = jnp.cos(th)
+        sv = jnp.sin(th)
+        omc = 1.0 - cv
+
+        R00 = cv + nx * nx * omc
+        R01 = nx * ny * omc - nz_ * sv
+        R02 = nx * nz_ * omc + ny * sv
+        R10 = ny * nx * omc + nz_ * sv
+        R11 = cv + ny * ny * omc
+        R12 = ny * nz_ * omc - nx * sv
+        R20 = nz_ * nx * omc - ny * sv
+        R21 = nz_ * ny * omc + nx * sv
+        R22 = cv + nz_ * nz_ * omc
+
+        row0_r = jnp.stack([e2 * R00, e2 * R01, e2 * R02, z], axis=-1)
+        row1_r = jnp.stack([e2 * R10, e2 * R11, e2 * R12, z], axis=-1)
+        row2_r = jnp.stack([e1 * R20, e1 * R21, e1 * R22, 1.0 - e1], axis=-1)
+        A_r = jnp.stack([row0_r, row1_r, row2_r, row3], axis=-2)
+
+        sg = sig_gate[:, None, None, None]
+        rg = rf_gate[:, None, None, None]
+        A = sg * A_f + rg * A_r
+
+        if cycle_start_step > 0:
+            prefix_affine = jax.lax.associative_scan(compose, A[:cycle_start_step], axis=0)
+            prefix_end = jnp.einsum("nij,j->ni", prefix_affine[-1], init)
+        else:
+            prefix_end = jnp.broadcast_to(init, (N, 4))
+
+        cycle_affine = jax.lax.associative_scan(compose, A[cycle_start_step:], axis=0)
+        cycle_map = cycle_affine[-1]
+        cycle_linear = cycle_map[:, :3, :3]
+        cycle_bias = cycle_map[:, :3, 3]
+        steady_xyz = jnp.linalg.solve(
+            eye3 - cycle_linear,
+            cycle_bias[..., None],
+        ).squeeze(-1)
+        steady_state = jnp.concatenate(
+            [steady_xyz, jnp.ones((N, 1), dtype=jnp.float32)],
+            axis=1,
+        )
+
+        cycle_states = jnp.einsum("tnij,nj->tni", cycle_affine, steady_state)
+        Mx = cycle_states[:, :, 0]
+        My = cycle_states[:, :, 1]
+        steady_sig_gate = sig_gate[cycle_start_step:]
+
+        Sx = jnp.sum(w_in * Mx, axis=1)
+        Sy = jnp.sum(w_in * My, axis=1)
+        Sx_out = jnp.sum(w_out * Mx, axis=1)
+        Sy_out = jnp.sum(w_out * My, axis=1)
+        power_out_steps = jnp.sum(w_out * (Mx * Mx + My * My), axis=1)
+
+        J_in = jnp.sum(steady_sig_gate * (Sx * Sx + Sy * Sy))
+        J_out = jnp.sum(steady_sig_gate * (Sx_out * Sx_out + Sy_out * Sy_out))
+        power_out = jnp.sum(steady_sig_gate * power_out_steps)
+
+        rf_power = jnp.sum((ctrl[:, 0] ** 2 + ctrl[:, 1] ** 2) * dt_arr)
+        rf_xy = ctrl[:, :2]
+        prev1 = jnp.concatenate([rf_xy[:1], rf_xy[:-1]], axis=0)
+        prev2 = jnp.concatenate([rf_xy[:1], rf_xy[:1], rf_xy[:-2]], axis=0)
+        valid_second = local_step_arr >= 2
+        same1 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]])
+        same2 = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:1], seg_id_arr[:-2]])
+        valid_second = valid_second & same1 & same2
+        rf_d2 = rf_xy - 2.0 * prev1 + prev2
+        rf_d2 = jnp.where(valid_second[:, None], rf_d2, 0.0)
+        rf_smooth = jnp.sum(rf_d2 * rf_d2 * dt_arr[:, None])
+        prev_gate = jnp.concatenate([gate_raw[:1], gate_raw[:-1]])
+        valid_gate = seg_id_arr == jnp.concatenate([seg_id_arr[:1], seg_id_arr[:-1]])
+        gd = jnp.where(valid_gate, gate_raw - prev_gate, 0.0)
+        gate_switch = jnp.sum(gd * gd * dt_arr)
+        gate_binary = jnp.sum(gate_raw * (1.0 - gate_raw) * dt_arr)
+
+        J_in, J_out, power_out, rf_power, rf_smooth, gate_switch, gate_binary = \
+            _normalized_objective_terms(
+                prob, J_in, J_out, power_out, rf_power, rf_smooth,
+                gate_switch, gate_binary, dt_arr,
+            )
+
+        handoff_delta = prefix_end[:, :3] - steady_xyz
+        handoff = jnp.sum(handoff_w[:, None] * (handoff_delta * handoff_delta)) / handoff_ref
+
+        J = (
+            J_in
+            - lam_out * J_out
+            - lam_pow * power_out
+            - rf_pen * rf_power
+            - smooth_weight * rf_smooth
+            - gate_switch_pen * gate_switch
+            - gate_binary_pen * gate_binary
+            - handoff_pen32 * handoff
+        )
         return -J
 
     return jax.jit(jax.value_and_grad(loss))

@@ -26,6 +26,9 @@ from mri_fast import (
     excite_sinc_numpy, rodrigues_numpy, z_step_numpy,
     make_value_and_grad_full,
     make_value_and_grad_full_fast,
+    make_value_and_grad_periodic_cycle,
+    SEQUENCE_TIME_SCALE,
+    build_selective_excitation_segment,
 )
 from mri_opt import (
     SearchConfig,
@@ -43,6 +46,7 @@ class ScenarioSpec:
     name: str
     base: list[np.ndarray]
     free_mask: list[np.ndarray]
+    periodic_prefix_segments: int | None = None
     objective_kind: str | None = None
     search: SearchConfig | None = None
     log_metrics_prob: ProblemNP | None = None
@@ -87,6 +91,66 @@ def problem_np_to_jax(prob_np: ProblemNP) -> ProblemJAX:
     )
 
 
+def build_periodic_cycle_parameterization(base, free_mask, seg_meta, prefix_segments):
+    total_segments = len(base)
+    if prefix_segments is None:
+        raise ValueError("prefix_segments must be provided for periodic parameterization")
+    if prefix_segments < 0 or prefix_segments >= total_segments:
+        raise ValueError(
+            f"prefix_segments must leave at least one repeated cycle "
+            f"(got {prefix_segments} for {total_segments} segments)"
+        )
+
+    cycle_repeat_count = total_segments - prefix_segments
+    cycle_meta = seg_meta[prefix_segments]
+    cycle_shape = base[prefix_segments].shape
+    cycle_mask = free_mask[prefix_segments]
+
+    for seg_index in range(prefix_segments, total_segments):
+        if base[seg_index].shape != cycle_shape:
+            raise ValueError("All repeated periodic segments must share the same control shape")
+        if not np.array_equal(free_mask[seg_index], cycle_mask):
+            raise ValueError("All repeated periodic segments must share the same free-mask pattern")
+        meta = seg_meta[seg_index]
+        if (
+            meta["n_free"] != cycle_meta["n_free"]
+            or meta["n_pulse"] != cycle_meta["n_pulse"]
+            or meta.get("n_ctrl", 4) != cycle_meta.get("n_ctrl", 4)
+            or meta["dt"] != cycle_meta["dt"]
+        ):
+            raise ValueError("All repeated periodic segments must share identical segment metadata")
+
+    reduced_base = [seg.copy() for seg in base[:prefix_segments]] + [base[prefix_segments].copy()]
+    reduced_mask = [mask.copy() for mask in free_mask[:prefix_segments]] + [cycle_mask.copy()]
+    reduced_seg_meta = list(seg_meta[:prefix_segments]) + [cycle_meta]
+
+    prefix_size = int(sum(seg.size for seg in reduced_base[:prefix_segments]))
+    cycle_size = int(reduced_base[-1].size)
+    control_dim = int(cycle_meta.get("n_ctrl", 4))
+    reduced_total_steps = int(sum(seg["n_free"] + seg["n_pulse"] for seg in reduced_seg_meta))
+
+    return {
+        "reduced_base": reduced_base,
+        "reduced_mask": reduced_mask,
+        "reduced_seg_meta": reduced_seg_meta,
+        "prefix_size": prefix_size,
+        "cycle_size": cycle_size,
+        "cycle_repeat_count": cycle_repeat_count,
+        "control_dim": control_dim,
+        "reduced_total_steps": reduced_total_steps,
+    }
+
+
+def expand_periodic_flat(ctrl_flat, prefix_size, cycle_size, cycle_repeat_count):
+    ctrl_flat = np.asarray(ctrl_flat, dtype=np.float32)
+    prefix_flat = ctrl_flat[:prefix_size]
+    cycle_flat = ctrl_flat[prefix_size:prefix_size + cycle_size]
+    return np.concatenate(
+        [prefix_flat, np.tile(cycle_flat, cycle_repeat_count)],
+        axis=0,
+    ).astype(np.float32)
+
+
 def optimize_scenario_worker(task):
     (
         name,
@@ -95,6 +159,7 @@ def optimize_scenario_worker(task):
         seg_meta,
         bounds_full,
         search,
+        periodic_prefix_segments,
         objective_prob_np,
         eval_prob_np,
         eval_w,
@@ -103,7 +168,7 @@ def optimize_scenario_worker(task):
         stop_flag,
     ) = task
 
-    base_rf_smooth_pen = 4.0
+    base_rf_smooth_pen = 0.1
     prob_jax = problem_np_to_jax(objective_prob_np)
 
     # Use associative-scan path on GPU (12x faster); sequential scan on CPU
@@ -113,19 +178,57 @@ def optimize_scenario_worker(task):
         on_gpu = False
     vg_builder = make_value_and_grad_full_fast if on_gpu else make_value_and_grad_full
 
-    value_and_grad = vg_builder(
-        prob_jax,
-        seg_meta,
-        lam_out=12.0,
-        lam_pow=1.5,
-        rf_pen=0.05,
-        rf_smooth_pen=base_rf_smooth_pen,
-        gate_switch_pen=1.5,
-        gate_binary_pen=0.15,
-    )
+    ctrl_base = base
+    free_mask_base = free_mask
+    bounds_for_opt = bounds_full
+    expand_flat = lambda flat: np.asarray(flat, dtype=np.float32)
+    value_and_grad = None
 
-    ctrl0_flat = flatten_ctrl_list(base)
-    free_mask_flat = flatten_mask_list(free_mask)
+    if periodic_prefix_segments is not None:
+        periodic = build_periodic_cycle_parameterization(
+            base=base,
+            free_mask=free_mask,
+            seg_meta=seg_meta,
+            prefix_segments=periodic_prefix_segments,
+        )
+        ctrl_base = periodic["reduced_base"]
+        free_mask_base = periodic["reduced_mask"]
+        bounds_for_opt = default_bounds_for_steps(
+            periodic["reduced_total_steps"],
+            control_dim=periodic["control_dim"],
+        )
+        value_and_grad = make_value_and_grad_periodic_cycle(
+            prob_jax,
+            periodic["reduced_seg_meta"],
+            prefix_segment_count=periodic_prefix_segments,
+            lam_out=12.0,
+            lam_pow=1.5,
+            rf_pen=0.,
+            rf_smooth_pen=base_rf_smooth_pen,
+            gate_switch_pen=1.5,
+            gate_binary_pen=0.15,
+            handoff_pen=1.0,
+        )
+        expand_flat = lambda flat, _periodic=periodic: expand_periodic_flat(
+            flat,
+            _periodic["prefix_size"],
+            _periodic["cycle_size"],
+            _periodic["cycle_repeat_count"],
+        )
+    else:
+        value_and_grad = vg_builder(
+            prob_jax,
+            seg_meta,
+            lam_out=12.0,
+            lam_pow=1.5,
+            rf_pen=0.001,
+            rf_smooth_pen=base_rf_smooth_pen,
+            gate_switch_pen=1.5,
+            gate_binary_pen=0.15,
+        )
+
+    ctrl0_flat = flatten_ctrl_list(ctrl_base)
+    free_mask_flat = flatten_mask_list(free_mask_base)
     # Warm up JIT with the first stage's objective
     first_mul = (search.anneal_schedule[0].rf_smooth_mul
                  if search and search.anneal_schedule else 10.0)
@@ -136,7 +239,7 @@ def optimize_scenario_worker(task):
         value_and_grad=value_and_grad,
         ctrl0_flat=ctrl0_flat,
         free_mask_flat=free_mask_flat,
-        bounds_full=bounds_full,
+        bounds_full=bounds_for_opt,
         config=search,
         progress_fn=(
             None
@@ -149,9 +252,9 @@ def optimize_scenario_worker(task):
         show_progress_bar=progress_queue is None,
         stage_value_and_grad_args_fn=lambda stage: (np.float32(stage.rf_smooth_mul),),
     )
-    ctrl_list = split_ctrl_flat(res.x_full, seg_meta)
+    ctrl_list = split_ctrl_flat(expand_flat(res.x_full), seg_meta)
     snapshots = {
-        int(it): split_ctrl_flat(flat_ctrl, seg_meta)
+        int(it): split_ctrl_flat(expand_flat(flat_ctrl), seg_meta)
         for it, flat_ctrl in sorted(res.snapshots.items())
     }
     sig_eval, Mx_eval, My_eval, Mz_eval = simulate_numpy_full_signal(ctrl_list, seg_meta, eval_prob_np)
@@ -461,12 +564,13 @@ def run():
     print("  Multi-pulse reconvergence (dense grid, xy cost)")
     print("=" * 65)
 
-    dt = 200e-6
+    dt = 20e-6 * SEQUENCE_TIME_SCALE
     n_seg = 10
     n_free = 18
     n_pulse = 14
     n_steps = n_free + n_pulse
     sw_half = 0.004
+    periodic_prefix_segments = 2  # excitation + first refocusing segment remain non-periodic
 
     prob_np, prob_jax, x_arr, z_arr, B0n = make_problem_dense(Nx=12, sw_half=sw_half)
     Nx, Nz = 12, len(z_arr)
@@ -478,18 +582,7 @@ def run():
     print(f"In-slice weighted: {int(np.sum(mask2d))}  S_max: {prob_np.s_max:.0f}")
     print(f"Refocus segment: {n_steps} steps at {dt * 1e6:.1f} us ({n_free} free, {n_pulse} RF)")
 
-    dt_exc = 20e-6
-    T_exc = 4000e-6
-    N_exc = int(T_exc / dt_exc)
-    N_reph = N_exc // 2
-    t_exc_arr = np.linspace(-T_exc / 2, T_exc / 2, N_exc)
-    rf_exc = np.sinc(t_exc_arr / (T_exc / 2)) * (0.54 + 0.46 * np.cos(2 * np.pi * t_exc_arr / T_exc))
-    rf_exc *= (np.pi / 2) / (GAMMA * np.sum(rf_exc) * dt_exc)
-    exc_steps = np.zeros((N_exc + N_reph, 5), dtype=np.float32)
-    exc_steps[:N_exc, 0] = rf_exc          # B1x during RF
-    exc_steps[:N_exc, 3] = GZ_MAX          # Gz during RF
-    exc_steps[:N_exc, 4] = 1.0             # RF enabled during excitation
-    exc_steps[N_exc:, 3] = -GZ_MAX         # -Gz during rephase
+    exc_steps, dt_exc, _T_exc, N_exc, N_reph = build_selective_excitation_segment()
 
     # Segment metadata (excitation + refocusing segments)
     seg_meta = [{"dt": dt_exc, "n_free": 0, "n_pulse": N_exc + N_reph, "n_ctrl": 5}]
@@ -545,6 +638,7 @@ def run():
             name="GRAPE",
             base=base_selective,
             free_mask=mask_refocus,
+            periodic_prefix_segments=periodic_prefix_segments,
             objective_kind="selective",
             search=SearchConfig(
                 opt_steps=10000,
@@ -561,6 +655,7 @@ def run():
             name="Full GRAPE",
             base=base_selective,
             free_mask=mask_all,
+            periodic_prefix_segments=periodic_prefix_segments,
             objective_kind="full",
             search=SearchConfig(
                 opt_steps=10000,
@@ -594,8 +689,24 @@ def run():
         if optimized_specs:
             print(f"\nOptimizing scenarios with {opt_workers} worker(s)...")
             for spec in optimized_specs:
-                n_free_vars = int(np.count_nonzero(flatten_mask_list(spec.free_mask)))
+                if spec.periodic_prefix_segments is None:
+                    n_free_vars = int(np.count_nonzero(flatten_mask_list(spec.free_mask)))
+                else:
+                    periodic_preview = build_periodic_cycle_parameterization(
+                        base=spec.base,
+                        free_mask=spec.free_mask,
+                        seg_meta=seg_meta,
+                        prefix_segments=spec.periodic_prefix_segments,
+                    )
+                    n_free_vars = int(np.count_nonzero(flatten_mask_list(periodic_preview["reduced_mask"])))
                 print(f"\n--- {spec.name} ({n_free_vars} free variables) ---")
+                if spec.periodic_prefix_segments is not None:
+                    repeated_cycles = len(spec.base) - spec.periodic_prefix_segments
+                    print(
+                        "    period-1 cycle:"
+                        f" first {spec.periodic_prefix_segments} segment(s) free,"
+                        f" remaining {repeated_cycles} share one repeated cycle"
+                    )
                 opt_tasks.append({
                     "name": spec.name,
                     "task": (
@@ -605,6 +716,7 @@ def run():
                         seg_meta,
                         bounds_full,
                         spec.search,
+                        spec.periodic_prefix_segments,
                         spec.log_metrics_prob,
                         prob_np,
                         prob_np.w_in,
