@@ -40,3 +40,10 @@ tasks.withType<JavaCompile> {
 tasks.test {
     useJUnitPlatform()
 }
+
+tasks.register<JavaExec>("runOptimiser") {
+    group = "application"
+    description = "Runs the Java optimiser CLI."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("ax.xz.mri.optimisation.cli.OptimiserCliMain")
+}
