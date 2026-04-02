@@ -136,7 +136,7 @@ public final class ProjectRepository {
         if (!(node instanceof SequenceDocument sequence)) {
             throw new IllegalArgumentException("Node " + sequenceId + " is not a sequence");
         }
-        var renamed = new SequenceDocument(sequence.id(), newName, sequence.segments(), sequence.pulse());
+        var renamed = new SequenceDocument(sequence.id(), newName, sequence.segments(), sequence.pulse(), sequence.clipSequence());
         nodes.put(sequenceId, renamed);
         return renamed;
     }

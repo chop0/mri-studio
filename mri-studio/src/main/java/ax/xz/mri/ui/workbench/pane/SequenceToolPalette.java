@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -21,16 +22,23 @@ public final class SequenceToolPalette extends VBox {
 
     public final ObjectProperty<SequenceToolKind> activeTool = new SimpleObjectProperty<>(null);
 
-    /** Tools that are functional in Phase 1. All others are disabled placeholders. */
-    private static final Set<SequenceToolKind> ENABLED_TOOLS = Set.of(
-        SequenceToolKind.INSERT_SEGMENT,
-        SequenceToolKind.DELETE_SEGMENT,
-        SequenceToolKind.DUPLICATE_SEGMENT
+    /** Tools that are functional now. Composite blocks remain disabled. */
+    private static final Set<SequenceToolKind> DISABLED_TOOLS = Set.of(
+        SequenceToolKind.SPOILER,
+        SequenceToolKind.REFOCUS,
+        SequenceToolKind.SLICE_SELECT,
+        SequenceToolKind.READOUT,
+        SequenceToolKind.CONSTRAINTS
     );
 
     private final Map<SequenceToolKind, Button> buttons = new EnumMap<>(SequenceToolKind.class);
+    private final SequenceEditSession editSession;
+
+    /** Callback to notify the canvas when the active creation tool changes. */
+    private Runnable onActiveToolChanged;
 
     public SequenceToolPalette(SequenceEditSession editSession) {
+        this.editSession = editSession;
         setAlignment(Pos.TOP_CENTER);
         setPadding(new Insets(4));
         setSpacing(2);
@@ -39,52 +47,74 @@ public final class SequenceToolPalette extends VBox {
         setMaxWidth(40);
         getStyleClass().add("seq-tool-palette");
 
-        // Drawing tools
-        addTool(SequenceToolKind.DRAW);
-        addTool(SequenceToolKind.RECTANGLE);
-        addTool(SequenceToolKind.SINC);
-        addTool(SequenceToolKind.TRAPEZOID);
-        addTool(SequenceToolKind.GAUSSIAN);
+        // Select tool (default active)
+        addCreationTool(SequenceToolKind.SELECT);
         getChildren().add(separator());
 
-        // Segment actions
-        addActionTool(SequenceToolKind.INSERT_SEGMENT, editSession::insertSegmentAfterSelection);
-        addActionTool(SequenceToolKind.DELETE_SEGMENT, editSession::removeSelectedSegment);
-        addActionTool(SequenceToolKind.DUPLICATE_SEGMENT, editSession::duplicateSelectedSegment);
+        // Clip creation tools
+        addCreationTool(SequenceToolKind.CONSTANT);
+        addCreationTool(SequenceToolKind.SINC);
+        addCreationTool(SequenceToolKind.TRAPEZOID);
+        addCreationTool(SequenceToolKind.GAUSSIAN);
+        addCreationTool(SequenceToolKind.SPLINE);
+        addCreationTool(SequenceToolKind.TRIANGLE);
         getChildren().add(separator());
 
-        // Composite blocks
-        addTool(SequenceToolKind.SPOILER);
-        addTool(SequenceToolKind.REFOCUS);
-        addTool(SequenceToolKind.SLICE_SELECT);
-        addTool(SequenceToolKind.READOUT);
+        // Clip actions
+        addActionTool(SequenceToolKind.DELETE_CLIP, editSession::deleteSelectedClips);
+        addActionTool(SequenceToolKind.DUPLICATE_CLIP, editSession::duplicateSelectedClips);
         getChildren().add(separator());
 
-        // Overlay toggles
-        addTool(SequenceToolKind.CONSTRAINTS);
+        // Composite blocks (Phase 3+ — disabled)
+        addDisabledTool(SequenceToolKind.SPOILER);
+        addDisabledTool(SequenceToolKind.REFOCUS);
+        addDisabledTool(SequenceToolKind.SLICE_SELECT);
+        addDisabledTool(SequenceToolKind.READOUT);
+        getChildren().add(separator());
 
-        // Highlight active tool
+        // Overlay toggles (disabled)
+        addDisabledTool(SequenceToolKind.CONSTRAINTS);
+
+        // Highlight active tool with visible pressed/selected styling
         activeTool.addListener((obs, oldTool, newTool) -> {
             if (oldTool != null && buttons.containsKey(oldTool)) {
-                buttons.get(oldTool).getStyleClass().remove(STYLE_TOOL_ACTIVE);
+                var btn = buttons.get(oldTool);
+                btn.getStyleClass().remove(STYLE_TOOL_ACTIVE);
+                btn.setStyle("");
             }
             if (newTool != null && buttons.containsKey(newTool)) {
-                buttons.get(newTool).getStyleClass().add(STYLE_TOOL_ACTIVE);
+                var btn = buttons.get(newTool);
+                btn.getStyleClass().add(STYLE_TOOL_ACTIVE);
+                btn.setStyle("-fx-background-color: #cde4f7; -fx-border-color: #90c0e8; -fx-border-radius: 3; -fx-background-radius: 3;");
             }
+            if (onActiveToolChanged != null) onActiveToolChanged.run();
         });
+
+        // Default to select tool
+        activeTool.set(SequenceToolKind.SELECT);
     }
 
-    /** Add a drawing/toggle tool (click to select as active tool). */
-    private void addTool(SequenceToolKind kind) {
+    public void setOnActiveToolChanged(Runnable callback) {
+        this.onActiveToolChanged = callback;
+    }
+
+    /** Get the ClipShape for the currently active creation tool, or null. */
+    public ClipShape activeClipShape() {
+        var tool = activeTool.get();
+        return tool != null ? tool.clipShape() : null;
+    }
+
+    /** Add a tool (toggle select; deselecting a creation tool falls back to SELECT). */
+    private void addCreationTool(SequenceToolKind kind) {
         var button = createButton(kind);
-        boolean enabled = ENABLED_TOOLS.contains(kind);
-        button.setDisable(!enabled);
-        button.setOpacity(enabled ? 1.0 : 0.35);
-        if (kind.isDrawingTool()) {
-            button.setOnAction(event -> {
-                activeTool.set(activeTool.get() == kind ? null : kind);
-            });
-        }
+        button.setOnAction(event -> {
+            if (activeTool.get() == kind) {
+                // Deselecting a creation tool → fall back to SELECT
+                activeTool.set(SequenceToolKind.SELECT);
+            } else {
+                activeTool.set(kind);
+            }
+        });
         buttons.put(kind, button);
         getChildren().add(button);
     }
@@ -93,6 +123,15 @@ public final class SequenceToolPalette extends VBox {
     private void addActionTool(SequenceToolKind kind, Runnable action) {
         var button = createButton(kind);
         button.setOnAction(event -> action.run());
+        buttons.put(kind, button);
+        getChildren().add(button);
+    }
+
+    /** Add a disabled placeholder tool. */
+    private void addDisabledTool(SequenceToolKind kind) {
+        var button = createButton(kind);
+        button.setDisable(true);
+        button.setOpacity(0.35);
         buttons.put(kind, button);
         getChildren().add(button);
     }

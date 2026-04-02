@@ -46,9 +46,13 @@ public class StudioShell extends BorderPane {
 
     private MenuBar buildMenuBar() {
         var fileMenu = new Menu("File");
+        // Save is context-aware: in sequence editor → save sequence; otherwise → save project
+        var saveItem = new MenuItem("Save");
+        saveItem.setAccelerator(KeyCombination.keyCombination("Shortcut+S"));
+        saveItem.setOnAction(event -> controller.saveContextual());
         fileMenu.getItems().addAll(
             menuItem("Open Project\u2026", CommandId.OPEN_PROJECT, KeyCombination.keyCombination("Shortcut+O")),
-            menuItem("Save Project", CommandId.SAVE_PROJECT, KeyCombination.keyCombination("Shortcut+S")),
+            saveItem,
             menuItem("Save Project As\u2026", CommandId.SAVE_PROJECT_AS, KeyCombination.keyCombination("Shortcut+Shift+S")),
             new SeparatorMenuItem(),
             menuItem("Import JSON\u2026", CommandId.IMPORT_JSON, KeyCombination.keyCombination("Shortcut+I")),
@@ -56,8 +60,10 @@ public class StudioShell extends BorderPane {
             new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
-                    dispose();
-                    javafx.application.Platform.exit();
+                    if (controller.confirmCloseAllEditors()) {
+                        dispose();
+                        javafx.application.Platform.exit();
+                    }
                 });
             }}
         );

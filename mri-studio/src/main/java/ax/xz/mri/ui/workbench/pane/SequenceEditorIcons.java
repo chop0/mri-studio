@@ -23,14 +23,15 @@ public final class SequenceEditorIcons {
         g.setStroke(INK);
         g.setFill(SOFT);
         switch (kind) {
-            case DRAW -> drawPencil(g);
-            case RECTANGLE -> drawRect(g);
+            case SELECT -> drawPointer(g);
+            case CONSTANT -> drawRect(g);
             case SINC -> drawSinc(g);
             case TRAPEZOID -> drawTrapezoid(g);
             case GAUSSIAN -> drawGaussian(g);
-            case INSERT_SEGMENT -> drawInsert(g);
-            case DELETE_SEGMENT -> drawDelete(g);
-            case DUPLICATE_SEGMENT -> drawDuplicate(g);
+            case SPLINE -> drawSpline(g);
+            case TRIANGLE -> drawTriangle(g);
+            case DELETE_CLIP -> drawDelete(g);
+            case DUPLICATE_CLIP -> drawDuplicate(g);
             case SPOILER -> drawSpoiler(g);
             case REFOCUS -> drawRefocus(g);
             case SLICE_SELECT -> drawSliceSelect(g);
@@ -40,14 +41,47 @@ public final class SequenceEditorIcons {
         return canvas;
     }
 
-    private static void drawPencil(GraphicsContext g) {
+    private static void drawPointer(GraphicsContext g) {
+        // Arrow cursor icon
+        g.setStroke(INK);
+        g.setFill(SOFT);
+        g.setLineWidth(1.4);
+        double[] xs = {6, 6, 10, 11, 14, 12, 18};
+        double[] ys = {3, 19, 15, 19, 19, 14, 8};
+        g.fillPolygon(xs, ys, 7);
+        g.strokePolygon(xs, ys, 7);
+    }
+
+    private static void drawSpline(GraphicsContext g) {
         g.setStroke(ACCENT);
+        g.setLineWidth(1.6);
+        // Curved line through control points
+        double[] xs = new double[20];
+        double[] ys = new double[20];
+        for (int i = 0; i < 20; i++) {
+            double t = i / 19.0;
+            // S-curve shape
+            double val = 0.5 + 0.5 * Math.sin((t - 0.5) * Math.PI);
+            xs[i] = 2 + t * 20;
+            ys[i] = 20 - val * 16;
+        }
+        g.strokePolyline(xs, ys, 20);
+        // Control point dots
+        g.setFill(ACCENT);
+        g.fillOval(4, 17, 4, 4);
+        g.fillOval(10, 10, 4, 4);
+        g.fillOval(16, 4, 4, 4);
+        g.setStroke(INK);
+    }
+
+    private static void drawTriangle(GraphicsContext g) {
+        g.setStroke(GREEN);
         g.setLineWidth(1.8);
-        g.strokeLine(5, 19, 9, 5);
-        g.strokeLine(9, 5, 13, 5);
-        g.strokeLine(13, 5, 17, 19);
-        g.setLineWidth(1.2);
-        g.strokeLine(5, 19, 4, 21);
+        g.strokePolyline(
+            new double[]{3, 12, 21},
+            new double[]{18, 5, 18},
+            3
+        );
         g.setStroke(INK);
     }
 

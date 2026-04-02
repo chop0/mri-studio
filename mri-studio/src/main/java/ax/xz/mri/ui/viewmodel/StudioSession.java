@@ -3,6 +3,8 @@ package ax.xz.mri.ui.viewmodel;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.ui.model.IsochromatCollectionModel;
 import ax.xz.mri.ui.model.IsochromatSelectionModel;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 
 /** Composition root for the new workbench-facing UI view models and services. */
 public class StudioSession {
@@ -28,6 +30,9 @@ public class StudioSession {
         new TracePlotViewModel("Polar \u03b8", "\u00b0", 0, 180, new double[]{0, 45, 90, 135, 180}, TracePlotViewModel.PlotKind.POLAR);
     public final TracePlotViewModel traceMagnitude =
         new TracePlotViewModel("|M\u22a5|", "", 0, 1.08, new double[]{0, 0.25, 0.5, 0.75, 1}, TracePlotViewModel.PlotKind.MPERP);
+
+    /** The active sequence editing session, or null when not editing a sequence. */
+    public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
     public StudioSession() {
         project.activeCapture.activeCapture.addListener((obs, oldCapture, newCapture) -> {

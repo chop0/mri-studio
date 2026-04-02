@@ -1,39 +1,49 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.sequence.ClipShape;
+
 /** Tool kinds for the sequence editor palette. */
 public enum SequenceToolKind {
-    // --- Drawing tools (toggle, one active at a time) ---
-    DRAW("Draw", "Freehand sample-by-sample editing", true),
-    RECTANGLE("Rectangle", "Draw a flat-top rectangular pulse", true),
-    SINC("Sinc", "Stamp a sinc pulse with adjustable lobes", true),
-    TRAPEZOID("Trapezoid", "Gradient trapezoid with ramp control", true),
-    GAUSSIAN("Gaussian", "Gaussian RF envelope", true),
+    // --- Pointer tool (default, selects/moves clips) ---
+    SELECT("Select", "Select, move and resize clips", false, null),
 
-    // --- Segment actions (click, immediate) ---
-    INSERT_SEGMENT("Insert Segment", "Insert a new segment after selection", false),
-    DELETE_SEGMENT("Delete Segment", "Remove the selected segment", false),
-    DUPLICATE_SEGMENT("Duplicate Segment", "Copy the selected segment", false),
+    // --- Clip creation tools (click-drag on track to place) ---
+    CONSTANT("Constant", "Place a flat-amplitude clip", true, ClipShape.CONSTANT),
+    SINC("Sinc", "Place a sinc pulse clip with adjustable lobes", true, ClipShape.SINC),
+    TRAPEZOID("Trapezoid", "Place a trapezoid gradient clip", true, ClipShape.TRAPEZOID),
+    GAUSSIAN("Gaussian", "Place a Gaussian RF envelope clip", true, ClipShape.GAUSSIAN),
+    SPLINE("Spline", "Place a spline clip with draggable control points", true, ClipShape.SPLINE),
+    TRIANGLE("Triangle", "Place a triangle ramp clip", true, ClipShape.TRIANGLE),
 
-    // --- Composite blocks (click, insert pattern) ---
-    SPOILER("Spoiler Gradient", "Insert a dephasing gradient block", false),
-    REFOCUS("Refocusing Block", "Insert a 180\u00b0 RF refocusing block", false),
-    SLICE_SELECT("Slice-Select Excitation", "Coordinated RF + slice gradient", false),
-    READOUT("Readout Window", "Frequency-encode gradient window", false),
+    // --- Clip actions (click, immediate) ---
+    DELETE_CLIP("Delete Clip", "Remove the selected clip", false, null),
+    DUPLICATE_CLIP("Duplicate Clip", "Copy the selected clip", false, null),
+
+    // --- Composite blocks (click, insert pattern) --- Phase 3+
+    SPOILER("Spoiler Gradient", "Insert a dephasing gradient block", false, null),
+    REFOCUS("Refocusing Block", "Insert a 180\u00b0 RF refocusing block", false, null),
+    SLICE_SELECT("Slice-Select Excitation", "Coordinated RF + slice gradient", false, null),
+    READOUT("Readout Window", "Frequency-encode gradient window", false, null),
 
     // --- Overlay toggles ---
-    CONSTRAINTS("Constraints", "Toggle hardware limit overlay", false);
+    CONSTRAINTS("Constraints", "Toggle hardware limit overlay", false, null);
 
     private final String displayName;
     private final String description;
-    private final boolean drawingTool;
+    private final boolean creationTool;
+    private final ClipShape clipShape;
 
-    SequenceToolKind(String displayName, String description, boolean drawingTool) {
+    SequenceToolKind(String displayName, String description, boolean creationTool, ClipShape clipShape) {
         this.displayName = displayName;
         this.description = description;
-        this.drawingTool = drawingTool;
+        this.creationTool = creationTool;
+        this.clipShape = clipShape;
     }
 
     public String displayName() { return displayName; }
     public String description() { return description; }
-    public boolean isDrawingTool() { return drawingTool; }
+    /** Whether this is a clip creation tool (click-drag on track to place). */
+    public boolean isCreationTool() { return creationTool; }
+    /** The clip shape this tool creates, or null for non-creation tools. */
+    public ClipShape clipShape() { return clipShape; }
 }

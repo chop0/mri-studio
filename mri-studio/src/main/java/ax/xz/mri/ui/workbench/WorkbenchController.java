@@ -36,7 +36,7 @@ import software.coley.bentofx.layout.container.DockContainerRootBranch;
 import java.io.File;
 import java.util.EnumMap;
 import java.util.Map;
-import java.util.Optional;
+
 
 /** Owns pane activation, BentoFX docking, file loading, and shell command wiring. */
 public class WorkbenchController {
@@ -55,11 +55,15 @@ public class WorkbenchController {
     private DockContainerRootBranch rootBranch;
     /** The centre-shell branch that holds analysis panes (timeline + workspace). */
     private software.coley.bentofx.layout.container.DockContainerBranch centreShellBranch;
-    /** The sequence editor leaf, swapped into the root when editing a sequence. */
+    /** The sequence editor leaf, holds one tab per open sequence. */
     private DockContainerLeaf sequenceEditorLeaf;
     private boolean inSequenceEditorMode;
     private Stage mainStage;
     private boolean disposed;
+
+    /** Maps sequence node ID → (pane, dockable) for multi-tab editing. */
+    private final java.util.Map<String, SequenceEditorPane> openEditorPanes = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, Dockable> openEditorDockables = new java.util.LinkedHashMap<>();
 
     public WorkbenchController(StudioSession session) {
         this.session = session;
@@ -178,6 +182,49 @@ public class WorkbenchController {
         }
     }
 
+    /**
+     * Check all open editors for unsaved changes, prompting the user for each.
+     * Returns true if all editors are saved/discarded, false if user cancelled.
+     */
+    public boolean confirmCloseAllEditors() {
+        for (var entry : java.util.List.copyOf(openEditorPanes.entrySet())) {
+            var pane = entry.getValue();
+            if (pane.isDirty()) {
+                var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
+                alert.setTitle("Unsaved Changes");
+                alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
+                alert.setContentText("Your changes will be lost if you don't save them.");
+                alert.getButtonTypes().setAll(
+                    javafx.scene.control.ButtonType.YES,
+                    javafx.scene.control.ButtonType.NO,
+                    javafx.scene.control.ButtonType.CANCEL
+                );
+                var result = alert.showAndWait().orElse(javafx.scene.control.ButtonType.CANCEL);
+                if (result == javafx.scene.control.ButtonType.YES) {
+                    pane.savePublic();
+                } else if (result == javafx.scene.control.ButtonType.CANCEL) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Context-aware save: saves the active sequence if editing, otherwise the project. */
+    public void saveContextual() {
+        if (inSequenceEditorMode) {
+            // Find the currently visible editor tab and save it
+            for (var entry : openEditorPanes.entrySet()) {
+                var dockable = openEditorDockables.get(entry.getKey());
+                if (dockable != null && sequenceEditorLeaf.getSelectedDockable() == dockable) {
+                    entry.getValue().savePublic();
+                    return;
+                }
+            }
+        }
+        saveProject();
+    }
+
     public void saveProject() {
         try {
             var root = session.project.projectRoot.get();
@@ -290,6 +337,7 @@ public class WorkbenchController {
 
     private void initializePanes() {
         for (var paneId : PaneId.values()) {
+            if (paneId == PaneId.SEQUENCE_EDITOR) continue; // created dynamically per open sequence
             panes.put(paneId, createPane(paneId));
         }
     }
@@ -308,7 +356,7 @@ public class WorkbenchController {
             case TRACE_PHASE -> new PhaseTracePane(context);
             case TRACE_POLAR -> new PolarTracePane(context);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
-            case SEQUENCE_EDITOR -> new SequenceEditorPane(context);
+            case SEQUENCE_EDITOR -> throw new IllegalStateException("Sequence editors are created dynamically");
         };
     }
 
@@ -380,7 +428,9 @@ public class WorkbenchController {
         var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
         var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
-        var seqEditor = registerLeaf(builder, PaneId.SEQUENCE_EDITOR);
+        // Sequence editor leaf (dynamically populated with tabs per open sequence)
+        var seqEditor = builder.leaf("sequence_editor");
+        seqEditor.setPruneWhenEmpty(false);
 
         root.setOrientation(Orientation.HORIZONTAL);
         centreShell.setOrientation(Orientation.VERTICAL);
@@ -440,14 +490,41 @@ public class WorkbenchController {
     }
 
     private void showSequenceEditor(ax.xz.mri.project.SequenceDocument document) {
-        var editorPane = (SequenceEditorPane) panes.get(PaneId.SEQUENCE_EDITOR);
-        editorPane.open(document);
+        String seqId = document.id().value();
+
+        // Reuse existing tab or create new one
+        if (!openEditorDockables.containsKey(seqId)) {
+            var editorPane = new SequenceEditorPane(new PaneContext(session, this, PaneId.SEQUENCE_EDITOR));
+            openEditorPanes.put(seqId, editorPane);
+
+            var dockable = bento.dockBuilding().dockable("seq-" + seqId);
+            dockable.setTitle(document.name());
+            dockable.setNode(editorPane);
+            dockable.setClosable(true);
+            dockable.setCanBeDragged(true);
+            dockable.setCanBeDroppedToNewWindow(false);
+            dockable.setDragGroup(STUDIO_DRAG_GROUP);
+            openEditorDockables.put(seqId, dockable);
+
+            // Wire title updates (dirty star)
+            editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
+            editorPane.open(document);
+
+            sequenceEditorLeaf.addDockable(dockable);
+        } else {
+            // Already open — just switch to it and refresh
+            var editorPane = openEditorPanes.get(seqId);
+            editorPane.open(document);
+        }
+
+        // Select the tab
+        var dockable = openEditorDockables.get(seqId);
+        sequenceEditorLeaf.selectDockable(dockable);
+
         if (!inSequenceEditorMode) {
-            // Swap the centre: replace centreShell with the sequence editor leaf in the root branch.
             rootBranch.replaceContainer(centreShellBranch, sequenceEditorLeaf);
             inSequenceEditorMode = true;
         }
-        activatePane(PaneId.SEQUENCE_EDITOR);
     }
 
     private void showAnalysisWorkspace() {
@@ -455,6 +532,7 @@ public class WorkbenchController {
             // Swap back: replace the sequence editor leaf with centreShell in the root branch.
             rootBranch.replaceContainer(sequenceEditorLeaf, centreShellBranch);
             inSequenceEditorMode = false;
+            session.activeEditSession.set(null);
             activatePane(PaneId.TIMELINE);
         }
     }
@@ -499,6 +577,45 @@ public class WorkbenchController {
             if (paneId != null) {
                 session.docking.activate(paneId);
                 updateShellStatus();
+            }
+        });
+        // Clean up closed sequence editor tabs (with unsaved-change prompt)
+        bento.events().addDockableCloseListener((closePath, closedDockable) -> {
+            String closedSeqId = null;
+            for (var entry : openEditorDockables.entrySet()) {
+                if (entry.getValue() == closedDockable) {
+                    closedSeqId = entry.getKey();
+                    break;
+                }
+            }
+            if (closedSeqId != null) {
+                var pane = openEditorPanes.get(closedSeqId);
+                if (pane != null && pane.isDirty()) {
+                    var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
+                    alert.setTitle("Unsaved Changes");
+                    alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
+                    alert.setContentText("Your changes will be lost if you don't save them.");
+                    alert.getButtonTypes().setAll(
+                        javafx.scene.control.ButtonType.YES,
+                        javafx.scene.control.ButtonType.NO,
+                        javafx.scene.control.ButtonType.CANCEL
+                    );
+                    var result = alert.showAndWait().orElse(javafx.scene.control.ButtonType.CANCEL);
+                    if (result == javafx.scene.control.ButtonType.YES) {
+                        pane.savePublic();
+                    } else if (result == javafx.scene.control.ButtonType.CANCEL) {
+                        // Re-add the dockable — user cancelled the close
+                        sequenceEditorLeaf.addDockable(closedDockable);
+                        sequenceEditorLeaf.selectDockable(closedDockable);
+                        return;
+                    }
+                }
+                openEditorPanes.remove(closedSeqId);
+                openEditorDockables.remove(closedSeqId);
+                if (pane != null) pane.dispose();
+                if (openEditorDockables.isEmpty() && inSequenceEditorMode) {
+                    showAnalysisWorkspace();
+                }
             }
         });
     }

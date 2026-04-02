@@ -1,5 +1,8 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.sequence.ClipShape;
+import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.project.CaptureDocument;
 import ax.xz.mri.project.ImportLinkDocument;
 import ax.xz.mri.project.ImportedCaptureDocument;
@@ -15,6 +18,7 @@ import ax.xz.mri.project.RunBookmarkDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SequenceSnapshotDocument;
 import ax.xz.mri.project.SimulationDocument;
+import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.CommandId;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.ProjectDisplayNames;
@@ -26,11 +30,17 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Slider;
+import javafx.scene.control.Spinner;
+import javafx.scene.control.SpinnerValueFactory;
+import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.layout.GridPane;
+import javafx.util.StringConverter;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
@@ -55,15 +65,46 @@ public final class InspectorPane extends WorkbenchPane {
 
         paneContext.session().project.inspector.inspectedNodeId.addListener((obs, oldValue, newValue) -> refresh());
         paneContext.session().project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> refresh());
+
+        // Listen for sequence editing session changes (clip selection, edits)
+        paneContext.session().activeEditSession.addListener((obs, oldSession, newSession) -> {
+            if (oldSession != null) {
+                // Listeners will be cleaned up via activeBindings on next refresh
+            }
+            refresh();
+        });
+
         refresh();
     }
 
+    private boolean suppressRefresh;
+
     private void refresh() {
+        if (suppressRefresh) return;
         // Detach listeners from the previous refresh cycle to prevent leaks.
         for (var binding : activeBindings) binding.detach();
         activeBindings.clear();
 
         content.getChildren().clear();
+
+        // If in clip editing mode with selected clips, show clip properties
+        var editSession = paneContext.session().activeEditSession.get();
+        if (editSession != null) {
+            // Listen to clip selection and revision changes
+            InvalidationListener clipListener = obs -> refresh();
+            editSession.primarySelectedClipId.addListener(clipListener);
+            activeBindings.add(new ListenerBinding<>(editSession.primarySelectedClipId, clipListener));
+            editSession.revision.addListener(clipListener);
+            activeBindings.add(new ListenerBinding<>(editSession.revision, clipListener));
+
+            var primaryClip = editSession.primarySelectedClip();
+            if (primaryClip != null) {
+                populateClipProperties(editSession, primaryClip);
+                return;
+            }
+            // Fall through to sequence document display if no clip selected
+        }
+
         var repo = paneContext.session().project.repository.get();
         ProjectNodeId nodeId = paneContext.session().project.inspector.inspectedNodeId.get();
         ProjectNode node = nodeId == null ? null : repo.node(nodeId);
@@ -241,6 +282,251 @@ public final class InspectorPane extends WorkbenchPane {
                 paneContext.controller().commandRegistry().execute(CommandId.DELETE_SEQUENCE);
             })
         ));
+    }
+
+    private void populateClipProperties(SequenceEditSession editSession, SignalClip clip) {
+        int selCount = editSession.selectedClipIds.size();
+
+        // Header
+        var channelLabel = new Label(clip.channel().label());
+        channelLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 12;");
+        var shapeCombo = new ComboBox<ClipShape>();
+        shapeCombo.getItems().addAll(ClipShape.values());
+        shapeCombo.setValue(clip.shape());
+        shapeCombo.setStyle("-fx-font-size: 11;");
+        shapeCombo.setOnAction(e -> {
+            var selected = shapeCombo.getValue();
+            if (selected != null) {
+                suppressRefresh = true;
+                try { editSession.setClipShape(clip.id(), selected); }
+                finally { suppressRefresh = false; }
+            }
+        });
+        content.getChildren().addAll(
+            new HBox(8, channelLabel, new Label("→"), shapeCombo),
+            new Separator()
+        );
+
+        if (selCount > 1) {
+            content.getChildren().add(new Label(selCount + " clips selected"));
+            content.getChildren().add(new Separator());
+        }
+
+        // Properties grid
+        var grid = new GridPane();
+        grid.setHgap(8);
+        grid.setVgap(4);
+        int row = 0;
+
+        row = addInspectorField(grid, row, "Start (μs)", clip.startTime(), 0, editSession.totalDuration.get(), 1,
+            v -> { suppressRefresh = true; try { editSession.moveClip(clip.id(), v); } finally { suppressRefresh = false; } });
+        row = addInspectorField(grid, row, "Duration (μs)", clip.duration(), editSession.dt.get(), editSession.totalDuration.get(), 1,
+            v -> { suppressRefresh = true; try { editSession.resizeClip(clip.id(), v); } finally { suppressRefresh = false; } });
+        row = addSiField(grid, row, "Amplitude", clip.amplitude(), clip.channel(),
+            v -> { suppressRefresh = true; try { editSession.setClipAmplitude(clip.id(), v); } finally { suppressRefresh = false; } });
+
+        // Shape-specific params
+        switch (clip.shape()) {
+            case SINC -> {
+                row = addInspectorField(grid, row, "Bandwidth (Hz)", clip.param("bandwidthHz", 4000), 100, 100000, 100,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "bandwidthHz", v); } finally { suppressRefresh = false; } });
+                row = addInspectorField(grid, row, "Center Offset (μs)", clip.param("centerOffset", 0), -10000, 10000, 1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "centerOffset", v); } finally { suppressRefresh = false; } });
+                row = addInspectorField(grid, row, "Window Factor", clip.param("windowFactor", 1), 0.1, 5, 0.1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "windowFactor", v); } finally { suppressRefresh = false; } });
+            }
+            case TRAPEZOID -> {
+                row = addInspectorField(grid, row, "Rise Time (μs)", clip.param("riseTime", clip.duration() * 0.15), 0, clip.duration(), 1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "riseTime", v); } finally { suppressRefresh = false; } });
+                row = addInspectorField(grid, row, "Flat Time (μs)", clip.param("flatTime", clip.duration() * 0.5), 0, clip.duration(), 1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "flatTime", v); } finally { suppressRefresh = false; } });
+            }
+            case GAUSSIAN -> {
+                row = addInspectorField(grid, row, "Sigma (μs)", clip.param("sigma", clip.duration() * 0.2), 1, clip.duration(), 1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "sigma", v); } finally { suppressRefresh = false; } });
+            }
+            case TRIANGLE -> {
+                row = addInspectorField(grid, row, "Peak Position", clip.param("peakPosition", 0.5), 0, 1, 0.05,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "peakPosition", v); } finally { suppressRefresh = false; } });
+            }
+            case SPLINE -> {
+                content.getChildren().add(new Label(clip.splinePoints().size() + " control points"));
+            }
+            default -> {}
+        }
+
+        content.getChildren().add(grid);
+
+        // Action buttons
+        content.getChildren().add(new Separator());
+        content.getChildren().add(actionRow(
+            button("Delete", editSession::deleteSelectedClips),
+            button("Duplicate", editSession::duplicateSelectedClips)
+        ));
+    }
+
+    private int addInspectorField(GridPane grid, int row, String label, double value,
+                                   double min, double max, double step,
+                                   java.util.function.DoubleConsumer onUpdate) {
+        var lbl = new Label(label);
+        lbl.setStyle("-fx-font-size: 10px;");
+        lbl.setMinWidth(90);
+
+        var factory = new SpinnerValueFactory.DoubleSpinnerValueFactory(min, max, value, step);
+        var spinner = new Spinner<Double>(factory);
+        spinner.setEditable(true);
+        spinner.setPrefWidth(110);
+        spinner.setStyle("-fx-font-size: 10px;");
+
+        spinner.valueProperty().addListener((obs, oldVal, newVal) -> {
+            if (newVal != null && !suppressRefresh) {
+                onUpdate.accept(newVal);
+            }
+        });
+
+        grid.add(lbl, 0, row);
+        grid.add(spinner, 1, row);
+        return row + 1;
+    }
+
+    /**
+     * Add a field that displays and accepts SI-prefixed values (e.g. "15 μT", "20 mT/m").
+     * The internal value is always in base SI units (T, T/m, dimensionless).
+     * The channel's unit already includes an SI prefix (μT, mT/m), so the converter
+     * uses a fixed display scale and unit string.
+     */
+    private int addSiField(GridPane grid, int row, String label, double value,
+                            SignalChannel channel, java.util.function.DoubleConsumer onUpdate) {
+        var lbl = new Label(label);
+        lbl.setStyle("-fx-font-size: 10px;");
+        lbl.setMinWidth(90);
+
+        var converter = SiPrefixConverter.forChannel(channel);
+
+        var textField = new TextField(converter.format(value));
+        textField.setPrefWidth(110);
+        textField.setStyle("-fx-font-size: 10px;");
+
+        // Commit on Enter
+        textField.setOnAction(e -> {
+            double parsed = converter.parse(textField.getText());
+            if (!Double.isNaN(parsed) && !suppressRefresh) {
+                onUpdate.accept(parsed);
+                // Reformat to canonical display (e.g. "15u" → "15 μT")
+                textField.setText(converter.format(parsed));
+            }
+        });
+        // Commit and reformat on focus loss
+        textField.focusedProperty().addListener((obs, wasFocused, isFocused) -> {
+            if (!isFocused) {
+                double parsed = converter.parse(textField.getText());
+                if (!Double.isNaN(parsed) && !suppressRefresh) {
+                    onUpdate.accept(parsed);
+                }
+                // Always reformat on blur so "15u" becomes "15 μT"
+                textField.setText(converter.format(parsed));
+            }
+        });
+
+        grid.add(lbl, 0, row);
+        grid.add(textField, 1, row);
+        return row + 1;
+    }
+
+    /**
+     * Formats and parses amplitude values with SI-prefixed units.
+     *
+     * <p>Each channel has a <em>display unit</em> (e.g. "μT" for B₁) and a
+     * <em>display scale</em> (e.g. 1e-6 for μ). The raw value in base SI (Tesla)
+     * is divided by the display scale for display, and multiplied back on parse.
+     * Users can type bare numbers (interpreted in display units) or use SI prefix
+     * letters: {@code 15u} = 15×10⁻⁶, {@code 20m} = 20×10⁻³, etc. On blur the
+     * field reformats to the canonical display (e.g. "15u" → "15 μT").
+     */
+    private static final class SiPrefixConverter {
+        private final String displayUnit;  // e.g. "μT", "mT/m", ""
+        private final double displayScale; // e.g. 1e-6 for μT
+
+        private SiPrefixConverter(String displayUnit, double displayScale) {
+            this.displayUnit = displayUnit;
+            this.displayScale = displayScale;
+        }
+
+        static SiPrefixConverter forChannel(SignalChannel ch) {
+            return switch (ch) {
+                case B1X, B1Y -> new SiPrefixConverter("μT", 1e-6);
+                case GX, GZ   -> new SiPrefixConverter("mT/m", 1e-3);
+                case RF_GATE  -> new SiPrefixConverter("", 1);
+            };
+        }
+
+        /** Format a raw SI value for display. */
+        String format(double rawValue) {
+            if (Double.isNaN(rawValue)) return "";
+            double display = displayScale != 0 ? rawValue / displayScale : rawValue;
+            String num = formatNumber(display);
+            return displayUnit.isEmpty() ? num : num + " " + displayUnit;
+        }
+
+        /** Parse a user-entered string back to raw SI value. */
+        double parse(String text) {
+            if (text == null || text.isBlank()) return Double.NaN;
+            text = text.strip();
+
+            // Strip the display unit suffix if present
+            if (!displayUnit.isEmpty() && text.endsWith(displayUnit)) {
+                text = text.substring(0, text.length() - displayUnit.length()).strip();
+            }
+
+            // Check for an SI prefix letter at the end
+            if (!text.isEmpty()) {
+                char last = text.charAt(text.length() - 1);
+                Double prefixScale = prefixScale(last);
+                if (prefixScale != null) {
+                    String numPart = text.substring(0, text.length() - 1).strip();
+                    try {
+                        return Double.parseDouble(numPart) * prefixScale;
+                    } catch (NumberFormatException e) {
+                        return Double.NaN;
+                    }
+                }
+            }
+
+            // Bare number → interpreted in display units
+            try {
+                return Double.parseDouble(text) * displayScale;
+            } catch (NumberFormatException e) {
+                return Double.NaN;
+            }
+        }
+
+        private static String formatNumber(double v) {
+            if (v == 0) return "0";
+            double abs = Math.abs(v);
+            String num;
+            if (abs >= 100) num = String.format("%.1f", v);
+            else if (abs >= 10) num = String.format("%.2f", v);
+            else if (abs >= 1) num = String.format("%.3f", v);
+            else num = String.format("%.4f", v);
+            if (num.contains(".")) {
+                num = num.replaceAll("0+$", "").replaceAll("\\.$", "");
+            }
+            return num;
+        }
+
+        private static Double prefixScale(char c) {
+            return switch (c) {
+                case 'f' -> 1e-15;
+                case 'p' -> 1e-12;
+                case 'n' -> 1e-9;
+                case 'u', 'μ' -> 1e-6;
+                case 'm' -> 1e-3;
+                case 'k' -> 1e3;
+                case 'M' -> 1e6;
+                case 'G' -> 1e9;
+                default -> null;
+            };
+        }
     }
 
     private void populateBookmark(RunBookmarkDocument bookmark) {

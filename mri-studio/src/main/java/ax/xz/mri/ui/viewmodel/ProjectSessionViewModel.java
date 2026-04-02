@@ -205,6 +205,12 @@ public final class ProjectSessionViewModel {
                 runNavigation.clear();
                 activeCapture.activeCapture.set(null);
             }
+            case SequenceDocument _ -> {
+                runNavigation.clear();
+                workspace.activeNodeId.set(nodeId);
+                inspector.inspectedNodeId.set(nodeId);
+                activeCapture.activeCapture.set(null);
+            }
             case SimulationDocument simulation -> openNode(simulation.captureId());
             case ImportLinkDocument _ -> {
                 workspace.activeNodeId.set(nodeId);
@@ -224,6 +230,7 @@ public final class ProjectSessionViewModel {
         repository.get().renameSequence(sequenceId, newName);
         explorer.refresh();
         selectNode(sequenceId);
+        saveProjectQuietly();
     }
 
     public void deleteSequence(ProjectNodeId sequenceId) {
@@ -238,6 +245,7 @@ public final class ProjectSessionViewModel {
             inspector.inspectedNodeId.set(null);
         }
         explorer.refresh();
+        saveProjectQuietly();
     }
 
     public void promoteSelectedSnapshotToSequence() {
@@ -267,6 +275,14 @@ public final class ProjectSessionViewModel {
         explorer.refresh();
         selectNode(sequence.id());
         openNode(sequence.id());
+        saveProjectQuietly();
+    }
+
+    /** Auto-save the project to disk if a project root is set. Silent on failure. */
+    public void saveProjectQuietly() {
+        var root = projectRoot.get();
+        if (root == null) return;
+        try { saveProject(root); } catch (IOException ignored) {}
     }
 
     private void syncActiveCaptureFromRun() {
