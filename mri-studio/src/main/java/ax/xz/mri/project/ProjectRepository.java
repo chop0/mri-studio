@@ -25,6 +25,7 @@ public final class ProjectRepository {
     private final Map<ProjectNodeId, LoadedImportState> loadedImports = new LinkedHashMap<>();
     private final List<ProjectNodeId> importLinkIds = new ArrayList<>();
     private final List<ProjectNodeId> sequenceIds = new ArrayList<>();
+    private final List<ProjectNodeId> simConfigIds = new ArrayList<>();
 
     public ProjectRepository(ProjectManifest manifest) {
         this.manifest = Objects.requireNonNull(manifest);
@@ -48,6 +49,10 @@ public final class ProjectRepository {
 
     public List<ProjectNodeId> sequenceIds() {
         return List.copyOf(sequenceIds);
+    }
+
+    public List<ProjectNodeId> simConfigIds() {
+        return List.copyOf(simConfigIds);
     }
 
     public ProjectNode node(ProjectNodeId id) {
@@ -139,6 +144,32 @@ public final class ProjectRepository {
         var renamed = new SequenceDocument(sequence.id(), newName, sequence.segments(), sequence.pulse(), sequence.clipSequence());
         nodes.put(sequenceId, renamed);
         return renamed;
+    }
+
+    // --- Simulation configs ---
+
+    /** Add a simulation config as a top-level project node (same level as sequences). */
+    public void addSimConfig(SimulationConfigDocument config) {
+        nodes.put(config.id(), config);
+        if (!simConfigIds.contains(config.id())) {
+            simConfigIds.add(config.id());
+        }
+    }
+
+    public void removeSimConfig(ProjectNodeId configId) {
+        var node = nodes.get(configId);
+        if (!(node instanceof SimulationConfigDocument)) return;
+        nodes.remove(configId);
+        simConfigIds.remove(configId);
+    }
+
+    /** Get all simulation configs associated with a given sequence. */
+    public List<SimulationConfigDocument> simConfigsForSequence(ProjectNodeId sequenceId) {
+        return simConfigIds.stream()
+            .map(nodes::get)
+            .filter(n -> n instanceof SimulationConfigDocument sc && sequenceId.equals(sc.sequenceId()))
+            .map(n -> (SimulationConfigDocument) n)
+            .toList();
     }
 
     public ProjectNodeId containingImport(ProjectNodeId id) {

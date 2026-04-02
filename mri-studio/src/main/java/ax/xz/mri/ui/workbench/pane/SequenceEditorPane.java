@@ -7,16 +7,11 @@ import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
-import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
-import javafx.scene.control.Spinner;
-import javafx.scene.control.SpinnerValueFactory;
-import javafx.scene.control.ToggleButton;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
-import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -24,43 +19,37 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 /**
- * Clip-based sequence editor pane with overview scrubber, multi-track canvas,
- * tool palette, and undo/redo. Clip properties are displayed in the Inspector pane.
- *
- * <p>Registered as a BentoFX dockable. When the user opens a {@link SequenceDocument},
- * this pane's leaf replaces the analysis centre-shell in the dock tree.
+ * Clip-based sequence editor pane with horizontal tool bar, overview scrubber,
+ * and multi-track canvas. Designed to be thin (bottom of window).
  */
 public final class SequenceEditorPane extends WorkbenchPane {
     private final SequenceEditSession editSession = new SequenceEditSession();
-    private final Label sequenceNameLabel = new Label("\u2014");
+    public SequenceEditSession editSession() { return editSession; }
     private final SequenceOverviewBar overviewBar;
     private final ClipTrackCanvas trackCanvas;
     private final SequenceToolPalette toolPalette;
     private Runnable onTitleChanged;
     private String sequenceName = "";
 
+    // Simulation session (wired after construction)
+    private ax.xz.mri.ui.viewmodel.SequenceSimulationSession simSession;
+
     public SequenceEditorPane(PaneContext paneContext) {
         super(paneContext);
         setPaneTitle("Sequence Editor");
 
-        // --- Tool palette (left) ---
         toolPalette = new SequenceToolPalette(editSession);
-
-        // --- Canvases ---
-        overviewBar = new SequenceOverviewBar(editSession);
+        overviewBar = new SequenceOverviewBar(editSession, paneContext.session().viewport);
         trackCanvas = new ClipTrackCanvas(editSession);
+        trackCanvas.setViewport(paneContext.session().viewport);
 
-        // Wire active tool from palette to canvas
         toolPalette.setOnActiveToolChanged(() ->
             trackCanvas.setActiveCreationShape(toolPalette.activeClipShape())
         );
 
-        // Update tab title when dirty state changes
         editSession.revision.addListener((obs, o, n) -> notifyTitleChanged());
 
-        // --- Header bar ---
-        sequenceNameLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 13;");
-
+        // --- Buttons ---
         var undoButton = new Button("\u21a9");
         undoButton.setTooltip(new Tooltip("Undo (\u2318Z)"));
         undoButton.disableProperty().bind(editSession.canUndoProperty().not());
@@ -73,86 +62,35 @@ public final class SequenceEditorPane extends WorkbenchPane {
         redoButton.setOnAction(event -> editSession.redo());
         redoButton.setFocusTraversable(false);
 
-        var saveButton = new Button("Save");
-        saveButton.setTooltip(new Tooltip("Save sequence changes"));
+        var saveButton = new Button("\ud83d\udcbe");
+        saveButton.setTooltip(new Tooltip("Save (\u2318S)"));
         saveButton.setOnAction(event -> saveSequence());
         saveButton.setFocusTraversable(false);
-
-        // Duration control
-        var durationLabel = new Label("Duration (μs):");
-        durationLabel.setStyle("-fx-font-size: 10;");
-        var durationSpinner = new Spinner<Double>(
-            new SpinnerValueFactory.DoubleSpinnerValueFactory(10, 100000, editSession.totalDuration.get(), 100)
-        );
-        durationSpinner.setEditable(true);
-        durationSpinner.setPrefWidth(100);
-        durationSpinner.setStyle("-fx-font-size: 10;");
-        durationSpinner.setFocusTraversable(false);
-        durationSpinner.valueProperty().addListener((obs, o, n) -> {
-            if (n != null) editSession.setTotalDuration(n);
-        });
-        editSession.totalDuration.addListener((obs, o, n) ->
-            durationSpinner.getValueFactory().setValue(n.doubleValue())
-        );
-
-        // Snap controls
-        var snapToggle = new ToggleButton("\u2b29 Snap");
-        snapToggle.setTooltip(new Tooltip("Enable/disable clip snapping"));
-        snapToggle.selectedProperty().bindBidirectional(editSession.snapEnabled);
-        snapToggle.setFocusTraversable(false);
-        snapToggle.setStyle("-fx-font-size: 10;");
-
-        var gridLabel = new Label("Grid:");
-        gridLabel.setStyle("-fx-font-size: 10;");
-        var gridSpinner = new Spinner<Double>(
-            new SpinnerValueFactory.DoubleSpinnerValueFactory(0, 1000, 0, 10)
-        );
-        gridSpinner.setEditable(true);
-        gridSpinner.setPrefWidth(70);
-        gridSpinner.setStyle("-fx-font-size: 10;");
-        gridSpinner.setFocusTraversable(false);
-        gridSpinner.setTooltip(new Tooltip("Snap grid size (μs). 0 = edge snap only."));
-        gridSpinner.valueProperty().addListener((obs, o, n) -> {
-            if (n != null) editSession.snapGridSize.set(n);
-        });
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        var headerBar = new HBox(6,
-            sequenceNameLabel, spacer,
-            durationLabel, durationSpinner,
-            new Separator(), snapToggle, gridLabel, gridSpinner,
-            new Separator(), undoButton, redoButton,
-            new Separator(), saveButton
+        // --- Toolbar: tools + undo/redo/save ---
+        var toolbar = new HBox(3);
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+        toolbar.setPadding(new Insets(2, 6, 2, 6));
+        toolbar.getChildren().addAll(
+            toolPalette,
+            new Separator(javafx.geometry.Orientation.VERTICAL),
+            undoButton, redoButton, saveButton
         );
-        headerBar.setAlignment(Pos.CENTER_LEFT);
-        headerBar.setPadding(new Insets(4, 8, 4, 8));
 
         // --- Overview scrubber ---
         var overviewHolder = new StackPane(overviewBar);
-        overviewHolder.setPrefHeight(36);
-        overviewHolder.setMinHeight(36);
-        overviewHolder.setMaxHeight(36);
+        overviewHolder.setPrefHeight(28);
+        overviewHolder.setMinHeight(28);
+        overviewHolder.setMaxHeight(28);
 
         // --- Track canvas ---
         var trackHolder = new StackPane(trackCanvas);
         VBox.setVgrow(trackHolder, Priority.ALWAYS);
 
-        // --- Centre content ---
-        var centre = new VBox(
-            headerBar,
-            new Separator(),
-            overviewHolder,
-            new Separator(),
-            trackHolder
-        );
-
-        // --- Root layout ---
-        var root = new BorderPane();
-        root.setLeft(toolPalette);
-        root.setCenter(centre);
-
+        var root = new VBox(toolbar, overviewHolder, trackHolder);
         setPaneContent(root);
 
         // --- Keyboard shortcuts ---
@@ -173,7 +111,6 @@ public final class SequenceEditorPane extends WorkbenchPane {
                 editSession.duplicateSelectedClips();
                 event.consume();
             } else if (new KeyCodeCombination(KeyCode.A, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                // Select all clips
                 editSession.selectedClipIds.clear();
                 for (var clip : editSession.clips) editSession.selectedClipIds.add(clip.id());
                 if (!editSession.clips.isEmpty())
@@ -186,24 +123,27 @@ public final class SequenceEditorPane extends WorkbenchPane {
             }
         });
         root.setFocusTraversable(true);
-
-        // Return focus to the root when clicking the track canvas (away from spinners)
         trackCanvas.setOnMouseClicked(e -> root.requestFocus());
+    }
+
+    /** Wire the simulation session (called by WorkbenchController after open). */
+    public void wireSimSession(ax.xz.mri.ui.viewmodel.SequenceSimulationSession session) {
+        this.simSession = session;
+        // Stale indicator on timeline title
+        session.stale.addListener((obs, o, n) -> {
+            if (paneContext.controller() != null) paneContext.controller().markTimelineStale(n);
+        });
     }
 
     public void setOnTitleChanged(Runnable callback) { this.onTitleChanged = callback; }
 
-    /** The display title for the BentoFX tab (includes dirty indicator). */
     public String tabTitle() {
         return sequenceName + (editSession.isDirty() ? " *" : "");
     }
 
-    /** Load a sequence document into the editor. */
     public void open(SequenceDocument document) {
         editSession.open(document);
         sequenceName = document.name();
-        sequenceNameLabel.setText("Sequence: " + document.name());
-        // Expose edit session to inspector
         paneContext.session().activeEditSession.set(editSession);
         notifyTitleChanged();
     }
@@ -212,15 +152,10 @@ public final class SequenceEditorPane extends WorkbenchPane {
         if (onTitleChanged != null) onTitleChanged.run();
     }
 
-    /** Whether the editor has unsaved changes. */
-    public boolean isDirty() {
-        return editSession.isDirty();
-    }
+    public boolean isDirty() { return editSession.isDirty(); }
 
-    /** Public save entry point for external callers (e.g. File→Save). */
     public void savePublic() { saveSequence(); }
 
-    /** Save changes back to the project repository and persist to disk. */
     private void saveSequence() {
         var updated = editSession.toDocument();
         var repo = paneContext.session().project.repository.get();
@@ -230,7 +165,6 @@ public final class SequenceEditorPane extends WorkbenchPane {
         paneContext.session().activeEditSession.set(editSession);
         paneContext.session().project.explorer.refresh();
         notifyTitleChanged();
-        // Persist to disk
         paneContext.controller().saveProject();
     }
 

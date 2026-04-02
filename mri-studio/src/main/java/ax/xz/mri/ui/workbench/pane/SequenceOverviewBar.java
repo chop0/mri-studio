@@ -6,6 +6,7 @@ import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import javafx.animation.AnimationTimer;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.MouseButton;
@@ -35,14 +36,18 @@ public class SequenceOverviewBar extends ResizableCanvas {
     private static final Color GX_COLOUR = Color.web("#2e7d32");
     private static final Color GZ_COLOUR = Color.web("#7b1fa2");
     private static final Color GATE_COLOUR = Color.web("#ff6f00");
+    private static final Color CURSOR_COLOUR = Color.web("#e06000");
 
     private final SequenceEditSession editSession;
+    private final ViewportViewModel viewport; // global viewport for cursor + analysis window sync
     private final AxisScrubBar.Interaction interaction;
     private final AnimationTimer timer;
     private boolean dirty = true;
+    private boolean syncing; // prevent listener feedback loop
 
-    public SequenceOverviewBar(SequenceEditSession editSession) {
+    public SequenceOverviewBar(SequenceEditSession editSession, ViewportViewModel viewport) {
         this.editSession = editSession;
+        this.viewport = viewport;
 
         this.interaction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.HORIZONTAL,
@@ -71,6 +76,35 @@ public class SequenceOverviewBar extends ResizableCanvas {
         editSession.viewStart.addListener((obs, o, n) -> scheduleRedraw());
         editSession.viewEnd.addListener((obs, o, n) -> scheduleRedraw());
         editSession.totalDuration.addListener((obs, o, n) -> scheduleRedraw());
+
+        // Sync editor viewStart/viewEnd ↔ global viewport vS/vE (main viewport range)
+        // This keeps the editor's zoom level and the timeline's zoom level in sync.
+        // Also sync with tS/tE (analysis window = blue selection) so they match.
+        editSession.viewStart.addListener((obs, o, n) -> {
+            if (!syncing) {
+                syncing = true;
+                viewport.vS.set(n.doubleValue());
+                viewport.tS.set(n.doubleValue());
+                syncing = false;
+            }
+        });
+        editSession.viewEnd.addListener((obs, o, n) -> {
+            if (!syncing) {
+                syncing = true;
+                viewport.vE.set(n.doubleValue());
+                viewport.tE.set(n.doubleValue());
+                syncing = false;
+            }
+        });
+        viewport.vS.addListener((obs, o, n) -> {
+            if (!syncing) { syncing = true; editSession.viewStart.set(n.doubleValue()); syncing = false; }
+        });
+        viewport.vE.addListener((obs, o, n) -> {
+            if (!syncing) { syncing = true; editSession.viewEnd.set(n.doubleValue()); syncing = false; }
+        });
+
+        // Redraw when cursor moves
+        viewport.tC.addListener((obs, o, n) -> scheduleRedraw());
 
         // Mouse interaction
         setOnMousePressed(this::onMousePressed);
@@ -143,11 +177,14 @@ public class SequenceOverviewBar extends ResizableCanvas {
             spans.add(new AxisScrubBar.Span(clip.startTime(), clip.endTime(), colour, 0.15));
         }
 
-        // Draw the scrub bar
+        // Draw the scrub bar with orange cursor marker
+        var markers = List.of(
+            new AxisScrubBar.Marker(viewport.tC.get(), CURSOR_COLOUR)
+        );
         var spec = AxisScrubBar.Spec.horizontal(
             0, domain,
             editSession.viewStart.get(), editSession.viewEnd.get(),
-            spans, List.of()
+            spans, markers
         );
         AxisScrubBar.draw(g, bounds, spec);
 

@@ -71,6 +71,8 @@ public class DerivedComputationViewModel {
                     computing.set(false);
                 });
             } catch (Exception ex) {
+                System.err.println("DerivedComputationViewModel: computation failed: " + ex.getMessage());
+                ex.printStackTrace();
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     phaseMapZ.set(null);

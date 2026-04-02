@@ -1,10 +1,13 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.ui.model.IsochromatCollectionModel;
 import ax.xz.mri.ui.model.IsochromatSelectionModel;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
+
+import java.util.List;
 
 /** Composition root for the new workbench-facing UI view models and services. */
 public class StudioSession {
@@ -34,36 +37,34 @@ public class StudioSession {
     /** The active sequence editing session, or null when not editing a sequence. */
     public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
+    /** Guard to prevent listener cascades during loadSimulationResult. */
+    private boolean loadingSimulation;
+
     public StudioSession() {
+        // When an imported capture is loaded, push its data through the standard path
         project.activeCapture.activeCapture.addListener((obs, oldCapture, newCapture) -> {
             if (newCapture == null || newCapture.blochData() == null) {
                 document.clearDocument();
                 updateViewportBounds(null);
                 return;
             }
+            // Let DocumentSessionViewModel handle scenario/iteration resolution for imports
             document.showCapture(
                 newCapture.sourceFile(),
                 newCapture.blochData(),
                 newCapture.scenarioName(),
                 newCapture.iterationKey()
             );
-            updateViewportBounds(newCapture.blochData());
         });
 
+        // When currentPulse changes (from scenario resolution in imports), load the result.
+        // Skipped during loadSimulationResult to prevent double-init.
         document.currentPulse.addListener((obs, oldPulse, newPulse) -> {
+            if (loadingSimulation) return;
             var data = document.blochData.get();
-            points.setContext(data, newPulse);
-            points.resimulateAll();
-            derived.recompute(data, newPulse);
-            refreshReferenceFrame();
-            refreshGeometryShading();
-        });
-
-        document.blochData.addListener((obs, oldData, newData) -> {
-            updateViewportBounds(newData);
-            points.setContext(newData, document.currentPulse.get());
-            refreshReferenceFrame();
-            refreshGeometryShading();
+            if (data != null && newPulse != null) {
+                loadAnalysisData(data, newPulse);
+            }
         });
 
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
@@ -80,8 +81,53 @@ public class StudioSession {
             refreshGeometryShading();
         });
 
-        // Load default points of interest so the table is populated on startup.
         points.resetToDefaults();
+    }
+
+    /**
+     * The single entry point for feeding data to all analysis panes.
+     * Called by both the simulation session (primary) and the import path.
+     *
+     * <p>Sets all analysis state in one shot — no listener cascades, no generation races.
+     * The order is carefully chosen: context first, then computation triggers.
+     */
+    public void loadSimulationResult(BlochData data, List<PulseSegment> pulse) {
+        // Guard: suppress the currentPulse listener so it doesn't double-init
+        loadingSimulation = true;
+        try {
+            // Store on document model (for panes that read these directly)
+            document.blochData.set(data);
+            document.currentPulse.set(pulse);
+        } finally {
+            loadingSimulation = false;
+        }
+
+        // Update viewport to match the new data's time range
+        updateViewportBounds(data);
+
+        // Feed the simulation engine — single setContext, single resimulate
+        points.setContext(data, pulse);
+        points.resetToDefaults();
+
+        // Compute derived quantities (phase maps, signal trace)
+        derived.recompute(data, pulse);
+
+        // Update reference frame and geometry shading
+        refreshReferenceFrame();
+        refreshGeometryShading();
+    }
+
+    /**
+     * Load analysis data triggered by the currentPulse listener (import path).
+     * Same as loadSimulationResult but doesn't re-set document properties (already set).
+     */
+    private void loadAnalysisData(BlochData data, List<PulseSegment> pulse) {
+        updateViewportBounds(data);
+        points.setContext(data, pulse);
+        points.resimulateAll();
+        derived.recompute(data, pulse);
+        refreshReferenceFrame();
+        refreshGeometryShading();
     }
 
     public void setDocument(java.io.File file, BlochData data) {

@@ -5,51 +5,45 @@ import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Tooltip;
-import javafx.scene.layout.VBox;
+import javafx.scene.layout.HBox;
 
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Set;
 
-/** Vertical icon-only tool palette for the sequence editor (left sidebar). */
-public final class SequenceToolPalette extends VBox {
+/**
+ * Horizontal icon-only tool bar for the sequence editor (along the top).
+ * Compact layout suitable for a thin editor pane at the bottom of the window.
+ */
+public final class SequenceToolPalette extends HBox {
     private static final String STYLE_TOOL_BUTTON = "seq-tool-button";
     private static final String STYLE_TOOL_ACTIVE = "seq-tool-active";
 
     public final ObjectProperty<SequenceToolKind> activeTool = new SimpleObjectProperty<>(null);
 
-    /** Tools that are functional now. Composite blocks remain disabled. */
     private static final Set<SequenceToolKind> DISABLED_TOOLS = Set.of(
-        SequenceToolKind.SPOILER,
-        SequenceToolKind.REFOCUS,
-        SequenceToolKind.SLICE_SELECT,
-        SequenceToolKind.READOUT,
+        SequenceToolKind.SPOILER, SequenceToolKind.REFOCUS,
+        SequenceToolKind.SLICE_SELECT, SequenceToolKind.READOUT,
         SequenceToolKind.CONSTRAINTS
     );
 
     private final Map<SequenceToolKind, Button> buttons = new EnumMap<>(SequenceToolKind.class);
-    private final SequenceEditSession editSession;
-
-    /** Callback to notify the canvas when the active creation tool changes. */
     private Runnable onActiveToolChanged;
 
     public SequenceToolPalette(SequenceEditSession editSession) {
-        this.editSession = editSession;
-        setAlignment(Pos.TOP_CENTER);
-        setPadding(new Insets(4));
+        setAlignment(Pos.CENTER_LEFT);
+        setPadding(new Insets(2, 4, 2, 4));
         setSpacing(2);
-        setPrefWidth(40);
-        setMinWidth(40);
-        setMaxWidth(40);
         getStyleClass().add("seq-tool-palette");
 
-        // Select tool (default active)
+        // Select tool
         addCreationTool(SequenceToolKind.SELECT);
-        getChildren().add(separator());
+        getChildren().add(vsep());
 
         // Clip creation tools
         addCreationTool(SequenceToolKind.CONSTANT);
@@ -58,24 +52,13 @@ public final class SequenceToolPalette extends VBox {
         addCreationTool(SequenceToolKind.GAUSSIAN);
         addCreationTool(SequenceToolKind.SPLINE);
         addCreationTool(SequenceToolKind.TRIANGLE);
-        getChildren().add(separator());
+        getChildren().add(vsep());
 
         // Clip actions
         addActionTool(SequenceToolKind.DELETE_CLIP, editSession::deleteSelectedClips);
         addActionTool(SequenceToolKind.DUPLICATE_CLIP, editSession::duplicateSelectedClips);
-        getChildren().add(separator());
 
-        // Composite blocks (Phase 3+ — disabled)
-        addDisabledTool(SequenceToolKind.SPOILER);
-        addDisabledTool(SequenceToolKind.REFOCUS);
-        addDisabledTool(SequenceToolKind.SLICE_SELECT);
-        addDisabledTool(SequenceToolKind.READOUT);
-        getChildren().add(separator());
-
-        // Overlay toggles (disabled)
-        addDisabledTool(SequenceToolKind.CONSTRAINTS);
-
-        // Highlight active tool with visible pressed/selected styling
+        // Highlight active tool
         activeTool.addListener((obs, oldTool, newTool) -> {
             if (oldTool != null && buttons.containsKey(oldTool)) {
                 var btn = buttons.get(oldTool);
@@ -94,22 +77,17 @@ public final class SequenceToolPalette extends VBox {
         activeTool.set(SequenceToolKind.SELECT);
     }
 
-    public void setOnActiveToolChanged(Runnable callback) {
-        this.onActiveToolChanged = callback;
-    }
+    public void setOnActiveToolChanged(Runnable callback) { this.onActiveToolChanged = callback; }
 
-    /** Get the ClipShape for the currently active creation tool, or null. */
     public ClipShape activeClipShape() {
         var tool = activeTool.get();
         return tool != null ? tool.clipShape() : null;
     }
 
-    /** Add a tool (toggle select; deselecting a creation tool falls back to SELECT). */
     private void addCreationTool(SequenceToolKind kind) {
         var button = createButton(kind);
         button.setOnAction(event -> {
             if (activeTool.get() == kind) {
-                // Deselecting a creation tool → fall back to SELECT
                 activeTool.set(SequenceToolKind.SELECT);
             } else {
                 activeTool.set(kind);
@@ -119,19 +97,9 @@ public final class SequenceToolPalette extends VBox {
         getChildren().add(button);
     }
 
-    /** Add an action tool (click to execute immediately). */
     private void addActionTool(SequenceToolKind kind, Runnable action) {
         var button = createButton(kind);
         button.setOnAction(event -> action.run());
-        buttons.put(kind, button);
-        getChildren().add(button);
-    }
-
-    /** Add a disabled placeholder tool. */
-    private void addDisabledTool(SequenceToolKind kind) {
-        var button = createButton(kind);
-        button.setDisable(true);
-        button.setOpacity(0.35);
         buttons.put(kind, button);
         getChildren().add(button);
     }
@@ -142,16 +110,19 @@ public final class SequenceToolPalette extends VBox {
         button.setGraphic(icon);
         button.getStyleClass().add(STYLE_TOOL_BUTTON);
         button.setTooltip(new Tooltip(kind.displayName() + "\n" + kind.description()));
-        button.setPrefSize(32, 32);
-        button.setMinSize(32, 32);
-        button.setMaxSize(32, 32);
+        button.setPrefSize(28, 28);
+        button.setMinSize(28, 28);
+        button.setMaxSize(28, 28);
         button.setFocusTraversable(false);
+        boolean disabled = DISABLED_TOOLS.contains(kind);
+        button.setDisable(disabled);
+        if (disabled) button.setOpacity(0.35);
         return button;
     }
 
-    private Separator separator() {
-        var sep = new Separator();
-        sep.setPadding(new Insets(4, 0, 4, 0));
+    private Separator vsep() {
+        var sep = new Separator(Orientation.VERTICAL);
+        sep.setPadding(new Insets(0, 2, 0, 2));
         return sep;
     }
 }

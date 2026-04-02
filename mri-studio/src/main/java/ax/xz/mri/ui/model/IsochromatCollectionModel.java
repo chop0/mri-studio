@@ -212,18 +212,26 @@ public class IsochromatCollectionModel {
             .filter(entry -> ids.contains(entry.id()))
             .toList();
         simulationExec.execute(() -> {
-            var results = new ArrayList<IsochromatEntry>(snapshot.size());
-            for (var entry : snapshot) {
-                if (Thread.currentThread().isInterrupted()) return;
-                var trajectory = BlochSimulator.simulate(currentData, entry.r(), entry.z(), currentPulse);
-                results.add(entry.withTrajectory(trajectory));
-            }
-            uiDispatcher.accept(() -> {
-                if (generation != simulationGeneration.get()) return;
-                for (var result : results) {
-                    replaceExisting(result);
+            try {
+                var results = new ArrayList<IsochromatEntry>(snapshot.size());
+                for (var entry : snapshot) {
+                    if (Thread.currentThread().isInterrupted()) return;
+                    var trajectory = BlochSimulator.simulate(currentData, entry.r(), entry.z(), currentPulse);
+                    results.add(entry.withTrajectory(trajectory));
                 }
-            });
+                uiDispatcher.accept(() -> {
+                    if (generation != simulationGeneration.get()) {
+                        System.err.println("IsochromatCollectionModel: generation mismatch, discarding " + results.size() + " results (had " + generation + ", now " + simulationGeneration.get() + ")");
+                        return;
+                    }
+                    for (var result : results) {
+                        replaceExisting(result);
+                    }
+                });
+            } catch (Exception ex) {
+                System.err.println("IsochromatCollectionModel: simulation failed: " + ex.getMessage());
+                ex.printStackTrace();
+            }
         });
     }
 

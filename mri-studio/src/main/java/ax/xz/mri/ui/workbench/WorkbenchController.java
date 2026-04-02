@@ -20,7 +20,7 @@ import javafx.geometry.Orientation;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
-import javafx.scene.control.Button;
+
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
@@ -61,9 +61,12 @@ public class WorkbenchController {
     private Stage mainStage;
     private boolean disposed;
 
-    /** Maps sequence node ID → (pane, dockable) for multi-tab editing. */
+    /** Maps sequence node ID → (pane, dockable, simSession) for multi-tab editing. */
     private final java.util.Map<String, SequenceEditorPane> openEditorPanes = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Dockable> openEditorDockables = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, ax.xz.mri.ui.viewmodel.SequenceSimulationSession> openSimSessions = new java.util.LinkedHashMap<>();
+
+
 
     public WorkbenchController(StudioSession session) {
         this.session = session;
@@ -325,10 +328,32 @@ public class WorkbenchController {
         session.project.repository.addListener((obs, o, n) -> refreshContext.run());
         session.project.explorer.structureRevision.addListener((obs, o, n) -> refreshContext.run());
 
+        // Simulation loading indicator
+        var simStatus = new javafx.scene.control.ProgressIndicator(-1);
+        simStatus.setPrefSize(14, 14);
+        simStatus.setMaxSize(14, 14);
+        simStatus.setVisible(false);
+        simStatus.setStyle("-fx-progress-color: #e06000;");
+        // Watch for any active sim session's simulating flag
+        session.activeEditSession.addListener((obs, o, n) -> {
+            if (o instanceof ax.xz.mri.ui.viewmodel.SequenceEditSession) {
+                // Can't easily unbind from the old sim session, but it's harmless
+            }
+        });
+        // Poll the sim sessions for activity (simple approach)
+        var simStatusTimer = new javafx.animation.AnimationTimer() {
+            @Override public void handle(long now) {
+                boolean anySimulating = openSimSessions.values().stream()
+                    .anyMatch(s -> s.simulating.get());
+                simStatus.setVisible(anySimulating);
+            }
+        };
+        simStatusTimer.start();
+
         var spacer = new javafx.scene.layout.Region();
         javafx.scene.layout.HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
 
-        var bar = new javafx.scene.layout.HBox(8, contextLabel, spacer, computeStatus);
+        var bar = new javafx.scene.layout.HBox(8, contextLabel, spacer, simStatus, computeStatus);
         bar.getStyleClass().add("shell-tool-strip");
         bar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         bar.setPadding(new javafx.geometry.Insets(4, 6, 4, 6));
@@ -391,6 +416,95 @@ public class WorkbenchController {
                 session.project.deleteSequence(nodeId);
             }
         }));
+        commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Simulation Config", this::newSimConfigWizard));
+    }
+
+    /**
+     * File→New Simulation Config wizard.
+     * Collects BlochData from any imported scenario/capture and extracts physics parameters.
+     */
+    private void newSimConfigWizard() {
+        var repo = session.project.repository.get();
+
+        // Build a list of all importable sources: (displayName, BlochData)
+        // Walk all imports, find their captures, and collect BlochData
+        record Source(String label, ax.xz.mri.model.scenario.BlochData data) {}
+        var sources = new java.util.ArrayList<Source>();
+
+        for (var importId : repo.importLinkIds()) {
+            var link = (ax.xz.mri.project.ImportLinkDocument) repo.node(importId);
+            if (link == null) continue;
+            // Walk children recursively to find captures with BlochData
+            java.util.Deque<ax.xz.mri.project.ProjectNodeId> stack = new java.util.ArrayDeque<>();
+            stack.push(importId);
+            while (!stack.isEmpty()) {
+                var id = stack.pop();
+                var node = repo.node(id);
+                if (node == null) continue;
+                var resolved = repo.resolveCapture(id);
+                if (resolved != null && resolved.blochData() != null) {
+                    sources.add(new Source(link.name() + " → " + resolved.name(), resolved.blochData()));
+                }
+                for (var childId : repo.childrenOf(id)) stack.push(childId);
+            }
+        }
+
+        if (sources.isEmpty()) {
+            showError("No data sources",
+                "Import a JSON file first. The wizard extracts B₀, T₁, T₂ and spatial parameters from imported data.");
+            return;
+        }
+
+        // Source selection dialog
+        var sourceNames = sources.stream().map(Source::label).toList();
+        var sourceDialog = new javafx.scene.control.ChoiceDialog<>(sourceNames.getFirst(), sourceNames);
+        sourceDialog.setTitle("New Simulation Config");
+        sourceDialog.setHeaderText("Extract parameters from imported data");
+        sourceDialog.setContentText("Source capture:");
+        sourceDialog.getDialogPane().setPrefWidth(450);
+
+        sourceDialog.showAndWait().ifPresent(choice -> {
+            var source = sources.stream().filter(s -> s.label.equals(choice)).findFirst().orElse(null);
+            if (source == null) return;
+            var field = source.data.field();
+
+            var config = new ax.xz.mri.model.simulation.SimulationConfig(
+                field.b0n,
+                field.t1 * 1e3,  // seconds → ms (config stores ms)
+                field.t2 * 1e3,  // seconds → ms
+                field.gamma != 0 ? field.gamma : 267.522e6,
+                ax.xz.mri.model.simulation.FieldPreset.UNIFORM,
+                (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3,
+                field.fovZ * 1e3,
+                field.fovX * 1e3,
+                field.zMm != null ? field.zMm.length : 50,
+                field.rMm != null ? field.rMm.length : 1,
+                0.0,
+                source.data.iso() != null
+                    ? source.data.iso().stream()
+                        .map(iso -> new ax.xz.mri.model.simulation.SimulationConfig.IsoPoint(
+                            0, 0, iso.name(), iso.colour()))
+                        .toList()
+                    : java.util.List.of()
+            );
+
+            // Name dialog
+            var nameDialog = new javafx.scene.control.TextInputDialog("Config from " + choice);
+            nameDialog.setTitle("Simulation Config Name");
+            nameDialog.setHeaderText("Name:");
+            nameDialog.showAndWait().ifPresent(name -> {
+                var doc = new ax.xz.mri.project.SimulationConfigDocument(
+                    new ax.xz.mri.project.ProjectNodeId("simcfg-" + java.util.UUID.randomUUID()),
+                    name.isBlank() ? "Imported Config" : name,
+                    null,
+                    config
+                );
+                repo.addSimConfig(doc);
+                session.project.explorer.refresh();
+                session.project.saveProjectQuietly();
+                session.project.selectNode(doc.id());
+            });
+        });
     }
 
     private void installShellStatusBindings() {
@@ -409,18 +523,25 @@ public class WorkbenchController {
 
         var builder = bento.dockBuilding();
         var root = builder.root("studio-root");
+
+        // Left: Explorer
         var explorer = registerLeaf(builder, PaneId.EXPLORER);
+
+        // Right panel: Bloch sphere on top, inspector on bottom
+        var rightPanel = builder.branch("right-panel");
+        var sphere = registerLeaf(builder, PaneId.SPHERE);
         var inspector = registerLeaf(builder, PaneId.INSPECTOR);
+
+        // Centre: analysis panes on top, timeline/editor tabbed at bottom
         var centreShell = builder.branch("centre-shell");
         var workspace = builder.branch("workspace");
         var upper = builder.branch("upper");
-        var left = builder.branch("left");
         var lower = builder.branch("lower");
         var phaseMaps = builder.branch("phase-maps");
         var phaseTraces = builder.branch("phase-traces");
 
+        // Timeline goes in the bottom leaf alongside editor tabs (tabbed)
         var timeline = registerLeaf(builder, PaneId.TIMELINE);
-        var sphere = registerLeaf(builder, PaneId.SPHERE);
         var geometry = registerLeaf(builder, PaneId.CROSS_SECTION);
         var points = registerLeaf(builder, PaneId.POINTS);
         var phaseMapZ = registerLeaf(builder, PaneId.PHASE_MAP_Z);
@@ -428,50 +549,54 @@ public class WorkbenchController {
         var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
         var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
-        // Sequence editor leaf (dynamically populated with tabs per open sequence)
-        var seqEditor = builder.leaf("sequence_editor");
-        seqEditor.setPruneWhenEmpty(false);
 
+        // Bottom leaf: holds timeline tab + sequence editor tabs (tabbed together)
+        var bottomLeaf = builder.leaf("bottom_tabbed");
+        bottomLeaf.setPruneWhenEmpty(false);
+        // Move the timeline dockable from its own leaf into the bottom leaf
+        var timelineDockable = dockables.get(PaneId.TIMELINE);
+        timeline.removeDockable(timelineDockable);
+        bottomLeaf.addDockable(timelineDockable);
+        bottomLeaf.selectDockable(timelineDockable);
+
+        // Orientations
         root.setOrientation(Orientation.HORIZONTAL);
+        rightPanel.setOrientation(Orientation.VERTICAL);
         centreShell.setOrientation(Orientation.VERTICAL);
         workspace.setOrientation(Orientation.VERTICAL);
         upper.setOrientation(Orientation.HORIZONTAL);
-        left.setOrientation(Orientation.HORIZONTAL);
         lower.setOrientation(Orientation.HORIZONTAL);
         phaseMaps.setOrientation(Orientation.HORIZONTAL);
         phaseTraces.setOrientation(Orientation.HORIZONTAL);
 
-        // Layout: Explorer | centreShell | Inspector
-        // In analysis mode, centreShell = timeline + workspace.
-        // In sequence editor mode, centreShell is replaced by seqEditor in the root branch.
-        root.addContainers(explorer, centreShell, inspector);
-        centreShell.addContainers(timeline, workspace);
+        // Unified layout:
+        // Explorer | centreShell | rightPanel(sphere + inspector)
+        root.addContainers(explorer, centreShell, rightPanel);
+        rightPanel.addContainers(sphere, inspector);
+        centreShell.addContainers(workspace, bottomLeaf);
         workspace.addContainers(upper, lower);
-        upper.addContainers(left, points);
-        left.addContainers(sphere, geometry);
+        upper.addContainers(geometry, points);
         lower.addContainers(phaseMaps, phaseTraces, traceMagnitude);
         phaseMaps.addContainers(phaseMapZ, phaseMapR);
         phaseTraces.addContainers(tracePhase, tracePolar);
 
-        root.setDividerPositions(0.14, 0.84);
-        centreShell.setDividerPositions(0.26);
-        workspace.setDividerPositions(0.62);
-        upper.setDividerPositions(0.58);
-        left.setDividerPositions(0.52);
-        lower.setDividerPositions(0.44, 0.76);
+        // Divider positions
+        root.setDividerPositions(0.13, 0.78);
+        rightPanel.setDividerPositions(0.55);
+        centreShell.setDividerPositions(0.6); // workspace 60%, bottom 40%
+        workspace.setDividerPositions(0.55);
+        upper.setDividerPositions(0.55);
+        lower.setDividerPositions(0.45, 0.75);
         phaseMaps.setDividerPositions(0.5);
         phaseTraces.setDividerPositions(0.5);
 
+        // Fixed sizes
         root.setContainerResizable(explorer, false);
-        root.setContainerSizePx(explorer, 280);
-        root.setContainerResizable(inspector, false);
-        root.setContainerSizePx(inspector, 340);
-        centreShell.setContainerResizable(timeline, false);
-        centreShell.setContainerSizePx(timeline, 250);
+        root.setContainerSizePx(explorer, 260);
 
         rootBranch = root;
         centreShellBranch = centreShell;
-        sequenceEditorLeaf = seqEditor;
+        sequenceEditorLeaf = bottomLeaf;
         inSequenceEditorMode = false;
 
         dockContainer.setCenter(rootBranch);
@@ -492,49 +617,100 @@ public class WorkbenchController {
     private void showSequenceEditor(ax.xz.mri.project.SequenceDocument document) {
         String seqId = document.id().value();
 
-        // Reuse existing tab or create new one
-        if (!openEditorDockables.containsKey(seqId)) {
-            var editorPane = new SequenceEditorPane(new PaneContext(session, this, PaneId.SEQUENCE_EDITOR));
-            openEditorPanes.put(seqId, editorPane);
+        // Close any existing editor (only one sequence at a time)
+        closeAllEditors();
 
-            var dockable = bento.dockBuilding().dockable("seq-" + seqId);
-            dockable.setTitle(document.name());
-            dockable.setNode(editorPane);
-            dockable.setClosable(true);
-            dockable.setCanBeDragged(true);
-            dockable.setCanBeDroppedToNewWindow(false);
-            dockable.setDragGroup(STUDIO_DRAG_GROUP);
-            openEditorDockables.put(seqId, dockable);
+        // Create editor pane + simulation session
+        var editorPane = new SequenceEditorPane(new PaneContext(session, this, PaneId.SEQUENCE_EDITOR));
+        openEditorPanes.put(seqId, editorPane);
 
-            // Wire title updates (dirty star)
-            editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
-            editorPane.open(document);
+        var simSession = new ax.xz.mri.ui.viewmodel.SequenceSimulationSession(editorPane.editSession(), session);
+        openSimSessions.put(seqId, simSession);
 
-            sequenceEditorLeaf.addDockable(dockable);
-        } else {
-            // Already open — just switch to it and refresh
-            var editorPane = openEditorPanes.get(seqId);
-            editorPane.open(document);
+        var dockable = bento.dockBuilding().dockable("seq-" + seqId + "-" + System.nanoTime());
+        dockable.setTitle(document.name());
+        dockable.setNode(editorPane);
+        dockable.setClosable(true);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(false);
+        dockable.setDragGroup(STUDIO_DRAG_GROUP);
+        openEditorDockables.put(seqId, dockable);
+
+        editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
+        editorPane.open(document);
+        editorPane.wireSimSession(simSession);
+        sequenceEditorLeaf.addDockable(dockable);
+
+        // Select the editor tab
+        sequenceEditorLeaf.selectDockable(openEditorDockables.get(seqId));
+        inSequenceEditorMode = true;
+
+        // Update timeline title to "Simulated Timeline"
+        updateTimelineTitle(true);
+
+        // Trigger initial simulation
+        simSession.simulate();
+    }
+
+    /** Close all open editor tabs (unsaved changes prompt for each). */
+    private void closeAllEditors() {
+        for (var entry : java.util.List.copyOf(openEditorDockables.entrySet())) {
+            var pane = openEditorPanes.get(entry.getKey());
+            if (pane != null && pane.isDirty()) {
+                var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
+                alert.setTitle("Unsaved Changes");
+                alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
+                alert.getButtonTypes().setAll(
+                    javafx.scene.control.ButtonType.YES,
+                    javafx.scene.control.ButtonType.NO
+                );
+                if (alert.showAndWait().orElse(javafx.scene.control.ButtonType.NO) == javafx.scene.control.ButtonType.YES) {
+                    pane.savePublic();
+                }
+            }
+            sequenceEditorLeaf.removeDockable(entry.getValue());
+            if (pane != null) pane.dispose();
+            var simSess = openSimSessions.get(entry.getKey());
+            if (simSess != null) simSess.dispose();
         }
-
-        // Select the tab
-        var dockable = openEditorDockables.get(seqId);
-        sequenceEditorLeaf.selectDockable(dockable);
-
-        if (!inSequenceEditorMode) {
-            rootBranch.replaceContainer(centreShellBranch, sequenceEditorLeaf);
-            inSequenceEditorMode = true;
-        }
+        openEditorPanes.clear();
+        openEditorDockables.clear();
+        openSimSessions.clear();
     }
 
     private void showAnalysisWorkspace() {
         if (inSequenceEditorMode) {
-            // Swap back: replace the sequence editor leaf with centreShell in the root branch.
-            rootBranch.replaceContainer(sequenceEditorLeaf, centreShellBranch);
             inSequenceEditorMode = false;
             session.activeEditSession.set(null);
-            activatePane(PaneId.TIMELINE);
+            updateTimelineTitle(false);
+            // Switch to timeline tab in the bottom leaf
+            var timelineDockable = dockables.get(PaneId.TIMELINE);
+            if (timelineDockable != null) sequenceEditorLeaf.selectDockable(timelineDockable);
         }
+    }
+
+    /** Get the simulation session for a given sequence ID. */
+    public ax.xz.mri.ui.viewmodel.SequenceSimulationSession getSimSessionForSequence(String seqId) {
+        return openSimSessions.get(seqId);
+    }
+
+    /** Update the timeline tab title depending on mode. */
+    private void updateTimelineTitle(boolean simMode) {
+        var timelineDockable = dockables.get(PaneId.TIMELINE);
+        if (timelineDockable == null) return;
+        if (simMode) {
+            timelineDockable.setTitle("Simulated Timeline");
+        } else {
+            timelineDockable.setTitle("Timeline");
+        }
+    }
+
+    /** Update the simulated timeline title with stale indicator. */
+    public void markTimelineStale(boolean stale) {
+        if (!inSequenceEditorMode) return;
+        var timelineDockable = dockables.get(PaneId.TIMELINE);
+        if (timelineDockable == null) return;
+        timelineDockable.setTitle(stale ? "Simulated Timeline (out of date)" : "Simulated Timeline");
     }
 
     private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
@@ -612,7 +788,9 @@ public class WorkbenchController {
                 }
                 openEditorPanes.remove(closedSeqId);
                 openEditorDockables.remove(closedSeqId);
+                var simSess = openSimSessions.remove(closedSeqId);
                 if (pane != null) pane.dispose();
+                if (simSess != null) simSess.dispose();
                 if (openEditorDockables.isEmpty() && inSequenceEditorMode) {
                     showAnalysisWorkspace();
                 }

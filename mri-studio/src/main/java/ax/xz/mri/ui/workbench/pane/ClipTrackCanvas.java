@@ -3,6 +3,7 @@ package ax.xz.mri.ui.workbench.pane;
 import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.EditorTrack;
@@ -106,6 +107,9 @@ public class ClipTrackCanvas extends ResizableCanvas {
     // Snap guide (drawn during drag)
     private double snapGuideTime = Double.NaN;
 
+    // Global viewport for cursor display
+    private ViewportViewModel viewport;
+
     public ClipTrackCanvas(SequenceEditSession editSession) {
         this.editSession = editSession;
         setOnResized(this::scheduleRedraw);
@@ -143,6 +147,10 @@ public class ClipTrackCanvas extends ResizableCanvas {
     }
 
     public void setActiveCreationShape(ClipShape shape) { this.activeCreationShape = shape; }
+    public void setViewport(ViewportViewModel vp) {
+        this.viewport = vp;
+        vp.tC.addListener((obs, o, n) -> scheduleRedraw());
+    }
     public void dispose() { timer.stop(); }
     private void scheduleRedraw() { dirty = true; }
 
@@ -832,6 +840,17 @@ public class ClipTrackCanvas extends ResizableCanvas {
             g.setStroke(Color.color(0.1, 0.4, 0.8, 0.5));
             g.setLineWidth(1);
             g.strokeRect(rx, ry, rw, rh);
+        }
+
+        // Orange cursor line (synced with global viewport)
+        if (viewport != null) {
+            double cursorTime = viewport.tC.get();
+            double cx = timeToX(cursorTime);
+            if (cx >= plotLeft() && cx <= plotLeft() + plotWidth()) {
+                g.setStroke(Color.web("#e06000"));
+                g.setLineWidth(1.5);
+                g.strokeLine(cx, 0, cx, plotHeight());
+            }
         }
 
         // Snap guide

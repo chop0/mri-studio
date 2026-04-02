@@ -58,6 +58,8 @@ public class StudioShell extends BorderPane {
             menuItem("Import JSON\u2026", CommandId.IMPORT_JSON, KeyCombination.keyCombination("Shortcut+I")),
             menuItem("Reload Import", CommandId.RELOAD_FILE, KeyCombination.keyCombination("Shortcut+R")),
             new SeparatorMenuItem(),
+            menuItem("New Simulation Config\u2026", CommandId.NEW_SIM_CONFIG, null),
+            new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
                     if (controller.confirmCloseAllEditors()) {
@@ -69,7 +71,16 @@ public class StudioShell extends BorderPane {
         );
 
         var viewMenu = new Menu("View");
+        var snapItem = new javafx.scene.control.CheckMenuItem("Snap to Grid");
+        snapItem.setSelected(true); // default on
+        // Bind to active edit session's snap property when available
+        session.activeEditSession.addListener((obs, o, n) -> {
+            if (n != null) snapItem.selectedProperty().bindBidirectional(n.snapEnabled);
+            if (o != null) snapItem.selectedProperty().unbindBidirectional(o.snapEnabled);
+        });
         viewMenu.getItems().addAll(
+            snapItem,
+            new SeparatorMenuItem(),
             menuItem("Reset Layout", CommandId.RESET_LAYOUT, null),
             menuItem("Save Layout", CommandId.SAVE_LAYOUT, null),
             menuItem("Load Layout", CommandId.LOAD_LAYOUT, null)

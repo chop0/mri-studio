@@ -32,6 +32,14 @@ public final class ExplorerTreeBuilder {
         }
         root.getChildren().add(sequences);
 
+        var simConfigs = branch("Simulation Configs", null, StudioIconKind.SIMULATION);
+        for (var configId : repository.simConfigIds()) {
+            simConfigs.getChildren().add(buildNode(repository, configId));
+        }
+        if (!simConfigs.getChildren().isEmpty()) {
+            root.getChildren().add(simConfigs);
+        }
+
         root.setExpanded(true);
         imports.setExpanded(true);
         sequences.setExpanded(true);

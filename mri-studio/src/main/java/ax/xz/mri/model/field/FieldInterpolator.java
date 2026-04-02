@@ -43,8 +43,11 @@ public final class FieldInterpolator {
      */
     public static double bilerp(double[][] grid, double[] rArr, double[] zArr, double r, double z) {
         int nr = rArr.length, nz = zArr.length;
-        double ri = (r - rArr[0]) / (rArr[nr - 1] - rArr[0]) * (nr - 1);
-        double zi = (z - zArr[0]) / (zArr[nz - 1] - zArr[0]) * (nz - 1);
+        if (nr == 0 || nz == 0) return 0;
+        // Handle single-point grids (no interpolation needed)
+        if (nr == 1 && nz == 1) return grid[0][0];
+        double ri = nr > 1 ? (r - rArr[0]) / (rArr[nr - 1] - rArr[0]) * (nr - 1) : 0;
+        double zi = nz > 1 ? (z - zArr[0]) / (zArr[nz - 1] - zArr[0]) * (nz - 1) : 0;
         ri = Math.max(0, Math.min(nr - 1.001, ri));
         zi = Math.max(0, Math.min(nz - 1.001, zi));
         int r0 = (int) ri, z0 = (int) zi;

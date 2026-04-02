@@ -40,7 +40,7 @@ import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.layout.GridPane;
-import javafx.util.StringConverter;
+
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
@@ -87,22 +87,25 @@ public final class InspectorPane extends WorkbenchPane {
 
         content.getChildren().clear();
 
-        // If in clip editing mode with selected clips, show clip properties
+        // If in sequence editing mode, show sequence properties + optional clip properties
         var editSession = paneContext.session().activeEditSession.get();
         if (editSession != null) {
-            // Listen to clip selection and revision changes
             InvalidationListener clipListener = obs -> refresh();
             editSession.primarySelectedClipId.addListener(clipListener);
             activeBindings.add(new ListenerBinding<>(editSession.primarySelectedClipId, clipListener));
             editSession.revision.addListener(clipListener);
             activeBindings.add(new ListenerBinding<>(editSession.revision, clipListener));
 
+            // Sequence-level properties
+            populateSequenceEditorProperties(editSession);
+
+            // Clip properties (if a clip is selected)
             var primaryClip = editSession.primarySelectedClip();
             if (primaryClip != null) {
+                content.getChildren().add(new Separator());
                 populateClipProperties(editSession, primaryClip);
-                return;
             }
-            // Fall through to sequence document display if no clip selected
+            return;
         }
 
         var repo = paneContext.session().project.repository.get();
@@ -129,6 +132,21 @@ public final class InspectorPane extends WorkbenchPane {
             case OptimisationConfigDocument config -> {
                 content.getChildren().add(infoLine("Type", "Optimisation Configuration"));
                 content.getChildren().add(infoLine("Name", config.name()));
+            }
+            case ax.xz.mri.project.SimulationConfigDocument simConfig -> {
+                content.getChildren().add(infoLine("Type", "Simulation Config"));
+                content.getChildren().add(infoLine("Name", simConfig.name()));
+                var cfg = simConfig.config();
+                if (cfg != null) {
+                    content.getChildren().add(infoLine("B₀", String.format("%.1f T", cfg.b0Tesla())));
+                    content.getChildren().add(infoLine("T₁", String.format("%.0f ms", cfg.t1Ms())));
+                    content.getChildren().add(infoLine("T₂", String.format("%.0f ms", cfg.t2Ms())));
+                    content.getChildren().add(infoLine("Preset", cfg.preset().displayName()));
+                }
+                content.getChildren().add(new Separator());
+                content.getChildren().add(actionRow(
+                    button("Delete", () -> paneContext.session().project.deleteSimConfig(simConfig.id()))
+                ));
             }
             case SimulationDocument simulation -> {
                 content.getChildren().add(infoLine("Type", "Simulation"));
@@ -282,6 +300,90 @@ public final class InspectorPane extends WorkbenchPane {
                 paneContext.controller().commandRegistry().execute(CommandId.DELETE_SEQUENCE);
             })
         ));
+    }
+
+    /** Sequence-level properties: duration, snap grid, sim config selector. */
+    private void populateSequenceEditorProperties(SequenceEditSession editSession) {
+        content.getChildren().add(section("Sequence"));
+
+        var grid = new GridPane();
+        grid.setHgap(8);
+        grid.setVgap(4);
+        int row = 0;
+
+        // Duration
+        row = addInspectorField(grid, row, "Duration (μs)", editSession.totalDuration.get(),
+            10, 100000, 100,
+            v -> { suppressRefresh = true; try { editSession.setTotalDuration(v); } finally { suppressRefresh = false; } });
+
+        // Snap grid size
+        row = addInspectorField(grid, row, "Snap Grid (μs)", editSession.snapGridSize.get(),
+            0, 1000, 10,
+            v -> { suppressRefresh = true; try { editSession.snapGridSize.set(v); } finally { suppressRefresh = false; } });
+
+        content.getChildren().add(grid);
+
+        // Simulation config selector
+        content.getChildren().add(new Separator());
+        content.getChildren().add(section("Simulation"));
+
+        var repo = paneContext.session().project.repository.get();
+        var configs = repo.simConfigIds().stream()
+            .map(id -> (ax.xz.mri.project.SimulationConfigDocument) repo.node(id))
+            .filter(java.util.Objects::nonNull)
+            .toList();
+
+        if (configs.isEmpty()) {
+            content.getChildren().add(new Label("No simulation configs. Create one via File menu."));
+        } else {
+            var configCombo = new ComboBox<String>();
+            configCombo.setStyle("-fx-font-size: 10;");
+            configCombo.setPrefWidth(180);
+            for (var cfg : configs) configCombo.getItems().add(cfg.name());
+
+            // Find the active sim session for this editor
+            var simSession = findSimSessionForEditor(editSession);
+            if (simSession != null && simSession.activeConfigDoc.get() != null) {
+                configCombo.setValue(simSession.activeConfigDoc.get().name());
+            } else if (!configs.isEmpty()) {
+                configCombo.setValue(configs.getFirst().name());
+            }
+
+            configCombo.setOnAction(e -> {
+                var selected = configCombo.getValue();
+                if (selected == null || simSession == null) return;
+                for (var cfg : configs) {
+                    if (cfg.name().equals(selected)) {
+                        simSession.loadConfig(cfg);
+                        break;
+                    }
+                }
+            });
+
+            var simRunBtn = new Button("\u25b6 Run");
+            simRunBtn.setStyle("-fx-font-size: 10;");
+            simRunBtn.setOnAction(e -> { if (simSession != null) simSession.simulate(); });
+
+            var autoToggle = new javafx.scene.control.CheckBox("Auto");
+            autoToggle.setStyle("-fx-font-size: 10;");
+            if (simSession != null) autoToggle.selectedProperty().bindBidirectional(simSession.autoSimulate);
+
+            content.getChildren().addAll(
+                new HBox(6, new Label("Config:"), configCombo),
+                new HBox(6, simRunBtn, autoToggle)
+            );
+        }
+    }
+
+    /** Find the sim session for a given edit session (via the open sim sessions map). */
+    private ax.xz.mri.ui.viewmodel.SequenceSimulationSession findSimSessionForEditor(SequenceEditSession editSession) {
+        // The edit session's original document has the sequence ID
+        var doc = editSession.originalDocument.get();
+        if (doc == null) return null;
+        // Walk the controller's open sim sessions (accessible via session)
+        // For simplicity, check the active edit session's sim session
+        // The controller stores them by seqId
+        return paneContext.controller().getSimSessionForSequence(doc.id().value());
     }
 
     private void populateClipProperties(SequenceEditSession editSession, SignalClip clip) {

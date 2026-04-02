@@ -82,11 +82,44 @@ public final class ProjectSessionViewModel {
                 serialiser.writeJson(root.resolve("imports").resolve(slug + ".index.json"), index);
             }
         }
+        // Write current sequences and clean up deleted ones
+        var currentSequenceSlugs = new java.util.HashSet<String>();
         for (var sequenceId : repo.sequenceIds()) {
             var sequence = (SequenceDocument) repo.node(sequenceId);
-            serialiser.writeJson(root.resolve("sequences").resolve(slug(sequence.name())).resolve("sequence.json"), sequence);
+            String seqSlug = slug(sequence.name());
+            currentSequenceSlugs.add(seqSlug);
+            serialiser.writeJson(root.resolve("sequences").resolve(seqSlug).resolve("sequence.json"), sequence);
         }
+        cleanupDeletedDirs(root.resolve("sequences"), currentSequenceSlugs);
+
+        // Write current sim configs and clean up deleted ones
+        var currentSimSlugs = new java.util.HashSet<String>();
+        for (var configId : repo.simConfigIds()) {
+            var config = (ax.xz.mri.project.SimulationConfigDocument) repo.node(configId);
+            String simSlug = slug(config.name());
+            currentSimSlugs.add(simSlug);
+            serialiser.writeJson(root.resolve("simulations").resolve(simSlug).resolve("config.json"), config);
+        }
+        cleanupDeletedDirs(root.resolve("simulations"), currentSimSlugs);
+
         explorer.refresh();
+    }
+
+    /** Remove directories that no longer correspond to active project nodes. */
+    private static void cleanupDeletedDirs(Path parentDir, java.util.Set<String> activeSlugs) throws IOException {
+        if (!Files.isDirectory(parentDir)) return;
+        try (var dirs = Files.list(parentDir)) {
+            for (var dir : dirs.filter(Files::isDirectory).toList()) {
+                if (!activeSlugs.contains(dir.getFileName().toString())) {
+                    // Recursively delete the orphaned directory
+                    try (var walk = Files.walk(dir)) {
+                        walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.delete(p); } catch (IOException ignored) {}
+                        });
+                    }
+                }
+            }
+        }
     }
 
     public void openProject(Path root) throws IOException {
@@ -111,6 +144,15 @@ public final class ProjectSessionViewModel {
             try (var files = Files.walk(sequencesDir)) {
                 for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("sequence.json")).toList()) {
                     loadedRepository.addSequence(serialiser.readJson(path, SequenceDocument.class));
+                }
+            }
+        }
+
+        var simulationsDir = root.resolve("simulations");
+        if (Files.isDirectory(simulationsDir)) {
+            try (var files = Files.walk(simulationsDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("config.json")).toList()) {
+                    loadedRepository.addSimConfig(serialiser.readJson(path, ax.xz.mri.project.SimulationConfigDocument.class));
                 }
             }
         }
@@ -211,6 +253,14 @@ public final class ProjectSessionViewModel {
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(null);
             }
+            case ax.xz.mri.project.SimulationConfigDocument simConfig -> {
+                // Open the parent sequence (which triggers the editor), then the sim config
+                // will be picked up by the editor's simulation session
+                if (simConfig.sequenceId() != null) {
+                    openNode(simConfig.sequenceId());
+                }
+                inspector.inspectedNodeId.set(nodeId);
+            }
             case SimulationDocument simulation -> openNode(simulation.captureId());
             case ImportLinkDocument _ -> {
                 workspace.activeNodeId.set(nodeId);
@@ -242,6 +292,15 @@ public final class ProjectSessionViewModel {
             runNavigation.clear();
         }
         if (sequenceId.equals(inspector.inspectedNodeId.get())) {
+            inspector.inspectedNodeId.set(null);
+        }
+        explorer.refresh();
+        saveProjectQuietly();
+    }
+
+    public void deleteSimConfig(ProjectNodeId configId) {
+        repository.get().removeSimConfig(configId);
+        if (configId.equals(inspector.inspectedNodeId.get())) {
             inspector.inspectedNodeId.set(null);
         }
         explorer.refresh();
