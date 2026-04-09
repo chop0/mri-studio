@@ -13,5 +13,6 @@ public enum StudioIconKind {
     SEQUENCE,
     SIMULATION,
     OPTIMISATION_CONFIG,
-    BOOKMARK
+    BOOKMARK,
+    EIGENFIELD
 }

@@ -66,6 +66,10 @@ public class WorkbenchController {
     private final java.util.Map<String, Dockable> openEditorDockables = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, ax.xz.mri.ui.viewmodel.SequenceSimulationSession> openSimSessions = new java.util.LinkedHashMap<>();
 
+    /** Maps sim config node ID → (pane, dockable) for sim config editor tabs. */
+    private final java.util.Map<String, ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane> openSimConfigPanes = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, Dockable> openSimConfigDockables = new java.util.LinkedHashMap<>();
+
 
 
     public WorkbenchController(StudioSession session) {
@@ -74,6 +78,7 @@ public class WorkbenchController {
         registerCommands();
         installShellStatusBindings();
         installWorkspaceSwitching();
+        session.project.setOnSimConfigOpened(this::showSimConfigEditor);
     }
 
     public void initialize(Stage stage) {
@@ -213,16 +218,22 @@ public class WorkbenchController {
         return true;
     }
 
-    /** Context-aware save: saves the active sequence if editing, otherwise the project. */
+    /** Context-aware save: saves the active editor tab, or the project. */
     public void saveContextual() {
-        if (inSequenceEditorMode) {
-            // Find the currently visible editor tab and save it
-            for (var entry : openEditorPanes.entrySet()) {
-                var dockable = openEditorDockables.get(entry.getKey());
-                if (dockable != null && sequenceEditorLeaf.getSelectedDockable() == dockable) {
-                    entry.getValue().savePublic();
-                    return;
-                }
+        // Check sequence editors
+        for (var entry : openEditorPanes.entrySet()) {
+            var dockable = openEditorDockables.get(entry.getKey());
+            if (dockable != null && sequenceEditorLeaf.getSelectedDockable() == dockable) {
+                entry.getValue().savePublic();
+                return;
+            }
+        }
+        // Check sim config editors
+        for (var entry : openSimConfigDockables.entrySet()) {
+            if (sequenceEditorLeaf.getSelectedDockable() == entry.getValue()) {
+                var pane = openSimConfigPanes.get(entry.getKey());
+                if (pane != null) pane.savePublic();
+                return;
             }
         }
         saveProject();
@@ -288,7 +299,7 @@ public class WorkbenchController {
             new javafx.scene.control.SeparatorMenuItem()
         );
         for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR) continue;
+            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR) continue;
             var focus = new MenuItem("Focus " + paneId.title());
             focus.setOnAction(event -> focusPane(paneId));
             menu.getItems().add(focus);
@@ -362,7 +373,8 @@ public class WorkbenchController {
 
     private void initializePanes() {
         for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.SEQUENCE_EDITOR) continue; // created dynamically per open sequence
+            // Dynamic editor panes are created on demand, not upfront
+            if (paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR) continue;
             panes.put(paneId, createPane(paneId));
         }
     }
@@ -381,7 +393,7 @@ public class WorkbenchController {
             case TRACE_PHASE -> new PhaseTracePane(context);
             case TRACE_POLAR -> new PolarTracePane(context);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
-            case SEQUENCE_EDITOR -> throw new IllegalStateException("Sequence editors are created dynamically");
+            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR -> throw new IllegalStateException("Editor panes are created dynamically");
         };
     }
 
@@ -417,94 +429,71 @@ public class WorkbenchController {
             }
         }));
         commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Simulation Config", this::newSimConfigWizard));
+        commandRegistry.register(new PaneAction(CommandId.NEW_EIGENFIELD, "New Eigenfield", this::newEigenfieldWizard));
+        commandRegistry.register(new PaneAction(CommandId.NEW_SEQUENCE, "New Sequence", this::newSequenceWizard));
     }
 
     /**
      * File→New Simulation Config wizard.
-     * Collects BlochData from any imported scenario/capture and extracts physics parameters.
+     * Offers two paths: extract from imported data, or create with defaults.
      */
+    /** File → New → Simulation Config wizard. Offers template choice + optional import source. */
     private void newSimConfigWizard() {
-        var repo = session.project.repository.get();
+        // Step 1: Name
+        var nameDialog = new javafx.scene.control.TextInputDialog("New Config");
+        nameDialog.setTitle("New Simulation Config");
+        nameDialog.setHeaderText("Name:");
+        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
+        if (name == null) return;
 
-        // Build a list of all importable sources: (displayName, BlochData)
-        // Walk all imports, find their captures, and collect BlochData
-        record Source(String label, ax.xz.mri.model.scenario.BlochData data) {}
-        var sources = new java.util.ArrayList<Source>();
+        // Step 2: Template
+        var templates = java.util.Arrays.asList(ax.xz.mri.model.simulation.SimConfigTemplate.values());
+        var templateDialog = new javafx.scene.control.ChoiceDialog<>(
+            ax.xz.mri.model.simulation.SimConfigTemplate.LOW_FIELD_MRI, templates);
+        templateDialog.setTitle("New Simulation Config");
+        templateDialog.setHeaderText("Starting template:");
+        templateDialog.setContentText("Template:");
+        var template = templateDialog.showAndWait().orElse(null);
+        if (template == null) return;
 
-        for (var importId : repo.importLinkIds()) {
-            var link = (ax.xz.mri.project.ImportLinkDocument) repo.node(importId);
-            if (link == null) continue;
-            // Walk children recursively to find captures with BlochData
-            java.util.Deque<ax.xz.mri.project.ProjectNodeId> stack = new java.util.ArrayDeque<>();
-            stack.push(importId);
-            while (!stack.isEmpty()) {
-                var id = stack.pop();
-                var node = repo.node(id);
-                if (node == null) continue;
-                var resolved = repo.resolveCapture(id);
-                if (resolved != null && resolved.blochData() != null) {
-                    sources.add(new Source(link.name() + " → " + resolved.name(), resolved.blochData()));
-                }
-                for (var childId : repo.childrenOf(id)) stack.push(childId);
-            }
-        }
+        var params = ax.xz.mri.service.ObjectFactory.PhysicsParams.DEFAULTS;
+        var doc = session.project.createSimConfig(name, template, params);
+        session.project.selectNode(doc.id());
+        session.project.openNode(doc.id());
+    }
 
-        if (sources.isEmpty()) {
-            showError("No data sources",
-                "Import a JSON file first. The wizard extracts B₀, T₁, T₂ and spatial parameters from imported data.");
-            return;
-        }
+    /** File → New → Eigenfield wizard. */
+    private void newEigenfieldWizard() {
+        var presetDialog = new javafx.scene.control.ChoiceDialog<>(
+            ax.xz.mri.model.simulation.EigenfieldPreset.UNIFORM_BZ,
+            java.util.Arrays.asList(ax.xz.mri.model.simulation.EigenfieldPreset.values()));
+        presetDialog.setTitle("New Eigenfield");
+        presetDialog.setHeaderText("Choose eigenfield preset:");
+        presetDialog.setContentText("Preset:");
+        var preset = presetDialog.showAndWait().orElse(null);
+        if (preset == null) return;
 
-        // Source selection dialog
-        var sourceNames = sources.stream().map(Source::label).toList();
-        var sourceDialog = new javafx.scene.control.ChoiceDialog<>(sourceNames.getFirst(), sourceNames);
-        sourceDialog.setTitle("New Simulation Config");
-        sourceDialog.setHeaderText("Extract parameters from imported data");
-        sourceDialog.setContentText("Source capture:");
-        sourceDialog.getDialogPane().setPrefWidth(450);
+        var nameDialog = new javafx.scene.control.TextInputDialog(preset.displayName());
+        nameDialog.setTitle("New Eigenfield");
+        nameDialog.setHeaderText("Name:");
+        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
+        if (name == null) return;
 
-        sourceDialog.showAndWait().ifPresent(choice -> {
-            var source = sources.stream().filter(s -> s.label.equals(choice)).findFirst().orElse(null);
-            if (source == null) return;
-            var field = source.data.field();
+        var ef = session.project.createEigenfield(name, preset.description(), preset);
+        session.project.selectNode(ef.id());
+    }
 
-            var config = new ax.xz.mri.model.simulation.SimulationConfig(
-                field.b0n,
-                field.t1 * 1e3,  // seconds → ms (config stores ms)
-                field.t2 * 1e3,  // seconds → ms
-                field.gamma != 0 ? field.gamma : 267.522e6,
-                ax.xz.mri.model.simulation.FieldPreset.UNIFORM,
-                (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3,
-                field.fovZ * 1e3,
-                field.fovX * 1e3,
-                field.zMm != null ? field.zMm.length : 50,
-                field.rMm != null ? field.rMm.length : 1,
-                0.0,
-                source.data.iso() != null
-                    ? source.data.iso().stream()
-                        .map(iso -> new ax.xz.mri.model.simulation.SimulationConfig.IsoPoint(
-                            0, 0, iso.name(), iso.colour()))
-                        .toList()
-                    : java.util.List.of()
-            );
+    /** File → New → Sequence wizard. */
+    private void newSequenceWizard() {
+        var nameDialog = new javafx.scene.control.TextInputDialog("New Sequence");
+        nameDialog.setTitle("New Sequence");
+        nameDialog.setHeaderText("Name:");
+        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
+        if (name == null) return;
 
-            // Name dialog
-            var nameDialog = new javafx.scene.control.TextInputDialog("Config from " + choice);
-            nameDialog.setTitle("Simulation Config Name");
-            nameDialog.setHeaderText("Name:");
-            nameDialog.showAndWait().ifPresent(name -> {
-                var doc = new ax.xz.mri.project.SimulationConfigDocument(
-                    new ax.xz.mri.project.ProjectNodeId("simcfg-" + java.util.UUID.randomUUID()),
-                    name.isBlank() ? "Imported Config" : name,
-                    null,
-                    config
-                );
-                repo.addSimConfig(doc);
-                session.project.explorer.refresh();
-                session.project.saveProjectQuietly();
-                session.project.selectNode(doc.id());
-            });
-        });
+        var seq = session.project.createEmptySequence(name);
+        session.project.selectNode(seq.id());
+        session.project.openNode(seq.id());
     }
 
     private void installShellStatusBindings() {
@@ -648,8 +637,14 @@ public class WorkbenchController {
         // Update timeline title to "Simulated Timeline"
         updateTimelineTitle(true);
 
-        // Trigger initial simulation
-        simSession.simulate();
+        // Load the associated simulation config (if any)
+        var simConfigs = session.project.repository.get().simConfigsForSequence(document.id());
+        if (!simConfigs.isEmpty()) {
+            simSession.loadConfig(simConfigs.getFirst());
+        } else {
+            // Trigger simulation (will be a no-op if no config, but that's correct)
+            simSession.simulate();
+        }
     }
 
     /** Close all open editor tabs (unsaved changes prompt for each). */
@@ -689,9 +684,43 @@ public class WorkbenchController {
         }
     }
 
+    /** Open a sim config editor tab alongside the sequence editor. */
+    public void showSimConfigEditor(ax.xz.mri.project.SimulationConfigDocument document) {
+        String configId = document.id().value();
+
+        // If already open, just select the tab
+        var existingDockable = openSimConfigDockables.get(configId);
+        if (existingDockable != null) {
+            sequenceEditorLeaf.selectDockable(existingDockable);
+            return;
+        }
+
+        var editorPane = new ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane(
+            new PaneContext(session, this, PaneId.SIM_CONFIG_EDITOR), document);
+        openSimConfigPanes.put(configId, editorPane);
+
+        var dockable = bento.dockBuilding().dockable("simcfg-" + configId + "-" + System.nanoTime());
+        dockable.setTitle(editorPane.tabTitle());
+        dockable.setNode(editorPane);
+        dockable.setClosable(true);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(false);
+        dockable.setDragGroup(STUDIO_DRAG_GROUP);
+        openSimConfigDockables.put(configId, dockable);
+
+        editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
+        sequenceEditorLeaf.addDockable(dockable);
+        sequenceEditorLeaf.selectDockable(dockable);
+    }
+
     /** Get the simulation session for a given sequence ID. */
     public ax.xz.mri.ui.viewmodel.SequenceSimulationSession getSimSessionForSequence(String seqId) {
         return openSimSessions.get(seqId);
+    }
+
+    /** Get all open simulation sessions (for pushing config updates). */
+    public java.util.Collection<ax.xz.mri.ui.viewmodel.SequenceSimulationSession> allSimSessions() {
+        return java.util.Collections.unmodifiableCollection(openSimSessions.values());
     }
 
     /** Update the timeline tab title depending on mode. */

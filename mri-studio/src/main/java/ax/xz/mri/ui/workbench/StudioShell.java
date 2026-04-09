@@ -58,7 +58,7 @@ public class StudioShell extends BorderPane {
             menuItem("Import JSON\u2026", CommandId.IMPORT_JSON, KeyCombination.keyCombination("Shortcut+I")),
             menuItem("Reload Import", CommandId.RELOAD_FILE, KeyCombination.keyCombination("Shortcut+R")),
             new SeparatorMenuItem(),
-            menuItem("New Simulation Config\u2026", CommandId.NEW_SIM_CONFIG, null),
+            buildNewMenu(),
             new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
@@ -112,6 +112,16 @@ public class StudioShell extends BorderPane {
         bar.getStyleClass().add("shell-status-bar");
         bar.setPadding(new Insets(2, 6, 2, 6));
         return bar;
+    }
+
+    private Menu buildNewMenu() {
+        var newMenu = new Menu("New");
+        newMenu.getItems().addAll(
+            menuItem("Simulation Config\u2026", CommandId.NEW_SIM_CONFIG, null),
+            menuItem("Eigenfield\u2026", CommandId.NEW_EIGENFIELD, null),
+            menuItem("Sequence (empty)\u2026", CommandId.NEW_SEQUENCE, null)
+        );
+        return newMenu;
     }
 
     private MenuItem menuItem(String label, CommandId id, KeyCombination accelerator) {

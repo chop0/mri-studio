@@ -171,3 +171,18 @@
 .check-box > .box {
     -fx-background-radius: 4;
 }
+
+/* Simulation config editor — field cards */
+.field-card {
+    -fx-border-color: #c8d0da;
+    -fx-border-radius: 4;
+    -fx-background-color: #f6f8fb;
+    -fx-background-radius: 4;
+    -fx-padding: 8;
+}
+
+.section-header {
+    -fx-font-weight: bold;
+    -fx-font-size: 13px;
+    -fx-text-fill: #1f2937;
+}

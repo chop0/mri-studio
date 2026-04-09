@@ -26,6 +26,7 @@ public final class ProjectRepository {
     private final List<ProjectNodeId> importLinkIds = new ArrayList<>();
     private final List<ProjectNodeId> sequenceIds = new ArrayList<>();
     private final List<ProjectNodeId> simConfigIds = new ArrayList<>();
+    private final List<ProjectNodeId> eigenfieldIds = new ArrayList<>();
 
     public ProjectRepository(ProjectManifest manifest) {
         this.manifest = Objects.requireNonNull(manifest);
@@ -53,6 +54,10 @@ public final class ProjectRepository {
 
     public List<ProjectNodeId> simConfigIds() {
         return List.copyOf(simConfigIds);
+    }
+
+    public List<ProjectNodeId> eigenfieldIds() {
+        return List.copyOf(eigenfieldIds);
     }
 
     public ProjectNode node(ProjectNodeId id) {
@@ -170,6 +175,49 @@ public final class ProjectRepository {
             .filter(n -> n instanceof SimulationConfigDocument sc && sequenceId.equals(sc.sequenceId()))
             .map(n -> (SimulationConfigDocument) n)
             .toList();
+    }
+
+    // --- Eigenfields ---
+
+    public void addEigenfield(EigenfieldDocument eigenfield) {
+        nodes.put(eigenfield.id(), eigenfield);
+        if (!eigenfieldIds.contains(eigenfield.id())) {
+            eigenfieldIds.add(eigenfield.id());
+        }
+    }
+
+    public void removeEigenfield(ProjectNodeId eigenfieldId) {
+        var node = nodes.get(eigenfieldId);
+        if (!(node instanceof EigenfieldDocument)) return;
+        nodes.remove(eigenfieldId);
+        eigenfieldIds.remove(eigenfieldId);
+    }
+
+    public void updateEigenfield(EigenfieldDocument updated) {
+        if (!eigenfieldIds.contains(updated.id())) {
+            throw new IllegalArgumentException("Eigenfield " + updated.id() + " does not exist");
+        }
+        nodes.put(updated.id(), updated);
+    }
+
+    public EigenfieldDocument renameEigenfield(ProjectNodeId eigenfieldId, String newName) {
+        var node = nodes.get(eigenfieldId);
+        if (!(node instanceof EigenfieldDocument ef)) {
+            throw new IllegalArgumentException("Node " + eigenfieldId + " is not an eigenfield");
+        }
+        var renamed = ef.withName(newName);
+        nodes.put(eigenfieldId, renamed);
+        return renamed;
+    }
+
+    public SimulationConfigDocument renameSimConfig(ProjectNodeId configId, String newName) {
+        var node = nodes.get(configId);
+        if (!(node instanceof SimulationConfigDocument sc)) {
+            throw new IllegalArgumentException("Node " + configId + " is not a simulation config");
+        }
+        var renamed = sc.withName(newName);
+        nodes.put(configId, renamed);
+        return renamed;
     }
 
     public ProjectNodeId containingImport(ProjectNodeId id) {

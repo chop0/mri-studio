@@ -24,7 +24,7 @@ public final class SequenceSimulationSession {
     private static final long DEBOUNCE_MS = 500;
 
     public final ObjectProperty<SimulationConfigDocument> activeConfigDoc = new SimpleObjectProperty<>();
-    public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>(SimulationConfig.defaults());
+    public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
     public final BooleanProperty autoSimulate = new SimpleBooleanProperty(true);
     public final BooleanProperty simulating = new SimpleBooleanProperty(false);
     public final BooleanProperty stale = new SimpleBooleanProperty(false);
@@ -34,9 +34,12 @@ public final class SequenceSimulationSession {
     private Timer debounceTimer;
     private boolean disposed;
 
+    private final ProjectSessionViewModel projectSession;
+
     public SequenceSimulationSession(SequenceEditSession editSession, StudioSession studioSession) {
         this.editSession = editSession;
         this.studioSession = studioSession;
+        this.projectSession = studioSession.project;
 
         editSession.revision.addListener((obs, o, n) -> {
             stale.set(true);
@@ -79,7 +82,7 @@ public final class SequenceSimulationSession {
         var doc = editSession.toDocument();
         var segments = doc.segments();
         var pulse = doc.pulse();
-        var data = BlochDataFactory.build(config, segments);
+        var data = BlochDataFactory.build(config, segments, projectSession.repository.get());
 
         // Push through the single unified path — this is the ONLY place data reaches the panes
         studioSession.loadSimulationResult(data, pulse);

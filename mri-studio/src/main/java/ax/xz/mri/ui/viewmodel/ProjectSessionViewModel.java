@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.project.CaptureDocument;
+import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ImportLinkDocument;
 import ax.xz.mri.project.ImportedCaptureDocument;
 import ax.xz.mri.project.ImportedOptimisationRunDocument;
@@ -15,6 +16,7 @@ import ax.xz.mri.project.ProjectSerialiser;
 import ax.xz.mri.project.RunBookmarkDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SequenceSnapshotDocument;
+import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.project.SimulationDocument;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -23,7 +25,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /** Project-first selection, import, run navigation, and snapshot-promotion state. */
 public final class ProjectSessionViewModel {
@@ -37,6 +41,13 @@ public final class ProjectSessionViewModel {
 
     private final LegacyImportService importService = new LegacyImportService();
     private final ProjectSerialiser serialiser = new ProjectSerialiser();
+
+    /** Callback invoked when a sim config is opened (set by WorkbenchController). */
+    private java.util.function.Consumer<SimulationConfigDocument> onSimConfigOpened;
+
+    public void setOnSimConfigOpened(java.util.function.Consumer<SimulationConfigDocument> callback) {
+        this.onSimConfigOpened = callback;
+    }
 
     public ProjectSessionViewModel() {
         repository.addListener((obs, oldValue, newValue) -> explorer.refresh());
@@ -95,12 +106,22 @@ public final class ProjectSessionViewModel {
         // Write current sim configs and clean up deleted ones
         var currentSimSlugs = new java.util.HashSet<String>();
         for (var configId : repo.simConfigIds()) {
-            var config = (ax.xz.mri.project.SimulationConfigDocument) repo.node(configId);
+            var config = (SimulationConfigDocument) repo.node(configId);
             String simSlug = slug(config.name());
             currentSimSlugs.add(simSlug);
             serialiser.writeJson(root.resolve("simulations").resolve(simSlug).resolve("config.json"), config);
         }
         cleanupDeletedDirs(root.resolve("simulations"), currentSimSlugs);
+
+        // Write current eigenfields and clean up deleted ones
+        var currentEigenfieldSlugs = new java.util.HashSet<String>();
+        for (var eigenfieldId : repo.eigenfieldIds()) {
+            var eigenfield = (EigenfieldDocument) repo.node(eigenfieldId);
+            String efSlug = slug(eigenfield.name());
+            currentEigenfieldSlugs.add(efSlug);
+            serialiser.writeJson(root.resolve("eigenfields").resolve(efSlug).resolve("eigenfield.json"), eigenfield);
+        }
+        cleanupDeletedDirs(root.resolve("eigenfields"), currentEigenfieldSlugs);
 
         explorer.refresh();
     }
@@ -152,7 +173,16 @@ public final class ProjectSessionViewModel {
         if (Files.isDirectory(simulationsDir)) {
             try (var files = Files.walk(simulationsDir)) {
                 for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("config.json")).toList()) {
-                    loadedRepository.addSimConfig(serialiser.readJson(path, ax.xz.mri.project.SimulationConfigDocument.class));
+                    loadedRepository.addSimConfig(serialiser.readJson(path, SimulationConfigDocument.class));
+                }
+            }
+        }
+
+        var eigenfieldsDir = root.resolve("eigenfields");
+        if (Files.isDirectory(eigenfieldsDir)) {
+            try (var files = Files.walk(eigenfieldsDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("eigenfield.json")).toList()) {
+                    loadedRepository.addEigenfield(serialiser.readJson(path, EigenfieldDocument.class));
                 }
             }
         }
@@ -253,12 +283,16 @@ public final class ProjectSessionViewModel {
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(null);
             }
-            case ax.xz.mri.project.SimulationConfigDocument simConfig -> {
-                // Open the parent sequence (which triggers the editor), then the sim config
-                // will be picked up by the editor's simulation session
-                if (simConfig.sequenceId() != null) {
-                    openNode(simConfig.sequenceId());
+            case SimulationConfigDocument simConfig -> {
+                // Set inspector to show the sim config. The WorkbenchController
+                // will handle opening the editor tab via onSimConfigOpened.
+                inspector.inspectedNodeId.set(nodeId);
+                if (onSimConfigOpened != null) {
+                    onSimConfigOpened.accept(simConfig);
                 }
+            }
+            case EigenfieldDocument _ -> {
+                // Eigenfields have no editor yet — just show in inspector
                 inspector.inspectedNodeId.set(nodeId);
             }
             case SimulationDocument simulation -> openNode(simulation.captureId());
@@ -307,6 +341,29 @@ public final class ProjectSessionViewModel {
         saveProjectQuietly();
     }
 
+    public void renameSimConfig(ProjectNodeId configId, String newName) {
+        repository.get().renameSimConfig(configId, newName);
+        explorer.refresh();
+        selectNode(configId);
+        saveProjectQuietly();
+    }
+
+    public void deleteEigenfield(ProjectNodeId eigenfieldId) {
+        repository.get().removeEigenfield(eigenfieldId);
+        if (eigenfieldId.equals(inspector.inspectedNodeId.get())) {
+            inspector.inspectedNodeId.set(null);
+        }
+        explorer.refresh();
+        saveProjectQuietly();
+    }
+
+    public void renameEigenfield(ProjectNodeId eigenfieldId, String newName) {
+        repository.get().renameEigenfield(eigenfieldId, newName);
+        explorer.refresh();
+        selectNode(eigenfieldId);
+        saveProjectQuietly();
+    }
+
     public void promoteSelectedSnapshotToSequence() {
         promoteSnapshotForNode(inspector.inspectedNodeId.get());
     }
@@ -331,6 +388,19 @@ public final class ProjectSessionViewModel {
         if (snapshot == null) return;
         String baseName = snapshot.name().replace("Snapshot", "").trim();
         var sequence = repo.promoteSnapshotToSequence(snapshot.id(), baseName.isBlank() ? "Imported Sequence" : baseName + " Sequence");
+
+        // Auto-create a simulation config from the source capture's field parameters
+        var capture = activeCapture.activeCapture.get();
+        var fieldMap = capture != null ? capture.field() : null;
+        var params = ax.xz.mri.service.ObjectFactory.extractFromFieldMap(fieldMap);
+        var fields = ax.xz.mri.service.ObjectFactory.fieldsFromImport(fieldMap, repo);
+        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
+
+        var configDoc = new SimulationConfigDocument(
+            new ProjectNodeId("simcfg-" + UUID.randomUUID()),
+            baseName + " Config", sequence.id(), config);
+        repo.addSimConfig(configDoc);
+
         explorer.refresh();
         selectNode(sequence.id());
         openNode(sequence.id());
@@ -355,6 +425,53 @@ public final class ProjectSessionViewModel {
     private static ProjectNodeId visibleRunOwner(ProjectRepository repository, ProjectNodeId runId) {
         var parent = repository.parentOf(runId);
         return repository.node(runId) instanceof ImportedOptimisationRunDocument && parent != null ? parent : runId;
+    }
+
+    /**
+     * Create a simulation config from a template.
+     *
+     * @param name     display name
+     * @param template the template to use for field creation
+     * @param params   physics parameters
+     * @return the created document
+     */
+    public SimulationConfigDocument createSimConfig(
+            String name, ax.xz.mri.model.simulation.SimConfigTemplate template,
+            ax.xz.mri.service.ObjectFactory.PhysicsParams params) {
+        var repo = repository.get();
+        var fields = template.createFields(params.b0Tesla(), params.gamma(), repo);
+        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
+        var doc = new SimulationConfigDocument(
+            new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, null, config);
+        repo.addSimConfig(doc);
+        explorer.refresh();
+        saveProjectQuietly();
+        return doc;
+    }
+
+    /** Create a standalone eigenfield document. */
+    public EigenfieldDocument createEigenfield(String name, String description, ax.xz.mri.model.simulation.EigenfieldPreset preset) {
+        var repo = repository.get();
+        var ef = ax.xz.mri.service.ObjectFactory.findOrCreateEigenfield(repo, name, description, preset);
+        explorer.refresh();
+        saveProjectQuietly();
+        return ef;
+    }
+
+    /** Create an empty sequence. */
+    public ax.xz.mri.project.SequenceDocument createEmptySequence(String name) {
+        var repo = repository.get();
+        var doc = new ax.xz.mri.project.SequenceDocument(
+            new ProjectNodeId("seq-" + UUID.randomUUID()), name,
+            List.of(new ax.xz.mri.model.sequence.Segment(1e-5, 0, 100)),
+            List.of(new ax.xz.mri.model.sequence.PulseSegment(
+                java.util.Collections.nCopies(100, new ax.xz.mri.model.sequence.PulseStep(0, 0, 0, 0, 0))
+            ))
+        );
+        repo.addSequence(doc);
+        explorer.refresh();
+        saveProjectQuietly();
+        return doc;
     }
 
     private static String slug(String value) {

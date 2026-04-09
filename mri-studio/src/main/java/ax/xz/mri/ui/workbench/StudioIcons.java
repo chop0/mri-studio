@@ -35,6 +35,7 @@ public final class StudioIcons {
             case SIMULATION -> drawSimulation(g);
             case OPTIMISATION_CONFIG -> drawSliders(g);
             case BOOKMARK -> drawPin(g);
+            case EIGENFIELD -> drawEigenfield(g);
         }
         return canvas;
     }
@@ -133,5 +134,20 @@ public final class StudioIcons {
         g.strokeLine(5.8, 7.2, 5.8, 11.3);
         g.strokeLine(5.8, 11.3, 4.2, 12.5);
         g.setStroke(INK);
+    }
+
+    /** Eigenfield icon — vector field arrows radiating from centre. */
+    private static void drawEigenfield(GraphicsContext g) {
+        g.setStroke(ACCENT);
+        // Centre dot
+        g.setFill(ACCENT);
+        g.fillOval(5.8, 5.8, 2.2, 2.2);
+        // Arrows radiating outward
+        g.strokeLine(7.0, 4.5, 7.0, 1.8);
+        g.strokeLine(7.0, 9.3, 7.0, 12.0);
+        g.strokeLine(4.5, 7.0, 1.8, 7.0);
+        g.strokeLine(9.3, 7.0, 12.0, 7.0);
+        g.setStroke(INK);
+        g.setFill(SOFT);
     }
 }

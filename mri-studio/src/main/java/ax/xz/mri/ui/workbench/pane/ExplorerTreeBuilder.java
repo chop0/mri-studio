@@ -40,6 +40,14 @@ public final class ExplorerTreeBuilder {
             root.getChildren().add(simConfigs);
         }
 
+        var eigenfields = branch("Eigenfields", null, StudioIconKind.EIGENFIELD);
+        for (var eigenfieldId : repository.eigenfieldIds()) {
+            eigenfields.getChildren().add(buildNode(repository, eigenfieldId));
+        }
+        if (!eigenfields.getChildren().isEmpty()) {
+            root.getChildren().add(eigenfields);
+        }
+
         root.setExpanded(true);
         imports.setExpanded(true);
         sequences.setExpanded(true);
@@ -59,7 +67,7 @@ public final class ExplorerTreeBuilder {
             case RUN_BOOKMARK -> branch(ProjectDisplayNames.label(node), node.id(), StudioIconKind.BOOKMARK);
             case IMPORTED_CAPTURE, CAPTURE -> branch(ProjectDisplayNames.label(node), node.id(), iconFor(node.kind()));
             case SEQUENCE -> buildSequenceNode(repository, nodeId);
-            case SIMULATION, OPTIMISATION_CONFIG -> buildGenericNode(repository, node);
+            case SIMULATION, OPTIMISATION_CONFIG, EIGENFIELD -> buildGenericNode(repository, node);
             case SEQUENCE_SNAPSHOT -> null;
         };
     }
@@ -139,6 +147,7 @@ public final class ExplorerTreeBuilder {
             case SIMULATION -> StudioIconKind.SIMULATION;
             case OPTIMISATION_CONFIG -> StudioIconKind.OPTIMISATION_CONFIG;
             case RUN_BOOKMARK -> StudioIconKind.BOOKMARK;
+            case EIGENFIELD -> StudioIconKind.EIGENFIELD;
         };
     }
 

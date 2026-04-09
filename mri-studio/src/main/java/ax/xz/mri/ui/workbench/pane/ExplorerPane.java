@@ -177,6 +177,27 @@ public final class ExplorerPane extends WorkbenchPane {
             });
             menu.getItems().add(delete);
         }
+
+        if (node != null && node.kind() == ProjectNodeKind.SIMULATION) {
+            var rename = new MenuItem("Rename Config");
+            rename.setOnAction(event -> renameSimConfig(entry.nodeId()));
+            menu.getItems().add(rename);
+
+            var delete = new MenuItem("Delete Config");
+            delete.setOnAction(event -> paneContext.session().project.deleteSimConfig(entry.nodeId()));
+            menu.getItems().add(delete);
+        }
+
+        if (node != null && node.kind() == ProjectNodeKind.EIGENFIELD) {
+            var rename = new MenuItem("Rename Eigenfield");
+            rename.setOnAction(event -> renameEigenfield(entry.nodeId()));
+            menu.getItems().add(rename);
+
+            var delete = new MenuItem("Delete Eigenfield");
+            delete.setOnAction(event -> paneContext.session().project.deleteEigenfield(entry.nodeId()));
+            menu.getItems().add(delete);
+        }
+
         return menu;
     }
 
@@ -190,5 +211,29 @@ public final class ExplorerPane extends WorkbenchPane {
         dialog.setContentText("Name:");
         dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
             paneContext.session().project.renameSequence(sequenceId, value));
+    }
+
+    private void renameSimConfig(ProjectNodeId configId) {
+        var repository = paneContext.session().project.repository.get();
+        var node = repository.node(configId);
+        if (node == null) return;
+        var dialog = new TextInputDialog(node.name());
+        dialog.setTitle("Rename Simulation Config");
+        dialog.setHeaderText("Rename simulation config");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
+            paneContext.session().project.renameSimConfig(configId, value));
+    }
+
+    private void renameEigenfield(ProjectNodeId eigenfieldId) {
+        var repository = paneContext.session().project.repository.get();
+        var node = repository.node(eigenfieldId);
+        if (node == null) return;
+        var dialog = new TextInputDialog(node.name());
+        dialog.setTitle("Rename Eigenfield");
+        dialog.setHeaderText("Rename eigenfield");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
+            paneContext.session().project.renameEigenfield(eigenfieldId, value));
     }
 }

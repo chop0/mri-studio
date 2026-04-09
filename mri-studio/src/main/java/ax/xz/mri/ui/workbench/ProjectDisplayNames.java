@@ -21,6 +21,7 @@ public final class ProjectDisplayNames {
             case OPTIMISATION_CONFIG -> "Optimisation Config: " + node.name();
             case SEQUENCE_SNAPSHOT -> node.name();
             case RUN_BOOKMARK -> bookmarkLabel((RunBookmarkDocument) node);
+            case EIGENFIELD -> "Eigenfield: " + node.name();
         };
     }
 

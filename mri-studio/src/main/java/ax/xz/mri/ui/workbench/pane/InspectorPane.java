@@ -138,15 +138,22 @@ public final class InspectorPane extends WorkbenchPane {
                 content.getChildren().add(infoLine("Name", simConfig.name()));
                 var cfg = simConfig.config();
                 if (cfg != null) {
-                    content.getChildren().add(infoLine("B₀", String.format("%.1f T", cfg.b0Tesla())));
+                    content.getChildren().add(infoLine("B₀", String.format("%.4f T", cfg.b0Tesla())));
                     content.getChildren().add(infoLine("T₁", String.format("%.0f ms", cfg.t1Ms())));
                     content.getChildren().add(infoLine("T₂", String.format("%.0f ms", cfg.t2Ms())));
-                    content.getChildren().add(infoLine("Preset", cfg.preset().displayName()));
+                    content.getChildren().add(infoLine("Fields", String.valueOf(cfg.fields().size())));
                 }
                 content.getChildren().add(new Separator());
                 content.getChildren().add(actionRow(
+                    button("Open Editor", () -> paneContext.session().project.openNode(simConfig.id())),
                     button("Delete", () -> paneContext.session().project.deleteSimConfig(simConfig.id()))
                 ));
+            }
+            case ax.xz.mri.project.EigenfieldDocument eigenfield -> {
+                content.getChildren().add(infoLine("Type", "Eigenfield"));
+                content.getChildren().add(infoLine("Name", eigenfield.name()));
+                content.getChildren().add(infoLine("Preset", eigenfield.preset().displayName()));
+                content.getChildren().add(infoLine("Description", eigenfield.description()));
             }
             case SimulationDocument simulation -> {
                 content.getChildren().add(infoLine("Type", "Simulation"));
@@ -654,6 +661,7 @@ public final class InspectorPane extends WorkbenchPane {
             case ProjectNodeKind.SIMULATION -> StudioIcons.create(StudioIconKind.SIMULATION);
             case ProjectNodeKind.OPTIMISATION_CONFIG -> StudioIcons.create(StudioIconKind.OPTIMISATION_CONFIG);
             case ProjectNodeKind.RUN_BOOKMARK -> StudioIcons.create(StudioIconKind.BOOKMARK);
+            case ProjectNodeKind.EIGENFIELD -> StudioIcons.create(StudioIconKind.EIGENFIELD);
         };
         String titleText = node instanceof ImportedScenarioDocument scenario && scenario.iterative()
             ? "Optimisation: " + scenario.name()
