@@ -20,7 +20,7 @@ class SimConfigAndEigenfieldTest {
 
     /** Helper: create a sim config using the standard low-field MRI template. */
     private static SimulationConfigDocument createConfig(ProjectSessionViewModel session, String name, double b0Tesla) {
-        var params = new ObjectFactory.PhysicsParams(b0Tesla, 267.522e6, 1000, 100, 5, 20, 30, 50, 5);
+        var params = ObjectFactory.PhysicsParams.DEFAULTS;
         return session.createSimConfig(name, SimConfigTemplate.LOW_FIELD_MRI, params);
     }
 

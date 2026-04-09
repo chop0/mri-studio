@@ -102,8 +102,9 @@ public class StudioSession {
             loadingSimulation = false;
         }
 
-        // Update viewport to match the new data's time range
-        updateViewportBounds(data);
+        // Update viewport bounds without resetting the user's zoom/pan position.
+        // The full reset only happens on initial load (setDocument) and import switches.
+        updateViewportBoundsPreservePosition(data);
 
         // Feed the simulation engine — single setContext, single resimulate
         points.setContext(data, pulse);
@@ -159,6 +160,22 @@ public class StudioSession {
         viewport.maxTime.set(total);
         viewport.resetToFullRange();
         geometry.fitVisibleRange(data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
+    }
+
+    /**
+     * Update viewport bounds from simulation data without resetting the user's zoom/pan.
+     * Used for incremental re-simulations (edits, undo/redo) where the user's viewport
+     * position should be preserved.
+     */
+    private void updateViewportBoundsPreservePosition(BlochData data) {
+        if (data == null || data.field() == null || data.field().segments == null) {
+            viewport.setMaxTimePreservePosition(1000);
+            return;
+        }
+        double total = data.field().segments.stream()
+            .mapToDouble(segment -> segment.durationMicros())
+            .sum();
+        viewport.setMaxTimePreservePosition(total);
     }
 
     private void refreshGeometryShading() {

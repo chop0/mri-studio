@@ -22,7 +22,6 @@ class ObjectFactoryTest {
         var field = TestBlochDataFactory.sampleDocument().field();
         var params = ObjectFactory.extractFromFieldMap(field);
 
-        assertEquals(1.5, params.b0Tesla(), 1e-10);
         assertEquals(267.5e6, params.gamma(), 1e3);
         assertEquals(1000, params.t1Ms(), 1); // 1.0s → 1000ms
         assertEquals(80, params.t2Ms(), 1);   // 0.08s → 80ms
@@ -152,7 +151,7 @@ class ObjectFactoryTest {
     @Test
     void emptyTemplateCreatesNoFields() {
         var repo = ProjectRepository.untitled();
-        var fields = SimConfigTemplate.EMPTY.createFields(0.0154, 267.522e6, repo);
+        var fields = SimConfigTemplate.EMPTY.createFields(repo);
         assertTrue(fields.isEmpty());
         assertTrue(repo.eigenfieldIds().isEmpty());
     }
@@ -160,7 +159,7 @@ class ObjectFactoryTest {
     @Test
     void lowFieldMriTemplateCreates4FieldsWithEigenfields() {
         var repo = ProjectRepository.untitled();
-        var fields = SimConfigTemplate.LOW_FIELD_MRI.createFields(0.0154, 267.522e6, repo);
+        var fields = SimConfigTemplate.LOW_FIELD_MRI.createFields(repo);
 
         assertEquals(4, fields.size());
         assertEquals(4, repo.eigenfieldIds().size());

@@ -25,15 +25,15 @@ import java.util.UUID;
 public final class ObjectFactory {
 	private ObjectFactory() {}
 
-	/** Physics parameters extracted from imported data or entered by the user. */
+	/** Tissue and spatial parameters (no field amplitudes — those belong to field definitions). */
 	public record PhysicsParams(
-		double b0Tesla, double gamma,
+		double gamma,
 		double t1Ms, double t2Ms,
 		double sliceHalfMm, double fovZMm, double fovRMm,
 		int nZ, int nR
 	) {
 		public static final PhysicsParams DEFAULTS =
-			new PhysicsParams(0.0154, 267.522e6, 1000, 100, 5, 20, 30, 50, 5);
+			new PhysicsParams(267.522e6, 1000, 100, 5, 20, 30, 50, 5);
 	}
 
 	// --- Generic builders (no hardware knowledge) ---
@@ -73,11 +73,10 @@ public final class ObjectFactory {
 
 	// --- Import-specific extraction (hardware knowledge lives here) ---
 
-	/** Extract physics parameters from an imported FieldMap. */
+	/** Extract tissue/spatial parameters from an imported FieldMap. */
 	public static PhysicsParams extractFromFieldMap(FieldMap field) {
 		if (field == null) return PhysicsParams.DEFAULTS;
 		return new PhysicsParams(
-			field.b0n,
 			field.gamma != 0 ? field.gamma : 267.522e6,
 			field.t1 * 1e3,
 			field.t2 * 1e3,
@@ -87,6 +86,11 @@ public final class ObjectFactory {
 			field.zMm != null ? field.zMm.length : 50,
 			field.rMm != null ? field.rMm.length : 5
 		);
+	}
+
+	/** Extract B0 field strength from an imported FieldMap. */
+	public static double extractB0(FieldMap field) {
+		return field != null ? field.b0n : 0.0154;
 	}
 
 	/**
@@ -102,7 +106,7 @@ public final class ObjectFactory {
 	 * </ul>
 	 */
 	public static List<FieldDefinition> fieldsFromImport(FieldMap field, ProjectRepository repo) {
-		double b0 = field != null ? field.b0n : PhysicsParams.DEFAULTS.b0Tesla;
+		double b0 = extractB0(field);
 		double gamma = field != null && field.gamma != 0 ? field.gamma : PhysicsParams.DEFAULTS.gamma;
 
 		var b0Eigen = findOrCreateEigenfield(repo,

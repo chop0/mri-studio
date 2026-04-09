@@ -437,63 +437,26 @@ public class WorkbenchController {
      * File→New Simulation Config wizard.
      * Offers two paths: extract from imported data, or create with defaults.
      */
-    /** File → New → Simulation Config wizard. Offers template choice + optional import source. */
+    /** File → New → Simulation Config wizard. */
     private void newSimConfigWizard() {
-        // Step 1: Name
-        var nameDialog = new javafx.scene.control.TextInputDialog("New Config");
-        nameDialog.setTitle("New Simulation Config");
-        nameDialog.setHeaderText("Name:");
-        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
-        if (name == null) return;
-
-        // Step 2: Template
-        var templates = java.util.Arrays.asList(ax.xz.mri.model.simulation.SimConfigTemplate.values());
-        var templateDialog = new javafx.scene.control.ChoiceDialog<>(
-            ax.xz.mri.model.simulation.SimConfigTemplate.LOW_FIELD_MRI, templates);
-        templateDialog.setTitle("New Simulation Config");
-        templateDialog.setHeaderText("Starting template:");
-        templateDialog.setContentText("Template:");
-        var template = templateDialog.showAndWait().orElse(null);
-        if (template == null) return;
-
-        var params = ax.xz.mri.service.ObjectFactory.PhysicsParams.DEFAULTS;
-        var doc = session.project.createSimConfig(name, template, params);
-        session.project.selectNode(doc.id());
-        session.project.openNode(doc.id());
+        ax.xz.mri.ui.wizard.NewSimConfigWizard.show(mainStage, session.project).ifPresent(doc -> {
+            session.project.selectNode(doc.id());
+            session.project.openNode(doc.id());
+        });
     }
 
     /** File → New → Eigenfield wizard. */
     private void newEigenfieldWizard() {
-        var presetDialog = new javafx.scene.control.ChoiceDialog<>(
-            ax.xz.mri.model.simulation.EigenfieldPreset.UNIFORM_BZ,
-            java.util.Arrays.asList(ax.xz.mri.model.simulation.EigenfieldPreset.values()));
-        presetDialog.setTitle("New Eigenfield");
-        presetDialog.setHeaderText("Choose eigenfield preset:");
-        presetDialog.setContentText("Preset:");
-        var preset = presetDialog.showAndWait().orElse(null);
-        if (preset == null) return;
-
-        var nameDialog = new javafx.scene.control.TextInputDialog(preset.displayName());
-        nameDialog.setTitle("New Eigenfield");
-        nameDialog.setHeaderText("Name:");
-        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
-        if (name == null) return;
-
-        var ef = session.project.createEigenfield(name, preset.description(), preset);
-        session.project.selectNode(ef.id());
+        ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(mainStage, session.project).ifPresent(ef ->
+            session.project.selectNode(ef.id()));
     }
 
     /** File → New → Sequence wizard. */
     private void newSequenceWizard() {
-        var nameDialog = new javafx.scene.control.TextInputDialog("New Sequence");
-        nameDialog.setTitle("New Sequence");
-        nameDialog.setHeaderText("Name:");
-        var name = nameDialog.showAndWait().map(String::trim).filter(n -> !n.isBlank()).orElse(null);
-        if (name == null) return;
-
-        var seq = session.project.createEmptySequence(name);
-        session.project.selectNode(seq.id());
-        session.project.openNode(seq.id());
+        ax.xz.mri.ui.wizard.NewSequenceWizard.show(mainStage, session.project).ifPresent(seq -> {
+            session.project.selectNode(seq.id());
+            session.project.openNode(seq.id());
+        });
     }
 
     private void installShellStatusBindings() {

@@ -186,3 +186,41 @@
     -fx-font-size: 13px;
     -fx-text-fill: #1f2937;
 }
+
+/* --- Wizard dialog --- */
+
+.wizard-root {
+    -fx-background-color: #ffffff;
+}
+
+.wizard-sidebar {
+    -fx-background-color: linear-gradient(to bottom, #f3f5f7, #e7ebef);
+    -fx-border-color: transparent #d3dae3 transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+
+.wizard-step-label {
+    -fx-text-fill: #64748b;
+    -fx-font-size: 12px;
+    -fx-background-radius: 4;
+}
+
+.wizard-step-label.wizard-step-active {
+    -fx-text-fill: #0f6cbd;
+    -fx-font-weight: bold;
+    -fx-background-color: rgba(0, 120, 212, 0.10);
+}
+
+.wizard-step-label.wizard-step-completed {
+    -fx-text-fill: #334155;
+}
+
+.wizard-content {
+    -fx-background-color: #ffffff;
+}
+
+.wizard-button-bar {
+    -fx-background-color: linear-gradient(to bottom, #f6f8fb, #eef2f6);
+    -fx-border-color: #d3dae3 transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}

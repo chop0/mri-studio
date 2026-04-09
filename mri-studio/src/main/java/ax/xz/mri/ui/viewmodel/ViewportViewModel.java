@@ -18,6 +18,7 @@ public class ViewportViewModel {
     public final DoubleProperty maxTime = new SimpleDoubleProperty(1000);
 
     private boolean normalizing;
+    private boolean suppressMaxTimeReset;
 
     public ViewportViewModel() {
         var normalizer = (javafx.beans.value.ChangeListener<Number>) (obs, oldValue, newValue) -> normalize();
@@ -26,8 +27,25 @@ public class ViewportViewModel {
         vS.addListener(normalizer);
         vE.addListener(normalizer);
         tC.addListener(normalizer);
-        maxTime.addListener((obs, oldValue, newValue) -> resetToFullRange());
+        maxTime.addListener((obs, oldValue, newValue) -> {
+            if (!suppressMaxTimeReset) resetToFullRange();
+            else normalize(); // still enforce invariants, just don't reset position
+        });
         normalize();
+    }
+
+    /**
+     * Update maxTime without resetting the viewport to the full range.
+     * Used when re-simulation changes the time bounds but the user's
+     * zoom/pan position should be preserved.
+     */
+    public void setMaxTimePreservePosition(double newMax) {
+        suppressMaxTimeReset = true;
+        try {
+            maxTime.set(newMax);
+        } finally {
+            suppressMaxTimeReset = false;
+        }
     }
 
     public void resetToFullRange() {

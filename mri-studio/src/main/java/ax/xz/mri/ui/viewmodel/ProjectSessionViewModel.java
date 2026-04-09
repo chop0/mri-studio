@@ -439,7 +439,7 @@ public final class ProjectSessionViewModel {
             String name, ax.xz.mri.model.simulation.SimConfigTemplate template,
             ax.xz.mri.service.ObjectFactory.PhysicsParams params) {
         var repo = repository.get();
-        var fields = template.createFields(params.b0Tesla(), params.gamma(), repo);
+        var fields = template.createFields(repo);
         var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, null, config);
