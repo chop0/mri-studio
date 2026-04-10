@@ -29,7 +29,7 @@ public final class SequenceSimulationSession {
     public final BooleanProperty simulating = new SimpleBooleanProperty(false);
     public final BooleanProperty stale = new SimpleBooleanProperty(false);
 
-    private final SequenceEditSession editSession;
+    public final SequenceEditSession editSession;
     private final StudioSession studioSession;
     private Timer debounceTimer;
     private boolean disposed;

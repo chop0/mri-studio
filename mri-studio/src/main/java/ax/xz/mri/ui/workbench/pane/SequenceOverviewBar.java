@@ -102,6 +102,14 @@ public class SequenceOverviewBar extends ResizableCanvas {
         viewport.vE.addListener((obs, o, n) -> {
             if (!syncing) { syncing = true; editSession.viewEnd.set(n.doubleValue()); syncing = false; }
         });
+        // Also sync analysis window (tS/tE) → editor viewport, so scrubbing
+        // in phase maps / trace plots updates the DAW's visible range
+        viewport.tS.addListener((obs, o, n) -> {
+            if (!syncing) { syncing = true; editSession.viewStart.set(n.doubleValue()); syncing = false; }
+        });
+        viewport.tE.addListener((obs, o, n) -> {
+            if (!syncing) { syncing = true; editSession.viewEnd.set(n.doubleValue()); syncing = false; }
+        });
 
         // Redraw when cursor moves
         viewport.tC.addListener((obs, o, n) -> scheduleRedraw());

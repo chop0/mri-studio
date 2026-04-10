@@ -35,4 +35,16 @@ public class SphereViewModel {
         phi.set(0.3);
         zoom.set(1.0);
     }
+
+    public SphereSnapshot captureSnapshot() {
+        return new SphereSnapshot(theta.get(), phi.get(), zoom.get());
+    }
+
+    public void restoreSnapshot(SphereSnapshot snap) {
+        theta.set(snap.theta());
+        phi.set(snap.phi());
+        zoom.set(snap.zoom());
+    }
+
+    public record SphereSnapshot(double theta, double phi, double zoom) {}
 }

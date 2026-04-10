@@ -106,9 +106,11 @@ public class StudioSession {
         // The full reset only happens on initial load (setDocument) and import switches.
         updateViewportBoundsPreservePosition(data);
 
-        // Feed the simulation engine — single setContext, single resimulate
+        // Feed the simulation engine — update context and resimulate existing points.
+        // NOTE: resimulateAll() preserves user's custom points; resetToDefaults() is
+        // only called on first data load (setDocument/import path), not on re-simulation.
         points.setContext(data, pulse);
-        points.resetToDefaults();
+        points.resimulateAll();
 
         // Compute derived quantities (phase maps, signal trace)
         derived.recompute(data, pulse);
@@ -138,6 +140,71 @@ public class StudioSession {
         updateViewportBounds(data);
         refreshReferenceFrame();
         refreshGeometryShading();
+    }
+
+    /** Capture the full tool window state for the current document. */
+    public DocumentSnapshot captureToolSnapshot() {
+        return new DocumentSnapshot(
+            viewport.captureSnapshot(),
+            sphere.captureSnapshot(),
+            geometry.zCenter.get(),
+            geometry.halfHeight.get(),
+            reference.enabled.get(),
+            reference.r.get(),
+            reference.z.get(),
+            reference.trajectory.get(),
+            java.util.List.copyOf(points.entries),
+            new java.util.LinkedHashSet<>(selection.selectedIds),
+            selection.primarySelectedId.get(),
+            colouring.hueSource.get(),
+            colouring.brightnessSource.get()
+        );
+    }
+
+    /** Restore tool window state from a document's saved snapshot. */
+    public void restoreToolSnapshot(DocumentSnapshot snap) {
+        if (snap == null) return;
+        // Viewport + sphere
+        viewport.restoreSnapshot(snap.viewport());
+        sphere.restoreSnapshot(snap.sphere());
+        // Geometry
+        geometry.zCenter.set(snap.geoZCenter());
+        geometry.halfHeight.set(snap.geoHalfHeight());
+        // Reference frame
+        reference.enabled.set(snap.refEnabled());
+        reference.r.set(snap.refR());
+        reference.z.set(snap.refZ());
+        reference.trajectory.set(snap.refTrajectory());
+        // Points + selection
+        points.entries.setAll(snap.points());
+        selection.selectedIds.clear();
+        selection.selectedIds.addAll(snap.selectedPointIds());
+        selection.primarySelectedId.set(snap.primarySelectedPointId());
+        // Colouring
+        colouring.hueSource.set(snap.hueSource());
+        colouring.brightnessSource.set(snap.brightnessSource());
+    }
+
+    /**
+     * Push data to analysis panes for a tab switch without resetting tool state.
+     * Unlike loadSimulationResult, this does NOT reset points to defaults or recompute
+     * viewport bounds — the caller restores those from the document snapshot.
+     */
+    public void pushDataForTabSwitch(BlochData data, java.util.List<PulseSegment> pulse) {
+        loadingSimulation = true;
+        try {
+            document.blochData.set(data);
+            document.currentPulse.set(pulse);
+        } finally {
+            loadingSimulation = false;
+        }
+        if (data != null && pulse != null) {
+            points.setContext(data, pulse);
+            points.resimulateAll();
+            derived.recompute(data, pulse);
+            refreshReferenceFrame();
+            refreshGeometryShading();
+        }
     }
 
     public void dispose() {

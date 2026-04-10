@@ -1,8 +1,13 @@
 package ax.xz.mri.ui.workbench;
 
+import ax.xz.mri.project.ActiveCapture;
+import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.SequenceDocument;
+import ax.xz.mri.project.SimulationConfigDocument;
+import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
+import ax.xz.mri.ui.viewmodel.StudioSession;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.ExplorerPane;
-import ax.xz.mri.ui.workbench.pane.SequenceEditorPane;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
 import ax.xz.mri.ui.workbench.pane.InspectorPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
@@ -13,17 +18,21 @@ import ax.xz.mri.ui.workbench.pane.PolarTracePane;
 import ax.xz.mri.ui.workbench.pane.PointsWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.SphereWorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.TimelineWorkbenchPane;
-import ax.xz.mri.ui.viewmodel.StudioSession;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
 import javafx.geometry.Orientation;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
-
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.layout.BorderPane;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
@@ -37,8 +46,13 @@ import java.io.File;
 import java.util.EnumMap;
 import java.util.Map;
 
-
-/** Owns pane activation, BentoFX docking, file loading, and shell command wiring. */
+/**
+ * Workbench controller with BentoFX document tabs and tool windows.
+ *
+ * <p>Each open document (sequence, import, sim config) gets a {@link WorkspaceTab}
+ * with a {@link DocumentEditorProvider}. Document tabs live in a BentoFX leaf at the
+ * top of the centre area. Analysis tool windows below re-point to the active tab's data.
+ */
 public class WorkbenchController {
     private static final int STUDIO_DRAG_GROUP = 1;
 
@@ -46,39 +60,36 @@ public class WorkbenchController {
     private final CommandRegistry commandRegistry = new CommandRegistry();
     private final StringProperty shellStatus = new SimpleStringProperty("Ready");
     private final BorderPane dockContainer = new BorderPane();
+
+    // Analysis panes — singletons, re-pointed on tab switch
     private final Map<PaneId, WorkbenchPane> panes = new EnumMap<>(PaneId.class);
     private final Map<PaneId, Dockable> dockables = new EnumMap<>(PaneId.class);
     private final Map<PaneId, DockContainerLeaf> homeLeaves = new EnumMap<>(PaneId.class);
     private final Map<PaneId, String> paneStatuses = new EnumMap<>(PaneId.class);
 
+    // Document tabs
+    private final ObservableList<WorkspaceTab> openTabs = FXCollections.observableArrayList();
+    private final ObjectProperty<WorkspaceTab> activeTab = new SimpleObjectProperty<>();
+
+    // Sidebars
+    private final ToolSidebar leftSidebar = new ToolSidebar(ToolSidebar.Side.LEFT, 220);
+    private final ToolSidebar rightSidebar = new ToolSidebar(ToolSidebar.Side.RIGHT, 300);
+
+    // BentoFX layout
     private Bento bento;
     private DockContainerRootBranch rootBranch;
-    /** The centre-shell branch that holds analysis panes (timeline + workspace). */
-    private software.coley.bentofx.layout.container.DockContainerBranch centreShellBranch;
-    /** The sequence editor leaf, holds one tab per open sequence. */
-    private DockContainerLeaf sequenceEditorLeaf;
-    private boolean inSequenceEditorMode;
+    private DockContainerLeaf documentLeaf; // top — holds document tabs
     private Stage mainStage;
     private boolean disposed;
-
-    /** Maps sequence node ID → (pane, dockable, simSession) for multi-tab editing. */
-    private final java.util.Map<String, SequenceEditorPane> openEditorPanes = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, Dockable> openEditorDockables = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, ax.xz.mri.ui.viewmodel.SequenceSimulationSession> openSimSessions = new java.util.LinkedHashMap<>();
-
-    /** Maps sim config node ID → (pane, dockable) for sim config editor tabs. */
-    private final java.util.Map<String, ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane> openSimConfigPanes = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, Dockable> openSimConfigDockables = new java.util.LinkedHashMap<>();
-
-
+    private boolean switchingTabs;
 
     public WorkbenchController(StudioSession session) {
         this.session = session;
         initializePanes();
+        initializeSidebars();
         registerCommands();
         installShellStatusBindings();
         installWorkspaceSwitching();
-        session.project.setOnSimConfigOpened(this::showSimConfigEditor);
     }
 
     public void initialize(Stage stage) {
@@ -86,28 +97,172 @@ public class WorkbenchController {
         resetLayout();
     }
 
-    public Node dockRoot() {
-        return dockContainer;
+    // --- Public accessors ---
+
+    public Node dockRoot() { return dockContainer; }
+    public ToolSidebar leftSidebar() { return leftSidebar; }
+    public ToolSidebar rightSidebar() { return rightSidebar; }
+    public StringProperty shellStatusProperty() { return shellStatus; }
+    public CommandRegistry commandRegistry() { return commandRegistry; }
+    public StudioSession session() { return session; }
+    public ObjectProperty<WorkspaceTab> activeTabProperty() { return activeTab; }
+
+    // --- Tab lifecycle ---
+
+    /** Open a document in a workspace tab. Reuses existing tab if already open. */
+    public void openTab(String id, String name, DocumentEditorProvider editor) {
+        // Check if already open
+        for (var tab : openTabs) {
+            if (tab.id().equals(id)) {
+                documentLeaf.selectDockable(tab.dockable());
+                return;
+            }
+        }
+
+        var tab = new WorkspaceTab(id, name, editor);
+        var editorNode = editor.editorContent();
+
+        // Focus detection: when this editor gains focus, make it the active tab
+        // and show a subtle focus ring
+        editorNode.focusedProperty().addListener((obs, o, focused) -> {
+            if (focused && activeTab.get() != tab && !switchingTabs) {
+                switchToTab(tab);
+            }
+        });
+        editorNode.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (activeTab.get() != tab && !switchingTabs) {
+                switchToTab(tab);
+            }
+        });
+
+        var dockable = bento.dockBuilding().dockable("doc-" + id + "-" + System.nanoTime());
+        dockable.setTitle(name);
+        dockable.setNode(editorNode);
+        dockable.setClosable(true);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(false);
+        dockable.setDragGroup(STUDIO_DRAG_GROUP);
+        dockable.setContextMenuFactory(ignored -> buildDocumentTabMenu(tab));
+        tab.setDockable(dockable);
+
+        // Wire title updates: when the editor's dirty state changes, update the dockable title.
+        // This is the SINGLE place where all title wiring happens — not in individual providers.
+        Runnable refreshTitle = () -> dockable.setTitle(tab.displayName());
+        if (editor instanceof SequenceEditorProvider seq) {
+            seq.editorPane.setOnTitleChanged(refreshTitle);
+        }
+        if (editor instanceof SimConfigEditorProvider) {
+            var pane = ((SimConfigEditorProvider) editor).editorPane();
+            if (pane != null) pane.setOnTitleChanged(refreshTitle);
+        }
+
+        openTabs.add(tab);
+        documentLeaf.addDockable(dockable);
+        documentLeaf.selectDockable(dockable);
     }
 
-    public StringProperty shellStatusProperty() {
-        return shellStatus;
+    /** Open a sequence as a workspace tab. */
+    public void openSequenceTab(SequenceDocument document) {
+        openTab(document.id().value(), document.name(),
+            new SequenceEditorProvider(document, session, this));
     }
 
-    public CommandRegistry commandRegistry() {
-        return commandRegistry;
+    /** Open an imported capture as a workspace tab. */
+    public void openImportTab(ProjectNodeId nodeId, ActiveCapture capture) {
+        openTab(nodeId.value(), capture.name(),
+            new ImportViewerProvider(capture, session, this));
     }
 
-    public StudioSession session() {
-        return session;
+    /** Open a sim config as a workspace tab. */
+    public void openSimConfigTab(SimulationConfigDocument configDoc) {
+        openTab(configDoc.id().value(), configDoc.name(),
+            new SimConfigEditorProvider(configDoc, session, this));
     }
+
+    /** Switch to a different tab, saving/restoring state. */
+    private void switchToTab(WorkspaceTab newTab) {
+        if (switchingTabs || newTab == null) return;
+        switchingTabs = true;
+        try {
+            var oldTab = activeTab.get();
+
+            // Save outgoing state
+            if (oldTab != null) {
+                oldTab.setSnapshot(oldTab.editor().captureState(session));
+            }
+
+            activeTab.set(newTab);
+
+            // Push incoming data and restore state
+            newTab.editor().activate(session);
+            if (newTab.snapshot() != null) {
+                newTab.editor().restoreState(session, newTab.snapshot());
+            } else {
+                // First activation — fit geometry to data bounds
+                var data = session.document.blochData.get();
+                if (data != null && data.field() != null && data.field().zMm != null) {
+                    session.geometry.fitVisibleRange(
+                        data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
+                }
+            }
+
+            // Update dockable title (dirty indicator)
+            if (newTab.dockable() != null) {
+                newTab.dockable().setTitle(newTab.displayName());
+            }
+
+            // Focus ring: remove from all, add to active
+            for (var tab : openTabs) {
+                tab.editor().editorContent().getStyleClass().remove("editor-focus-ring");
+            }
+            newTab.editor().editorContent().getStyleClass().add("editor-focus-ring");
+        } finally {
+            switchingTabs = false;
+        }
+        updateShellStatus();
+    }
+
+    /** Close a workspace tab with dirty check. */
+    public void closeTab(WorkspaceTab tab) {
+        if (tab.editor().isDirty()) {
+            var alert = new Alert(Alert.AlertType.CONFIRMATION);
+            alert.setTitle("Unsaved Changes");
+            alert.setHeaderText("Save changes to " + tab.rawName() + "?");
+            alert.getButtonTypes().setAll(ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
+            var result = alert.showAndWait().orElse(ButtonType.CANCEL);
+            if (result == ButtonType.YES) tab.editor().save();
+            else if (result == ButtonType.CANCEL) return;
+        }
+
+        tab.editor().dispose();
+        if (tab.dockable() != null) documentLeaf.removeDockable(tab.dockable());
+        openTabs.remove(tab);
+
+        if (activeTab.get() == tab) {
+            if (!openTabs.isEmpty()) {
+                documentLeaf.selectDockable(openTabs.getLast().dockable());
+            } else {
+                activeTab.set(null);
+                session.activeEditSession.set(null);
+            }
+        }
+    }
+
+    /** Get all open simulation sessions (for pushing config updates). */
+    public java.util.Collection<SequenceSimulationSession> allSimSessions() {
+        return openTabs.stream()
+            .map(WorkspaceTab::editor)
+            .filter(SequenceEditorProvider.class::isInstance)
+            .map(e -> ((SequenceEditorProvider) e).simSession)
+            .toList();
+    }
+
+    // --- Pane management ---
 
     public void activatePane(PaneId paneId) {
         session.docking.activate(paneId);
         var dockable = dockables.get(paneId);
-        if (dockable != null) {
-            dockable.inContainer(container -> container.selectDockable(dockable));
-        }
+        if (dockable != null) dockable.inContainer(c -> c.selectDockable(dockable));
         updateShellStatus();
     }
 
@@ -125,9 +280,8 @@ public class WorkbenchController {
     public void focusPane(PaneId paneId) {
         activatePane(paneId);
         var pane = panes.get(paneId);
-        if (pane != null && pane.getScene() != null && pane.getScene().getWindow() instanceof Stage stage) {
-            stage.toFront();
-            stage.requestFocus();
+        if (pane != null && pane.getScene() != null && pane.getScene().getWindow() instanceof Stage s) {
+            s.toFront(); s.requestFocus();
         }
         if (pane != null) pane.requestFocus();
     }
@@ -136,38 +290,27 @@ public class WorkbenchController {
         if (mainStage == null || mainStage.getScene() == null) return;
         var dockable = dockables.get(paneId);
         if (dockable == null) return;
-        if (isFloating(paneId)) {
-            focusPane(paneId);
-            return;
-        }
-        bento.stageBuilding().newStageForDockable(
-            mainStage.getScene(),
-            dockable,
-            mainStage.getX() + 90,
-            mainStage.getY() + 90
-        );
+        if (isFloating(paneId)) { focusPane(paneId); return; }
+        bento.stageBuilding().newStageForDockable(mainStage.getScene(), dockable,
+            mainStage.getX() + 90, mainStage.getY() + 90);
         focusPane(paneId);
     }
 
     public void dockPane(PaneId paneId) {
-        var dockable = dockables.get(paneId);
-        var homeLeaf = homeLeaves.get(paneId);
-        if (dockable == null || homeLeaf == null) return;
-        homeLeaf.addDockable(dockable);
-        homeLeaf.selectDockable(dockable);
-        focusPane(paneId);
+        var d = dockables.get(paneId); var hl = homeLeaves.get(paneId);
+        if (d == null || hl == null) return;
+        hl.addDockable(d); hl.selectDockable(d); focusPane(paneId);
     }
 
-    public void resetLayout() {
-        rebuildWorkbench();
+    public void resetLayout() { rebuildWorkbench(); }
+    public void loadLayoutFromStore() { resetLayout(); }
+    public void saveLayoutToStore() {}
+
+    public void markTimelineStale(boolean stale) {
+        // No-op for now — per-doc timelines handle their own state
     }
 
-    public void loadLayoutFromStore() {
-        resetLayout();
-    }
-
-    public void saveLayoutToStore() {
-    }
+    // --- File operations ---
 
     public void importJsonChooser() {
         var chooser = new FileChooser();
@@ -180,113 +323,64 @@ public class WorkbenchController {
     public void openProjectChooser() {
         var chooser = new DirectoryChooser();
         chooser.setTitle("Open Project");
-        File directory = chooser.showDialog(mainStage);
-        if (directory == null) return;
-        try {
-            session.project.openProject(directory.toPath());
-            updateShellStatus();
-        } catch (Exception ex) {
-            showError("Failed to open project", ex.getMessage());
-        }
+        File dir = chooser.showDialog(mainStage);
+        if (dir == null) return;
+        try { session.project.openProject(dir.toPath()); updateShellStatus(); }
+        catch (Exception ex) { showError("Failed to open project", ex.getMessage()); }
     }
 
-    /**
-     * Check all open editors for unsaved changes, prompting the user for each.
-     * Returns true if all editors are saved/discarded, false if user cancelled.
-     */
     public boolean confirmCloseAllEditors() {
-        for (var entry : java.util.List.copyOf(openEditorPanes.entrySet())) {
-            var pane = entry.getValue();
-            if (pane.isDirty()) {
-                var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
+        for (var tab : java.util.List.copyOf(openTabs)) {
+            if (tab.editor().isDirty()) {
+                var alert = new Alert(Alert.AlertType.CONFIRMATION);
                 alert.setTitle("Unsaved Changes");
-                alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
-                alert.setContentText("Your changes will be lost if you don't save them.");
-                alert.getButtonTypes().setAll(
-                    javafx.scene.control.ButtonType.YES,
-                    javafx.scene.control.ButtonType.NO,
-                    javafx.scene.control.ButtonType.CANCEL
-                );
-                var result = alert.showAndWait().orElse(javafx.scene.control.ButtonType.CANCEL);
-                if (result == javafx.scene.control.ButtonType.YES) {
-                    pane.savePublic();
-                } else if (result == javafx.scene.control.ButtonType.CANCEL) {
-                    return false;
-                }
+                alert.setHeaderText("Save changes to " + tab.rawName() + "?");
+                alert.getButtonTypes().setAll(ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
+                var result = alert.showAndWait().orElse(ButtonType.CANCEL);
+                if (result == ButtonType.YES) tab.editor().save();
+                else if (result == ButtonType.CANCEL) return false;
             }
         }
         return true;
     }
 
-    /** Context-aware save: saves the active editor tab, or the project. */
     public void saveContextual() {
-        // Check sequence editors
-        for (var entry : openEditorPanes.entrySet()) {
-            var dockable = openEditorDockables.get(entry.getKey());
-            if (dockable != null && sequenceEditorLeaf.getSelectedDockable() == dockable) {
-                entry.getValue().savePublic();
-                return;
-            }
-        }
-        // Check sim config editors
-        for (var entry : openSimConfigDockables.entrySet()) {
-            if (sequenceEditorLeaf.getSelectedDockable() == entry.getValue()) {
-                var pane = openSimConfigPanes.get(entry.getKey());
-                if (pane != null) pane.savePublic();
-                return;
-            }
-        }
+        var tab = activeTab.get();
+        if (tab != null && tab.editor().isDirty()) { tab.editor().save(); return; }
         saveProject();
     }
 
     public void saveProject() {
         try {
             var root = session.project.projectRoot.get();
-            if (root == null) {
-                saveProjectAsChooser();
-            } else {
-                session.project.saveProject(root);
-                updateShellStatus();
-            }
-        } catch (Exception ex) {
-            showError("Failed to save project", ex.getMessage());
-        }
+            if (root == null) saveProjectAsChooser();
+            else { session.project.saveProject(root); updateShellStatus(); }
+        } catch (Exception ex) { showError("Failed to save project", ex.getMessage()); }
     }
 
     public void saveProjectAsChooser() {
         var chooser = new DirectoryChooser();
         chooser.setTitle("Save Project As");
-        File directory = chooser.showDialog(mainStage);
-        if (directory == null) return;
-        try {
-            session.project.saveProject(directory.toPath());
-            updateShellStatus();
-        } catch (Exception ex) {
-            showError("Failed to save project", ex.getMessage());
-        }
+        File dir = chooser.showDialog(mainStage);
+        if (dir == null) return;
+        try { session.project.saveProject(dir.toPath()); updateShellStatus(); }
+        catch (Exception ex) { showError("Failed to save project", ex.getMessage()); }
     }
 
     public void loadFile(File file) {
-        try {
-            session.project.openImport(file);
-            updateShellStatus();
-        } catch (Exception ex) {
-            showError("Failed to load file", ex.getMessage());
-        }
+        try { session.project.openImport(file); updateShellStatus(); }
+        catch (Exception ex) { showError("Failed to load file", ex.getMessage()); }
     }
 
     public void reloadCurrentFile() {
-        try {
-            session.project.reloadSelectedImport();
-            updateShellStatus();
-        } catch (Exception ex) {
-            showError("Failed to reload import", ex.getMessage());
-        }
+        try { session.project.reloadSelectedImport(); updateShellStatus(); }
+        catch (Exception ex) { showError("Failed to reload import", ex.getMessage()); }
     }
 
     public void dispose() {
         if (disposed) return;
         disposed = true;
+        for (var tab : openTabs) tab.editor().dispose();
         panes.values().forEach(WorkbenchPane::dispose);
     }
 
@@ -296,12 +390,15 @@ public class WorkbenchController {
             menuItem("Float Active Pane", CommandId.FLOAT_ACTIVE_PANE),
             menuItem("Dock Active Pane", CommandId.DOCK_ACTIVE_PANE),
             menuItem("Focus Active Pane", CommandId.FOCUS_ACTIVE_PANE),
-            new javafx.scene.control.SeparatorMenuItem()
+            new SeparatorMenuItem()
         );
         for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR) continue;
+            // Skip sidebar tools, per-doc editors, and non-BentoFX panes
+            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR
+                || paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR
+                || paneId == PaneId.POINTS) continue;
             var focus = new MenuItem("Focus " + paneId.title());
-            focus.setOnAction(event -> focusPane(paneId));
+            focus.setOnAction(e -> focusPane(paneId));
             menu.getItems().add(focus);
         }
     }
@@ -309,61 +406,30 @@ public class WorkbenchController {
     public Node buildMainToolStrip() {
         var contextLabel = new Label();
         var computeStatus = new Label();
-        session.derived.computing.addListener((obs, oldValue, newValue) ->
-            computeStatus.setText(newValue ? "Computing\u2026" : ""));
+        session.derived.computing.addListener((obs, o, n) ->
+            computeStatus.setText(n ? "Computing\u2026" : ""));
 
-        Runnable refreshContext = () -> {
-            var nodeId = session.project.workspace.activeNodeId.get();
+        Runnable refresh = () -> {
+            var tab = activeTab.get();
             var repo = session.project.repository.get();
-            var node = nodeId == null ? null : repo.node(nodeId);
-            if (node instanceof ax.xz.mri.project.SequenceDocument seq) {
-                contextLabel.setText("Editing: " + seq.name()
-                    + " \u2014 " + seq.segments().size() + " segments, "
-                    + seq.pulse().stream().mapToInt(p -> p.steps().size()).sum() + " steps");
-            } else {
-                var capture = session.project.activeCapture.activeCapture.get();
-                String projectName = repo.manifest().name();
-                if (capture != null) {
-                    contextLabel.setText(projectName + " \u203a " + capture.name()
-                        + (capture.iterationKey() != null ? " \u203a Iter " + capture.iterationKey() : ""));
-                } else if (node != null) {
-                    contextLabel.setText(projectName + " \u203a " + node.name());
-                } else {
-                    contextLabel.setText(projectName);
-                }
-            }
+            if (tab != null) contextLabel.setText(tab.displayName());
+            else contextLabel.setText(repo.manifest().name());
         };
-        refreshContext.run();
-        session.project.workspace.activeNodeId.addListener((obs, o, n) -> refreshContext.run());
-        session.project.activeCapture.activeCapture.addListener((obs, o, n) -> refreshContext.run());
-        session.project.repository.addListener((obs, o, n) -> refreshContext.run());
-        session.project.explorer.structureRevision.addListener((obs, o, n) -> refreshContext.run());
+        refresh.run();
+        activeTab.addListener((obs, o, n) -> refresh.run());
+        session.project.repository.addListener((obs, o, n) -> refresh.run());
 
-        // Simulation loading indicator
         var simStatus = new javafx.scene.control.ProgressIndicator(-1);
-        simStatus.setPrefSize(14, 14);
-        simStatus.setMaxSize(14, 14);
-        simStatus.setVisible(false);
-        simStatus.setStyle("-fx-progress-color: #e06000;");
-        // Watch for any active sim session's simulating flag
-        session.activeEditSession.addListener((obs, o, n) -> {
-            if (o instanceof ax.xz.mri.ui.viewmodel.SequenceEditSession) {
-                // Can't easily unbind from the old sim session, but it's harmless
-            }
-        });
-        // Poll the sim sessions for activity (simple approach)
-        var simStatusTimer = new javafx.animation.AnimationTimer() {
+        simStatus.setPrefSize(14, 14); simStatus.setMaxSize(14, 14);
+        simStatus.setVisible(false); simStatus.setStyle("-fx-progress-color: #e06000;");
+        new javafx.animation.AnimationTimer() {
             @Override public void handle(long now) {
-                boolean anySimulating = openSimSessions.values().stream()
-                    .anyMatch(s -> s.simulating.get());
-                simStatus.setVisible(anySimulating);
+                simStatus.setVisible(allSimSessions().stream().anyMatch(s -> s.simulating.get()));
             }
-        };
-        simStatusTimer.start();
+        }.start();
 
         var spacer = new javafx.scene.layout.Region();
         javafx.scene.layout.HBox.setHgrow(spacer, javafx.scene.layout.Priority.ALWAYS);
-
         var bar = new javafx.scene.layout.HBox(8, contextLabel, spacer, simStatus, computeStatus);
         bar.getStyleClass().add("shell-tool-strip");
         bar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
@@ -371,29 +437,45 @@ public class WorkbenchController {
         return bar;
     }
 
+    // --- Initialization ---
+
     private void initializePanes() {
         for (var paneId : PaneId.values()) {
-            // Dynamic editor panes are created on demand, not upfront
             if (paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR) continue;
             panes.put(paneId, createPane(paneId));
         }
     }
 
+    private void initializeSidebars() {
+        // Left sidebar: Explorer
+        leftSidebar.addTool(new ToolSidebar.Tool("explorer",
+            "Explorer", StudioIcons.create(StudioIconKind.PROJECT), panes.get(PaneId.EXPLORER)));
+        leftSidebar.showTool("explorer"); // open by default
+
+        // Right sidebar: Inspector, Points
+        rightSidebar.addTool(new ToolSidebar.Tool("inspector",
+            "Inspector", StudioIcons.create(StudioIconKind.IMPORT), panes.get(PaneId.INSPECTOR)));
+        rightSidebar.addTool(new ToolSidebar.Tool("points",
+            "Points", StudioIcons.create(StudioIconKind.CAPTURE), panes.get(PaneId.POINTS)));
+        rightSidebar.showTool("inspector"); // open by default
+    }
+
     private WorkbenchPane createPane(PaneId paneId) {
-        var context = new PaneContext(session, this, paneId);
+        var ctx = new PaneContext(session, this, paneId);
         return switch (paneId) {
-            case EXPLORER -> new ExplorerPane(context);
-            case INSPECTOR -> new InspectorPane(context);
-            case SPHERE -> new SphereWorkbenchPane(context);
-            case CROSS_SECTION -> new GeometryPane(context);
-            case POINTS -> new PointsWorkbenchPane(context);
-            case TIMELINE -> new TimelineWorkbenchPane(context);
-            case PHASE_MAP_Z -> new PhaseMapZPane(context);
-            case PHASE_MAP_R -> new PhaseMapRPane(context);
-            case TRACE_PHASE -> new PhaseTracePane(context);
-            case TRACE_POLAR -> new PolarTracePane(context);
-            case TRACE_MAGNITUDE -> new MagnitudeTracePane(context);
-            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR -> throw new IllegalStateException("Editor panes are created dynamically");
+            case EXPLORER -> new ExplorerPane(ctx);
+            case INSPECTOR -> new InspectorPane(ctx);
+            case SPHERE -> new SphereWorkbenchPane(ctx);
+            case CROSS_SECTION -> new GeometryPane(ctx);
+            case POINTS -> new PointsWorkbenchPane(ctx);
+            case TIMELINE -> new TimelineWorkbenchPane(ctx);
+            case PHASE_MAP_Z -> new PhaseMapZPane(ctx);
+            case PHASE_MAP_R -> new PhaseMapRPane(ctx);
+            case TRACE_PHASE -> new PhaseTracePane(ctx);
+            case TRACE_POLAR -> new PolarTracePane(ctx);
+            case TRACE_MAGNITUDE -> new MagnitudeTracePane(ctx);
+            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR ->
+                throw new IllegalStateException("Editor panes are created per-document");
         };
     }
 
@@ -407,65 +489,63 @@ public class WorkbenchController {
         commandRegistry.register(new PaneAction(CommandId.SAVE_LAYOUT, "Save Layout", this::saveLayoutToStore));
         commandRegistry.register(new PaneAction(CommandId.LOAD_LAYOUT, "Load Layout", this::loadLayoutFromStore));
         commandRegistry.register(new PaneAction(CommandId.FLOAT_ACTIVE_PANE, "Float Active Pane", () -> {
-            var active = session.docking.activePaneId.get();
-            if (active != null) floatPane(active);
+            var a = session.docking.activePaneId.get(); if (a != null) floatPane(a);
         }));
         commandRegistry.register(new PaneAction(CommandId.DOCK_ACTIVE_PANE, "Dock Active Pane", () -> {
-            var active = session.docking.activePaneId.get();
-            if (active != null) dockPane(active);
+            var a = session.docking.activePaneId.get(); if (a != null) dockPane(a);
         }));
         commandRegistry.register(new PaneAction(CommandId.FOCUS_ACTIVE_PANE, "Focus Active Pane", () -> {
-            var active = session.docking.activePaneId.get();
-            if (active != null) focusPane(active);
+            var a = session.docking.activePaneId.get(); if (a != null) focusPane(a);
         }));
         commandRegistry.register(new PaneAction(CommandId.RESET_POINTS, "Reset Points", session.points::resetToDefaults));
         commandRegistry.register(new PaneAction(CommandId.CLEAR_USER_POINTS, "Clear User Points", session.points::clearUserPoints));
         commandRegistry.register(new PaneAction(CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, "Promote to Sequence",
             session.project::promoteActiveSnapshotToSequence));
         commandRegistry.register(new PaneAction(CommandId.DELETE_SEQUENCE, "Delete Sequence", () -> {
-            var nodeId = session.project.inspector.inspectedNodeId.get();
-            if (nodeId != null && session.project.repository.get().node(nodeId) instanceof ax.xz.mri.project.SequenceDocument) {
-                session.project.deleteSequence(nodeId);
-            }
+            var n = session.project.inspector.inspectedNodeId.get();
+            if (n != null && session.project.repository.get().node(n) instanceof SequenceDocument)
+                session.project.deleteSequence(n);
         }));
-        commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Simulation Config", this::newSimConfigWizard));
+        commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Sim Config", this::newSimConfigWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_EIGENFIELD, "New Eigenfield", this::newEigenfieldWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_SEQUENCE, "New Sequence", this::newSequenceWizard));
     }
 
-    /**
-     * File→New Simulation Config wizard.
-     * Offers two paths: extract from imported data, or create with defaults.
-     */
-    /** File → New → Simulation Config wizard. */
     private void newSimConfigWizard() {
         ax.xz.mri.ui.wizard.NewSimConfigWizard.show(mainStage, session.project).ifPresent(doc -> {
             session.project.selectNode(doc.id());
-            session.project.openNode(doc.id());
+            openSimConfigTab(doc);
         });
     }
 
-    /** File → New → Eigenfield wizard. */
     private void newEigenfieldWizard() {
         ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(mainStage, session.project).ifPresent(ef ->
             session.project.selectNode(ef.id()));
     }
 
-    /** File → New → Sequence wizard. */
     private void newSequenceWizard() {
         ax.xz.mri.ui.wizard.NewSequenceWizard.show(mainStage, session.project).ifPresent(seq -> {
             session.project.selectNode(seq.id());
-            session.project.openNode(seq.id());
+            openSequenceTab(seq);
         });
     }
 
     private void installShellStatusBindings() {
-        session.project.activeCapture.activeCapture.addListener((obs, oldValue, newValue) -> updateShellStatus());
-        session.project.runNavigation.activeCaptureIndex.addListener((obs, oldValue, newValue) -> updateShellStatus());
-        session.viewport.tC.addListener((obs, oldValue, newValue) -> updateShellStatus());
-        session.points.entries.addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.model.IsochromatEntry>) change ->
+        session.viewport.tC.addListener((obs, o, n) -> updateShellStatus());
+        session.points.entries.addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.model.IsochromatEntry>) c ->
             updateShellStatus());
     }
+
+    private void installWorkspaceSwitching() {
+        // Opening a sequence from the explorer → create tab
+        session.project.setOnSequenceOpened(this::openSequenceTab);
+        // Opening an import/capture → create tab
+        session.project.setOnCaptureOpened(this::openImportTab);
+        // Opening a sim config → create tab
+        session.project.setOnSimConfigOpened(this::openSimConfigTab);
+    }
+
+    // --- BentoFX layout ---
 
     private void rebuildWorkbench() {
         bento = new Bento();
@@ -476,233 +556,66 @@ public class WorkbenchController {
         var builder = bento.dockBuilding();
         var root = builder.root("studio-root");
 
-        // Left: Explorer
-        var explorer = registerLeaf(builder, PaneId.EXPLORER);
-
-        // Right panel: Bloch sphere on top, inspector on bottom
-        var rightPanel = builder.branch("right-panel");
-        var sphere = registerLeaf(builder, PaneId.SPHERE);
-        var inspector = registerLeaf(builder, PaneId.INSPECTOR);
-
-        // Centre: analysis panes on top, timeline/editor tabbed at bottom
+        // Layout:
+        //   Top: Document editor tabs (DAW, import views, config editors)
+        //   Middle: Analysis tools = (Geometry + Sphere) | (PhaseMaps + Traces)
+        //   Bottom: Timeline (collapsible bar)
         var centreShell = builder.branch("centre-shell");
-        var workspace = builder.branch("workspace");
-        var upper = builder.branch("upper");
-        var lower = builder.branch("lower");
+
+        // Document editor leaf (top) — BentoFX tab headers serve as document tabs
+        var docLeaf = builder.leaf("document_tabs");
+        docLeaf.setPruneWhenEmpty(false);
+
+        // Analysis area (middle)
+        var analysisArea = builder.branch("analysis-area");
+        var analysisLeft = builder.branch("analysis-left");
+        var analysisRight = builder.branch("analysis-right");
         var phaseMaps = builder.branch("phase-maps");
         var phaseTraces = builder.branch("phase-traces");
 
-        // Timeline goes in the bottom leaf alongside editor tabs (tabbed)
-        var timeline = registerLeaf(builder, PaneId.TIMELINE);
         var geometry = registerLeaf(builder, PaneId.CROSS_SECTION);
-        var points = registerLeaf(builder, PaneId.POINTS);
+        var sphere = registerLeaf(builder, PaneId.SPHERE);
         var phaseMapZ = registerLeaf(builder, PaneId.PHASE_MAP_Z);
         var phaseMapR = registerLeaf(builder, PaneId.PHASE_MAP_R);
         var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
         var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
         var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
 
-        // Bottom leaf: holds timeline tab + sequence editor tabs (tabbed together)
-        var bottomLeaf = builder.leaf("bottom_tabbed");
-        bottomLeaf.setPruneWhenEmpty(false);
-        // Move the timeline dockable from its own leaf into the bottom leaf
-        var timelineDockable = dockables.get(PaneId.TIMELINE);
-        timeline.removeDockable(timelineDockable);
-        bottomLeaf.addDockable(timelineDockable);
-        bottomLeaf.selectDockable(timelineDockable);
+        // Timeline (bottom bar)
+        var timeline = registerLeaf(builder, PaneId.TIMELINE);
 
         // Orientations
         root.setOrientation(Orientation.HORIZONTAL);
-        rightPanel.setOrientation(Orientation.VERTICAL);
         centreShell.setOrientation(Orientation.VERTICAL);
-        workspace.setOrientation(Orientation.VERTICAL);
-        upper.setOrientation(Orientation.HORIZONTAL);
-        lower.setOrientation(Orientation.HORIZONTAL);
+        analysisArea.setOrientation(Orientation.HORIZONTAL);
+        analysisLeft.setOrientation(Orientation.HORIZONTAL);
+        analysisRight.setOrientation(Orientation.VERTICAL);
         phaseMaps.setOrientation(Orientation.HORIZONTAL);
         phaseTraces.setOrientation(Orientation.HORIZONTAL);
 
-        // Unified layout:
-        // Explorer | centreShell | rightPanel(sphere + inspector)
-        root.addContainers(explorer, centreShell, rightPanel);
-        rightPanel.addContainers(sphere, inspector);
-        centreShell.addContainers(workspace, bottomLeaf);
-        workspace.addContainers(upper, lower);
-        upper.addContainers(geometry, points);
-        lower.addContainers(phaseMaps, phaseTraces, traceMagnitude);
+        // Hierarchy:
+        //   centreShell = docLeaf | analysisArea | timeline
+        //   analysisArea = analysisLeft(geometry, sphere) | analysisRight(phaseMaps, traces, magnitude)
+        root.addContainers(centreShell);
+        centreShell.addContainers(docLeaf, analysisArea, timeline);
+        analysisArea.addContainers(analysisLeft, analysisRight);
+        analysisLeft.addContainers(geometry, sphere);
+        analysisRight.addContainers(phaseMaps, phaseTraces, traceMagnitude);
         phaseMaps.addContainers(phaseMapZ, phaseMapR);
         phaseTraces.addContainers(tracePhase, tracePolar);
 
         // Divider positions
-        root.setDividerPositions(0.13, 0.78);
-        rightPanel.setDividerPositions(0.55);
-        centreShell.setDividerPositions(0.6); // workspace 60%, bottom 40%
-        workspace.setDividerPositions(0.55);
-        upper.setDividerPositions(0.55);
-        lower.setDividerPositions(0.45, 0.75);
+        centreShell.setDividerPositions(0.40, 0.85); // editors 40%, analysis 45%, timeline 15%
+        analysisArea.setDividerPositions(0.4);        // left (geo+sphere) 40%, right (maps+traces) 60%
+        analysisLeft.setDividerPositions(0.55);       // geometry 55%, sphere 45% (square-ish)
+        analysisRight.setDividerPositions(0.4, 0.7);
         phaseMaps.setDividerPositions(0.5);
         phaseTraces.setDividerPositions(0.5);
 
-        // Fixed sizes
-        root.setContainerResizable(explorer, false);
-        root.setContainerSizePx(explorer, 260);
-
         rootBranch = root;
-        centreShellBranch = centreShell;
-        sequenceEditorLeaf = bottomLeaf;
-        inSequenceEditorMode = false;
+        documentLeaf = docLeaf;
 
         dockContainer.setCenter(rootBranch);
-        activatePane(PaneId.TIMELINE);
-    }
-
-    private void installWorkspaceSwitching() {
-        session.project.workspace.activeNodeId.addListener((obs, oldNodeId, newNodeId) -> {
-            if (newNodeId != null && session.project.repository.get().node(newNodeId)
-                    instanceof ax.xz.mri.project.SequenceDocument seq) {
-                showSequenceEditor(seq);
-            } else {
-                showAnalysisWorkspace();
-            }
-        });
-    }
-
-    private void showSequenceEditor(ax.xz.mri.project.SequenceDocument document) {
-        String seqId = document.id().value();
-
-        // Close any existing editor (only one sequence at a time)
-        closeAllEditors();
-
-        // Create editor pane + simulation session
-        var editorPane = new SequenceEditorPane(new PaneContext(session, this, PaneId.SEQUENCE_EDITOR));
-        openEditorPanes.put(seqId, editorPane);
-
-        var simSession = new ax.xz.mri.ui.viewmodel.SequenceSimulationSession(editorPane.editSession(), session);
-        openSimSessions.put(seqId, simSession);
-
-        var dockable = bento.dockBuilding().dockable("seq-" + seqId + "-" + System.nanoTime());
-        dockable.setTitle(document.name());
-        dockable.setNode(editorPane);
-        dockable.setClosable(true);
-        dockable.setCanBeDragged(true);
-        dockable.setCanBeDroppedToNewWindow(false);
-        dockable.setDragGroup(STUDIO_DRAG_GROUP);
-        openEditorDockables.put(seqId, dockable);
-
-        editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
-        editorPane.open(document);
-        editorPane.wireSimSession(simSession);
-        sequenceEditorLeaf.addDockable(dockable);
-
-        // Select the editor tab
-        sequenceEditorLeaf.selectDockable(openEditorDockables.get(seqId));
-        inSequenceEditorMode = true;
-
-        // Update timeline title to "Simulated Timeline"
-        updateTimelineTitle(true);
-
-        // Load the associated simulation config (if any)
-        var simConfigs = session.project.repository.get().simConfigsForSequence(document.id());
-        if (!simConfigs.isEmpty()) {
-            simSession.loadConfig(simConfigs.getFirst());
-        } else {
-            // Trigger simulation (will be a no-op if no config, but that's correct)
-            simSession.simulate();
-        }
-    }
-
-    /** Close all open editor tabs (unsaved changes prompt for each). */
-    private void closeAllEditors() {
-        for (var entry : java.util.List.copyOf(openEditorDockables.entrySet())) {
-            var pane = openEditorPanes.get(entry.getKey());
-            if (pane != null && pane.isDirty()) {
-                var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
-                alert.setTitle("Unsaved Changes");
-                alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
-                alert.getButtonTypes().setAll(
-                    javafx.scene.control.ButtonType.YES,
-                    javafx.scene.control.ButtonType.NO
-                );
-                if (alert.showAndWait().orElse(javafx.scene.control.ButtonType.NO) == javafx.scene.control.ButtonType.YES) {
-                    pane.savePublic();
-                }
-            }
-            sequenceEditorLeaf.removeDockable(entry.getValue());
-            if (pane != null) pane.dispose();
-            var simSess = openSimSessions.get(entry.getKey());
-            if (simSess != null) simSess.dispose();
-        }
-        openEditorPanes.clear();
-        openEditorDockables.clear();
-        openSimSessions.clear();
-    }
-
-    private void showAnalysisWorkspace() {
-        if (inSequenceEditorMode) {
-            inSequenceEditorMode = false;
-            session.activeEditSession.set(null);
-            updateTimelineTitle(false);
-            // Switch to timeline tab in the bottom leaf
-            var timelineDockable = dockables.get(PaneId.TIMELINE);
-            if (timelineDockable != null) sequenceEditorLeaf.selectDockable(timelineDockable);
-        }
-    }
-
-    /** Open a sim config editor tab alongside the sequence editor. */
-    public void showSimConfigEditor(ax.xz.mri.project.SimulationConfigDocument document) {
-        String configId = document.id().value();
-
-        // If already open, just select the tab
-        var existingDockable = openSimConfigDockables.get(configId);
-        if (existingDockable != null) {
-            sequenceEditorLeaf.selectDockable(existingDockable);
-            return;
-        }
-
-        var editorPane = new ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane(
-            new PaneContext(session, this, PaneId.SIM_CONFIG_EDITOR), document);
-        openSimConfigPanes.put(configId, editorPane);
-
-        var dockable = bento.dockBuilding().dockable("simcfg-" + configId + "-" + System.nanoTime());
-        dockable.setTitle(editorPane.tabTitle());
-        dockable.setNode(editorPane);
-        dockable.setClosable(true);
-        dockable.setCanBeDragged(true);
-        dockable.setCanBeDroppedToNewWindow(false);
-        dockable.setDragGroup(STUDIO_DRAG_GROUP);
-        openSimConfigDockables.put(configId, dockable);
-
-        editorPane.setOnTitleChanged(() -> dockable.setTitle(editorPane.tabTitle()));
-        sequenceEditorLeaf.addDockable(dockable);
-        sequenceEditorLeaf.selectDockable(dockable);
-    }
-
-    /** Get the simulation session for a given sequence ID. */
-    public ax.xz.mri.ui.viewmodel.SequenceSimulationSession getSimSessionForSequence(String seqId) {
-        return openSimSessions.get(seqId);
-    }
-
-    /** Get all open simulation sessions (for pushing config updates). */
-    public java.util.Collection<ax.xz.mri.ui.viewmodel.SequenceSimulationSession> allSimSessions() {
-        return java.util.Collections.unmodifiableCollection(openSimSessions.values());
-    }
-
-    /** Update the timeline tab title depending on mode. */
-    private void updateTimelineTitle(boolean simMode) {
-        var timelineDockable = dockables.get(PaneId.TIMELINE);
-        if (timelineDockable == null) return;
-        if (simMode) {
-            timelineDockable.setTitle("Simulated Timeline");
-        } else {
-            timelineDockable.setTitle("Timeline");
-        }
-    }
-
-    /** Update the simulated timeline title with stale indicator. */
-    public void markTimelineStale(boolean stale) {
-        if (!inSequenceEditorMode) return;
-        var timelineDockable = dockables.get(PaneId.TIMELINE);
-        if (timelineDockable == null) return;
-        timelineDockable.setTitle(stale ? "Simulated Timeline (out of date)" : "Simulated Timeline");
     }
 
     private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
@@ -712,11 +625,10 @@ public class WorkbenchController {
         dockable.setTitle(paneId.title());
         dockable.setNode(panes.get(paneId));
         dockable.setClosable(false);
-        boolean pinned = paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR || paneId == PaneId.SEQUENCE_EDITOR;
-        dockable.setCanBeDragged(!pinned);
-        dockable.setCanBeDroppedToNewWindow(!pinned);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(true);
         dockable.setDragGroup(STUDIO_DRAG_GROUP);
-        dockable.setContextMenuFactory(ignored -> pinned ? null : buildDockableMenu(paneId));
+        dockable.setContextMenuFactory(ignored -> buildToolWindowMenu(paneId));
         dockables.put(paneId, dockable);
         homeLeaves.put(paneId, leaf);
         leaf.addDockable(dockable);
@@ -724,127 +636,96 @@ public class WorkbenchController {
         return leaf;
     }
 
-    private void configureBento() {
-        bento.stageBuilding().setSceneFactory(this::createDockingScene);
-        bento.events().addDockableSelectListener((path, dockable) -> {
-            var paneId = paneIdOf(dockable);
-            if (paneId != null) {
-                session.docking.activate(paneId);
-                updateShellStatus();
-            }
-        });
-        bento.events().addDockableMoveListener((oldPath, newPath, dockable) -> {
-            var paneId = paneIdOf(dockable);
-            if (paneId != null) {
-                session.docking.activate(paneId);
-                updateShellStatus();
-            }
-        });
-        bento.events().addDockableOpenListener((path, dockable) -> {
-            var paneId = paneIdOf(dockable);
-            if (paneId != null) {
-                session.docking.activate(paneId);
-                updateShellStatus();
-            }
-        });
-        // Clean up closed sequence editor tabs (with unsaved-change prompt)
-        bento.events().addDockableCloseListener((closePath, closedDockable) -> {
-            String closedSeqId = null;
-            for (var entry : openEditorDockables.entrySet()) {
-                if (entry.getValue() == closedDockable) {
-                    closedSeqId = entry.getKey();
-                    break;
-                }
-            }
-            if (closedSeqId != null) {
-                var pane = openEditorPanes.get(closedSeqId);
-                if (pane != null && pane.isDirty()) {
-                    var alert = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
-                    alert.setTitle("Unsaved Changes");
-                    alert.setHeaderText("Save changes to " + pane.tabTitle().replace(" *", "") + "?");
-                    alert.setContentText("Your changes will be lost if you don't save them.");
-                    alert.getButtonTypes().setAll(
-                        javafx.scene.control.ButtonType.YES,
-                        javafx.scene.control.ButtonType.NO,
-                        javafx.scene.control.ButtonType.CANCEL
-                    );
-                    var result = alert.showAndWait().orElse(javafx.scene.control.ButtonType.CANCEL);
-                    if (result == javafx.scene.control.ButtonType.YES) {
-                        pane.savePublic();
-                    } else if (result == javafx.scene.control.ButtonType.CANCEL) {
-                        // Re-add the dockable — user cancelled the close
-                        sequenceEditorLeaf.addDockable(closedDockable);
-                        sequenceEditorLeaf.selectDockable(closedDockable);
-                        return;
-                    }
-                }
-                openEditorPanes.remove(closedSeqId);
-                openEditorDockables.remove(closedSeqId);
-                var simSess = openSimSessions.remove(closedSeqId);
-                if (pane != null) pane.dispose();
-                if (simSess != null) simSess.dispose();
-                if (openEditorDockables.isEmpty() && inSequenceEditorMode) {
-                    showAnalysisWorkspace();
-                }
-            }
-        });
-    }
-
-    private Scene createDockingScene(Scene sourceScene, javafx.scene.layout.Region region, double width, double height) {
-        var scene = new Scene(region, width, height);
-        if (sourceScene != null) {
-            scene.getStylesheets().setAll(sourceScene.getStylesheets());
-        }
-        return scene;
-    }
-
-    private javafx.scene.control.ContextMenu buildDockableMenu(PaneId paneId) {
+    /** Context menu for document editor tabs. */
+    private javafx.scene.control.ContextMenu buildDocumentTabMenu(WorkspaceTab tab) {
         var menu = new javafx.scene.control.ContextMenu();
-        var focus = new MenuItem("Focus Pane");
-        focus.setOnAction(event -> focusPane(paneId));
-        var floatItem = new MenuItem(isFloating(paneId) ? "Raise Window" : "Float Pane");
-        floatItem.setOnAction(event -> floatPane(paneId));
-        var dockItem = new MenuItem("Dock To Default");
-        dockItem.setOnAction(event -> dockPane(paneId));
-        menu.getItems().addAll(focus, floatItem, dockItem);
+        var closeItem = new MenuItem("Close");
+        closeItem.setOnAction(e -> closeTab(tab));
+        var closeOthers = new MenuItem("Close Others");
+        closeOthers.setOnAction(e -> {
+            for (var other : java.util.List.copyOf(openTabs)) {
+                if (other != tab) closeTab(other);
+            }
+        });
+        var closeAll = new MenuItem("Close All");
+        closeAll.setOnAction(e -> {
+            for (var t : java.util.List.copyOf(openTabs)) closeTab(t);
+        });
+        menu.getItems().addAll(closeItem, closeOthers, closeAll);
+        if (tab.editor().isDirty()) {
+            var saveItem = new MenuItem("Save");
+            saveItem.setOnAction(e -> tab.editor().save());
+            menu.getItems().add(0, saveItem);
+            menu.getItems().add(1, new SeparatorMenuItem());
+        }
         return menu;
     }
 
+    /** Context menu for analysis tool window tabs. */
+    private javafx.scene.control.ContextMenu buildToolWindowMenu(PaneId paneId) {
+        var menu = new javafx.scene.control.ContextMenu();
+        var floatItem = new MenuItem(isFloating(paneId) ? "Dock to Default" : "Float");
+        floatItem.setOnAction(e -> {
+            if (isFloating(paneId)) dockPane(paneId); else floatPane(paneId);
+        });
+        var dockItem = new MenuItem("Restore to Default Position");
+        dockItem.setOnAction(e -> dockPane(paneId));
+        menu.getItems().addAll(floatItem, dockItem);
+        return menu;
+    }
+
+    private void configureBento() {
+        bento.stageBuilding().setSceneFactory(this::createDockingScene);
+        bento.events().addDockableSelectListener((path, dockable) -> {
+            // Check if it's a document tab
+            for (var tab : openTabs) {
+                if (tab.dockable() == dockable) {
+                    if (activeTab.get() != tab && !switchingTabs) switchToTab(tab);
+                    return;
+                }
+            }
+            // Otherwise it's an analysis pane
+            var paneId = paneIdOf(dockable);
+            if (paneId != null) { session.docking.activate(paneId); updateShellStatus(); }
+        });
+        bento.events().addDockableCloseListener((closePath, closedDockable) -> {
+            for (var tab : java.util.List.copyOf(openTabs)) {
+                if (tab.dockable() == closedDockable) {
+                    closeTab(tab);
+                    return;
+                }
+            }
+        });
+    }
+
+    private Scene createDockingScene(Scene src, javafx.scene.layout.Region region, double w, double h) {
+        var scene = new Scene(region, w, h);
+        if (src != null) scene.getStylesheets().setAll(src.getStylesheets());
+        return scene;
+    }
+
     private PaneId paneIdOf(Dockable dockable) {
-        try {
-            return dockable == null ? null : PaneId.valueOf(dockable.getIdentifier());
-        } catch (IllegalArgumentException ex) {
-            return null;
-        }
+        try { return dockable == null ? null : PaneId.valueOf(dockable.getIdentifier()); }
+        catch (IllegalArgumentException ex) { return null; }
     }
 
     private void updateShellStatus() {
-        var activeCapture = session.project.activeCapture.activeCapture.get();
-        String capture = activeCapture == null ? "\u2014" : activeCapture.name();
-        String iter = activeCapture == null || activeCapture.iterationKey() == null ? "\u2014" : activeCapture.iterationKey();
-        String paneStatus = session.docking.activePaneId.get() == null
-            ? ""
-            : paneStatuses.getOrDefault(session.docking.activePaneId.get(), "");
+        var tab = activeTab.get();
+        String tabName = tab != null ? tab.displayName() : "\u2014";
         long visible = session.points.entries.stream().filter(ax.xz.mri.ui.model.IsochromatEntry::visible).count();
-        shellStatus.set(String.format(
-            "Capture: %s | Iter: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible)%s",
-            capture,
-            iter,
-            session.viewport.tC.get(),
-            session.points.entries.size(),
-            visible,
-            paneStatus == null || paneStatus.isBlank() ? "" : " | " + paneStatus
-        ));
+        shellStatus.set(String.format("Tab: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible)",
+            tabName, session.viewport.tC.get(), session.points.entries.size(), visible));
     }
 
-
     private void showError(String title, String message) {
-        new Alert(Alert.AlertType.ERROR, message).showAndWait();
+        var alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle(title); alert.setHeaderText(title); alert.setContentText(message);
+        alert.showAndWait();
     }
 
     private MenuItem menuItem(String label, CommandId id) {
         var item = new MenuItem(label);
-        item.setOnAction(event -> commandRegistry.execute(id));
+        item.setOnAction(e -> commandRegistry.execute(id));
         return item;
     }
 }

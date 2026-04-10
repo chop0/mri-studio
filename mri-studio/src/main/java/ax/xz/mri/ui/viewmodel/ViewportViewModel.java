@@ -129,6 +129,31 @@ public class ViewportViewModel {
         normalize();
     }
 
+    /** Capture the current viewport state for later restoration. */
+    public ViewportSnapshot captureSnapshot() {
+        return new ViewportSnapshot(vS.get(), vE.get(), tS.get(), tE.get(), tC.get(), maxTime.get());
+    }
+
+    /** Restore a previously captured snapshot without triggering a full-range reset. */
+    public void restoreSnapshot(ViewportSnapshot snap) {
+        suppressMaxTimeReset = true;
+        normalizing = true;
+        try {
+            maxTime.set(snap.maxTime());
+            vS.set(snap.vS());
+            vE.set(snap.vE());
+            tS.set(snap.tS());
+            tE.set(snap.tE());
+            tC.set(snap.tC());
+        } finally {
+            normalizing = false;
+            suppressMaxTimeReset = false;
+        }
+        normalize();
+    }
+
+    public record ViewportSnapshot(double vS, double vE, double tS, double tE, double tC, double maxTime) {}
+
     private void normalize() {
         if (normalizing) return;
         normalizing = true;

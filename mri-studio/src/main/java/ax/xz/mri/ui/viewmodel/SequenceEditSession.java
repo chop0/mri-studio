@@ -61,6 +61,10 @@ public final class SequenceEditSession {
     public final DoubleProperty viewStart = new SimpleDoubleProperty(0);
     public final DoubleProperty viewEnd = new SimpleDoubleProperty(DEFAULT_DURATION);
 
+    // --- Simulation config association (which config is active for this sequence) ---
+    public final ObjectProperty<ax.xz.mri.project.ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
+    private ax.xz.mri.project.ProjectNodeId originalSimConfigId;
+
     // --- Snapping ---
     public final BooleanProperty snapEnabled = new SimpleBooleanProperty(true);
     public final DoubleProperty snapGridSize = new SimpleDoubleProperty(0);
@@ -119,12 +123,21 @@ public final class SequenceEditSession {
     public boolean isDirty() {
         var orig = originalDocument.get();
         if (orig == null) return false;
+        // Config association changed?
+        if (!java.util.Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
+        // Clip data changed?
         if (orig.clipSequence() != null) {
             return !clips.equals(orig.clipSequence().clips())
                 || dt.get() != orig.clipSequence().dt()
                 || totalDuration.get() != orig.clipSequence().totalDuration();
         }
         return true;
+    }
+
+    /** Set the initial sim config association (called after loading, establishes the "saved" baseline). */
+    public void setOriginalSimConfigId(ax.xz.mri.project.ProjectNodeId configId) {
+        this.originalSimConfigId = configId;
+        this.activeSimConfigId.set(configId);
     }
 
     // ==================== Selection ====================
@@ -424,6 +437,14 @@ public final class SequenceEditSession {
         var dupe = clip.withNewId().withStartTime(clip.startTime() + clip.duration() * 0.1);
         clips.add(dupe);
         selectOnly(dupe.id());
+        bumpRevision();
+    }
+
+    /** Change which simulation config is active for this sequence. Tracked by undo. */
+    public void setActiveSimConfig(ax.xz.mri.project.ProjectNodeId configId) {
+        if (java.util.Objects.equals(configId, activeSimConfigId.get())) return;
+        pushUndo();
+        activeSimConfigId.set(configId);
         bumpRevision();
     }
 
@@ -743,7 +764,8 @@ public final class SequenceEditSession {
             totalDuration.get(),
             Set.copyOf(selectedClipIds),
             primarySelectedClipId.get(),
-            List.copyOf(tracks)
+            List.copyOf(tracks),
+            activeSimConfigId.get()
         );
     }
 
@@ -755,6 +777,7 @@ public final class SequenceEditSession {
         selectedClipIds.addAll(snapshot.selectedClipIds);
         primarySelectedClipId.set(snapshot.primarySelectedClipId);
         tracks.setAll(snapshot.tracks);
+        activeSimConfigId.set(snapshot.activeSimConfigId);
         bumpRevision();
     }
 
@@ -773,7 +796,8 @@ public final class SequenceEditSession {
         double totalDuration,
         Set<String> selectedClipIds,
         String primarySelectedClipId,
-        List<EditorTrack> tracks
+        List<EditorTrack> tracks,
+        ax.xz.mri.project.ProjectNodeId activeSimConfigId
     ) {
         EditSnapshot {
             clips = List.copyOf(clips);

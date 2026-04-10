@@ -42,11 +42,19 @@ public final class ProjectSessionViewModel {
     private final LegacyImportService importService = new LegacyImportService();
     private final ProjectSerialiser serialiser = new ProjectSerialiser();
 
-    /** Callback invoked when a sim config is opened (set by WorkbenchController). */
+    /** Callbacks invoked when nodes are opened (set by WorkbenchController to create tabs). */
     private java.util.function.Consumer<SimulationConfigDocument> onSimConfigOpened;
+    private java.util.function.Consumer<SequenceDocument> onSequenceOpened;
+    private java.util.function.BiConsumer<ProjectNodeId, ax.xz.mri.project.ActiveCapture> onCaptureOpened;
 
     public void setOnSimConfigOpened(java.util.function.Consumer<SimulationConfigDocument> callback) {
         this.onSimConfigOpened = callback;
+    }
+    public void setOnSequenceOpened(java.util.function.Consumer<SequenceDocument> callback) {
+        this.onSequenceOpened = callback;
+    }
+    public void setOnCaptureOpened(java.util.function.BiConsumer<ProjectNodeId, ax.xz.mri.project.ActiveCapture> callback) {
+        this.onCaptureOpened = callback;
     }
 
     public ProjectSessionViewModel() {
@@ -236,6 +244,7 @@ public final class ProjectSessionViewModel {
                 workspace.activeNodeId.set(visibleOwner);
                 inspector.inspectedNodeId.set(visibleOwner);
                 syncActiveCaptureFromRun();
+                notifyCaptureOpened(visibleOwner);
             }
             case ImportedScenarioDocument scenario -> {
                 if (scenario.iterative() && scenario.importedRunId() != null) {
@@ -243,10 +252,12 @@ public final class ProjectSessionViewModel {
                     workspace.activeNodeId.set(nodeId);
                     inspector.inspectedNodeId.set(nodeId);
                     syncActiveCaptureFromRun();
+                    notifyCaptureOpened(nodeId);
                 } else if (!scenario.directCaptureIds().isEmpty()) {
                     workspace.activeNodeId.set(nodeId);
                     inspector.inspectedNodeId.set(nodeId);
                     activeCapture.activeCapture.set(repo.resolveCapture(scenario.directCaptureIds().getFirst()));
+                    notifyCaptureOpened(nodeId);
                 } else {
                     workspace.activeNodeId.set(nodeId);
                     inspector.inspectedNodeId.set(nodeId);
@@ -258,18 +269,21 @@ public final class ProjectSessionViewModel {
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 syncActiveCaptureFromRun();
+                notifyCaptureOpened(nodeId);
             }
             case OptimisationRunDocument _ -> {
                 runNavigation.openRun(repo, nodeId, null);
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 syncActiveCaptureFromRun();
+                notifyCaptureOpened(nodeId);
             }
             case ImportedCaptureDocument _, CaptureDocument _ -> {
                 runNavigation.clear();
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(repo.resolveCapture(nodeId));
+                notifyCaptureOpened(nodeId);
             }
             case SequenceSnapshotDocument _ -> {
                 workspace.activeNodeId.set(nodeId);
@@ -277,11 +291,12 @@ public final class ProjectSessionViewModel {
                 runNavigation.clear();
                 activeCapture.activeCapture.set(null);
             }
-            case SequenceDocument _ -> {
+            case SequenceDocument seq -> {
                 runNavigation.clear();
                 workspace.activeNodeId.set(nodeId);
                 inspector.inspectedNodeId.set(nodeId);
                 activeCapture.activeCapture.set(null);
+                if (onSequenceOpened != null) onSequenceOpened.accept(seq);
             }
             case SimulationConfigDocument simConfig -> {
                 // Set inspector to show the sim config. The WorkbenchController
@@ -412,6 +427,13 @@ public final class ProjectSessionViewModel {
         var root = projectRoot.get();
         if (root == null) return;
         try { saveProject(root); } catch (IOException ignored) {}
+    }
+
+    private void notifyCaptureOpened(ProjectNodeId nodeId) {
+        if (onCaptureOpened != null) {
+            var capture = activeCapture.activeCapture.get();
+            if (capture != null) onCaptureOpened.accept(nodeId, capture);
+        }
     }
 
     private void syncActiveCaptureFromRun() {

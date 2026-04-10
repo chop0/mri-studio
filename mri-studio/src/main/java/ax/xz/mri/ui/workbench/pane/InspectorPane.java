@@ -358,10 +358,11 @@ public final class InspectorPane extends WorkbenchPane {
 
             configCombo.setOnAction(e -> {
                 var selected = configCombo.getValue();
-                if (selected == null || simSession == null) return;
+                if (selected == null || editSession == null) return;
                 for (var cfg : configs) {
                     if (cfg.name().equals(selected)) {
-                        simSession.loadConfig(cfg);
+                        // Go through editSession so it's tracked by undo and marks dirty
+                        editSession.setActiveSimConfig(cfg.id());
                         break;
                     }
                 }
@@ -382,15 +383,12 @@ public final class InspectorPane extends WorkbenchPane {
         }
     }
 
-    /** Find the sim session for a given edit session (via the open sim sessions map). */
+    /** Find the sim session for a given edit session (via the active workspace tab). */
     private ax.xz.mri.ui.viewmodel.SequenceSimulationSession findSimSessionForEditor(SequenceEditSession editSession) {
-        // The edit session's original document has the sequence ID
-        var doc = editSession.originalDocument.get();
-        if (doc == null) return null;
-        // Walk the controller's open sim sessions (accessible via session)
-        // For simplicity, check the active edit session's sim session
-        // The controller stores them by seqId
-        return paneContext.controller().getSimSessionForSequence(doc.id().value());
+        return paneContext.controller().allSimSessions().stream()
+            .filter(s -> s.editSession == editSession)
+            .findFirst()
+            .orElse(null);
     }
 
     private void populateClipProperties(SequenceEditSession editSession, SignalClip clip) {

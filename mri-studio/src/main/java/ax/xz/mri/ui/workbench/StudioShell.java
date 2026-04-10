@@ -10,8 +10,10 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
 
-/** New JavaFX workbench shell with menus, command strip, dock root, and global status. */
+/** New JavaFX workbench shell with menus, tab bar, dock root, sidebar, and status. */
 public class StudioShell extends BorderPane {
     private final StudioSession session = new StudioSession();
     private final WorkbenchController controller = new WorkbenchController(session);
@@ -20,7 +22,7 @@ public class StudioShell extends BorderPane {
     public StudioShell() {
         getStyleClass().add("studio-shell");
         setTop(buildTop());
-        setCenter(controller.dockRoot());
+        setCenter(buildCentre());
         setBottom(buildStatusBar());
     }
 
@@ -41,12 +43,18 @@ public class StudioShell extends BorderPane {
     }
 
     private javafx.scene.Node buildTop() {
-        return new javafx.scene.layout.VBox(buildMenuBar(), controller.buildMainToolStrip());
+        return new VBox(buildMenuBar(), controller.buildMainToolStrip());
+    }
+
+    private javafx.scene.Node buildCentre() {
+        // Main area: left sidebar + dock root + right sidebar
+        var mainArea = new HBox(controller.leftSidebar(), controller.dockRoot(), controller.rightSidebar());
+        HBox.setHgrow(controller.dockRoot(), Priority.ALWAYS);
+        return mainArea;
     }
 
     private MenuBar buildMenuBar() {
         var fileMenu = new Menu("File");
-        // Save is context-aware: in sequence editor → save sequence; otherwise → save project
         var saveItem = new MenuItem("Save");
         saveItem.setAccelerator(KeyCombination.keyCombination("Shortcut+S"));
         saveItem.setOnAction(event -> controller.saveContextual());
@@ -72,18 +80,30 @@ public class StudioShell extends BorderPane {
 
         var viewMenu = new Menu("View");
         var snapItem = new javafx.scene.control.CheckMenuItem("Snap to Grid");
-        snapItem.setSelected(true); // default on
-        // Bind to active edit session's snap property when available
+        snapItem.setSelected(true);
         session.activeEditSession.addListener((obs, o, n) -> {
             if (n != null) snapItem.selectedProperty().bindBidirectional(n.snapEnabled);
             if (o != null) snapItem.selectedProperty().unbindBidirectional(o.snapEnabled);
         });
+        // Restore submenu — one item per tool window pane
+        var restoreMenu = new Menu("Restore Tool Window");
+        for (var paneId : PaneId.values()) {
+            // Only include BentoFX-hosted tool windows
+            if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR
+                || paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR
+                || paneId == PaneId.POINTS) continue;
+            var item = new MenuItem(paneId.title());
+            final var pid = paneId;
+            item.setOnAction(event -> controller.dockPane(pid));
+            restoreMenu.getItems().add(item);
+        }
+
         viewMenu.getItems().addAll(
             snapItem,
             new SeparatorMenuItem(),
-            menuItem("Reset Layout", CommandId.RESET_LAYOUT, null),
-            menuItem("Save Layout", CommandId.SAVE_LAYOUT, null),
-            menuItem("Load Layout", CommandId.LOAD_LAYOUT, null)
+            restoreMenu,
+            new SeparatorMenuItem(),
+            menuItem("Reset Layout", CommandId.RESET_LAYOUT, null)
         );
 
         var windowMenu = new Menu("Window");
@@ -105,15 +125,6 @@ public class StudioShell extends BorderPane {
         return new MenuBar(fileMenu, viewMenu, windowMenu, analysisMenu);
     }
 
-    private HBox buildStatusBar() {
-        var label = new Label();
-        label.textProperty().bind(controller.shellStatusProperty());
-        var bar = new HBox(label);
-        bar.getStyleClass().add("shell-status-bar");
-        bar.setPadding(new Insets(2, 6, 2, 6));
-        return bar;
-    }
-
     private Menu buildNewMenu() {
         var newMenu = new Menu("New");
         newMenu.getItems().addAll(
@@ -122,6 +133,15 @@ public class StudioShell extends BorderPane {
             menuItem("Sequence (empty)\u2026", CommandId.NEW_SEQUENCE, null)
         );
         return newMenu;
+    }
+
+    private HBox buildStatusBar() {
+        var label = new Label();
+        label.textProperty().bind(controller.shellStatusProperty());
+        var bar = new HBox(label);
+        bar.getStyleClass().add("shell-status-bar");
+        bar.setPadding(new Insets(2, 6, 2, 6));
+        return bar;
     }
 
     private MenuItem menuItem(String label, CommandId id, KeyCombination accelerator) {

@@ -187,6 +187,53 @@
     -fx-text-fill: #1f2937;
 }
 
+/* --- Tool sidebar --- */
+
+.tool-sidebar {
+    -fx-background-color: transparent;
+}
+
+.tool-sidebar-strip {
+    -fx-background-color: linear-gradient(to bottom, #f3f5f7, #e7ebef);
+    -fx-border-color: transparent transparent transparent #c8d0da;
+    -fx-border-width: 0 0 0 1;
+}
+
+.sidebar-tool-btn {
+    -fx-background-color: transparent;
+    -fx-background-radius: 4;
+    -fx-padding: 4;
+}
+
+.sidebar-tool-btn:hover {
+    -fx-background-color: rgba(0, 120, 212, 0.10);
+}
+
+.sidebar-tool-btn:selected {
+    -fx-background-color: rgba(0, 120, 212, 0.16);
+}
+
+.tool-sidebar-panel {
+    -fx-background-color: #ffffff;
+    -fx-border-color: transparent transparent transparent #c8d0da;
+    -fx-border-width: 0 0 0 1;
+}
+
+.sidebar-resize-handle {
+    -fx-background-color: #d3dae3;
+}
+
+.sidebar-resize-handle:hover {
+    -fx-background-color: #0078d4;
+}
+
+/* Active editor focus indicator */
+.editor-focus-ring {
+    -fx-border-color: #0078d4;
+    -fx-border-width: 2;
+    -fx-border-radius: 2;
+}
+
 /* --- Wizard dialog --- */
 
 .wizard-root {
