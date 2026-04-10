@@ -168,13 +168,10 @@ public final class ProjectRepository {
         simConfigIds.remove(configId);
     }
 
-    /** Get all simulation configs associated with a given sequence. */
-    public List<SimulationConfigDocument> simConfigsForSequence(ProjectNodeId sequenceId) {
-        return simConfigIds.stream()
-            .map(nodes::get)
-            .filter(n -> n instanceof SimulationConfigDocument sc && sequenceId.equals(sc.sequenceId()))
-            .map(n -> (SimulationConfigDocument) n)
-            .toList();
+    /** Look up a simulation config by its ID. */
+    public SimulationConfigDocument simConfig(ProjectNodeId configId) {
+        var node = nodes.get(configId);
+        return node instanceof SimulationConfigDocument sc ? sc : null;
     }
 
     // --- Eigenfields ---

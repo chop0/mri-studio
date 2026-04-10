@@ -157,14 +157,14 @@ public final class SequenceEditorPane extends WorkbenchPane {
     public void savePublic() { saveSequence(); }
 
     private void saveSequence() {
-        // Preserve the current config association across the save
-        var currentConfigId = editSession.activeSimConfigId.get();
-        var updated = editSession.toDocument();
+        var updated = editSession.toDocument(); // includes activeSimConfigId
+        var currentConfigId = updated.activeSimConfigId();
         var repo = paneContext.session().project.repository.get();
         repo.removeSequence(updated.id());
         repo.addSequence(updated);
         editSession.open(updated);
-        editSession.setOriginalSimConfigId(currentConfigId);
+        // Restore the config association after open() resets state
+        if (currentConfigId != null) editSession.setOriginalSimConfigId(currentConfigId);
         paneContext.session().activeEditSession.set(editSession);
         paneContext.session().project.explorer.refresh();
         notifyTitleChanged();

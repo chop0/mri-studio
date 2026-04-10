@@ -24,7 +24,8 @@ import java.util.Set;
  */
 public final class SequenceEditorProvider implements DocumentEditorProvider {
 	private static final Set<PaneId> RELEVANT = Set.of(
-		PaneId.TIMELINE, PaneId.CROSS_SECTION, PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
+		PaneId.TIMELINE, PaneId.CROSS_SECTION, PaneId.SPHERE,
+		PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
 		PaneId.TRACE_PHASE, PaneId.TRACE_POLAR, PaneId.TRACE_MAGNITUDE);
 
 	private final SequenceDocument document;
@@ -65,10 +66,10 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 			}
 		});
 
-		// Load associated sim config — goes through editSession so the listener above fires
-		var simConfigs = session.project.repository.get().simConfigsForSequence(document.id());
-		if (!simConfigs.isEmpty()) {
-			editSession.setOriginalSimConfigId(simConfigs.getFirst().id());
+		// Load associated sim config from the document's persisted config ID
+		var configId = document.activeSimConfigId();
+		if (configId != null && session.project.repository.get().simConfig(configId) != null) {
+			editSession.setOriginalSimConfigId(configId);
 		}
 		savedConfig = simSession.activeConfig.get();
 
@@ -102,11 +103,11 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 				new Label("T\u2082: " + String.format("%.0f ms", cfg.t2Ms())),
 				new Label(cfg.fields().size() + " fields")
 			);
-			var simConfigs = sessionRef.project.repository.get().simConfigsForSequence(document.id());
-			if (!simConfigs.isEmpty()) {
+			var activeConfigId = editSession.activeSimConfigId.get();
+			if (activeConfigId != null) {
 				var editBtn = new Button("Edit Config\u2026");
 				editBtn.setStyle("-fx-font-size: 10px;");
-				editBtn.setOnAction(e -> sessionRef.project.openNode(simConfigs.getFirst().id()));
+				editBtn.setOnAction(e -> sessionRef.project.openNode(activeConfigId));
 				configStripContainer.getChildren().add(editBtn);
 			}
 		}

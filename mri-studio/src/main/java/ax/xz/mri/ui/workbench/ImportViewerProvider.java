@@ -15,7 +15,8 @@ import java.util.Set;
  */
 public final class ImportViewerProvider implements DocumentEditorProvider {
 	private static final Set<PaneId> RELEVANT = Set.of(
-		PaneId.TIMELINE, PaneId.CROSS_SECTION, PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
+		PaneId.TIMELINE, PaneId.CROSS_SECTION, PaneId.SPHERE,
+		PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
 		PaneId.TRACE_PHASE, PaneId.TRACE_POLAR, PaneId.TRACE_MAGNITUDE);
 
 	private final ActiveCapture capture;

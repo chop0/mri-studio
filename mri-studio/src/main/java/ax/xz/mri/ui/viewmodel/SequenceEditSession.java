@@ -116,7 +116,7 @@ public final class SequenceEditSession {
         return new SequenceDocument(
             orig.id(), orig.name(),
             baked.segments(), baked.pulseSegments(),
-            clipSeq
+            clipSeq, activeSimConfigId.get()
         );
     }
 

@@ -413,12 +413,19 @@ public final class ProjectSessionViewModel {
 
         var configDoc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()),
-            baseName + " Config", sequence.id(), config);
+            baseName + " Config", config);
         repo.addSimConfig(configDoc);
 
+        // Associate the config with the sequence (single source of truth: on the sequence)
+        var updatedSeq = new SequenceDocument(
+            sequence.id(), sequence.name(), sequence.segments(), sequence.pulse(),
+            sequence.clipSequence(), configDoc.id());
+        repo.removeSequence(sequence.id());
+        repo.addSequence(updatedSeq);
+
         explorer.refresh();
-        selectNode(sequence.id());
-        openNode(sequence.id());
+        selectNode(updatedSeq.id());
+        openNode(updatedSeq.id());
         saveProjectQuietly();
     }
 
@@ -464,7 +471,7 @@ public final class ProjectSessionViewModel {
         var fields = template.createFields(repo);
         var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
         var doc = new SimulationConfigDocument(
-            new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, null, config);
+            new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         repo.addSimConfig(doc);
         explorer.refresh();
         saveProjectQuietly();

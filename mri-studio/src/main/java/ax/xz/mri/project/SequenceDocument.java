@@ -19,11 +19,18 @@ public record SequenceDocument(
     String name,
     List<Segment> segments,
     List<PulseSegment> pulse,
-    @JsonProperty("clip_sequence") ClipSequence clipSequence
+    @JsonProperty("clip_sequence") ClipSequence clipSequence,
+    @JsonProperty("active_sim_config_id") ProjectNodeId activeSimConfigId
 ) implements ProjectNode {
-    /** Legacy constructor without clip sequence. */
+    /** Legacy constructor without clip sequence or config association. */
     public SequenceDocument(ProjectNodeId id, String name, List<Segment> segments, List<PulseSegment> pulse) {
-        this(id, name, segments, pulse, null);
+        this(id, name, segments, pulse, null, null);
+    }
+
+    /** Constructor without config association (legacy/imported). */
+    public SequenceDocument(ProjectNodeId id, String name, List<Segment> segments, List<PulseSegment> pulse,
+                           ClipSequence clipSequence) {
+        this(id, name, segments, pulse, clipSequence, null);
     }
 
     public SequenceDocument {

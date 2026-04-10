@@ -219,6 +219,29 @@
     -fx-border-width: 0 0 0 1;
 }
 
+/* --- Minimize bar (collapsed analysis panes) --- */
+
+.minimize-bar {
+    -fx-background-color: linear-gradient(to bottom, #eef2f6, #e1e7ee);
+    -fx-border-color: #c8d0da transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+.minimize-bar-button {
+    -fx-background-color: linear-gradient(to bottom, #f6f8fb, #e7edf3);
+    -fx-border-color: #c8d0da;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+    -fx-padding: 2 8 2 8;
+    -fx-font-size: 11px;
+    -fx-text-fill: #334155;
+}
+
+.minimize-bar-button:hover {
+    -fx-background-color: rgba(0, 120, 212, 0.12);
+    -fx-border-color: #0078d4;
+}
+
 .sidebar-resize-handle {
     -fx-background-color: #d3dae3;
 }

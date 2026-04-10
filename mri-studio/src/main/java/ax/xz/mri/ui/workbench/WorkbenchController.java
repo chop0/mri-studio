@@ -56,6 +56,14 @@ import java.util.Map;
 public class WorkbenchController {
     private static final int STUDIO_DRAG_GROUP = 1;
 
+    /** Analysis pane IDs — contextually shown/hidden based on document type. */
+    private static final PaneId[] ANALYSIS_PANE_IDS = {
+        PaneId.CROSS_SECTION, PaneId.SPHERE,
+        PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
+        PaneId.TRACE_PHASE, PaneId.TRACE_POLAR, PaneId.TRACE_MAGNITUDE,
+        PaneId.TIMELINE
+    };
+
     private final StudioSession session;
     private final CommandRegistry commandRegistry = new CommandRegistry();
     private final StringProperty shellStatus = new SimpleStringProperty("Ready");
@@ -75,9 +83,13 @@ public class WorkbenchController {
     private final ToolSidebar leftSidebar = new ToolSidebar(ToolSidebar.Side.LEFT, 220);
     private final ToolSidebar rightSidebar = new ToolSidebar(ToolSidebar.Side.RIGHT, 300);
 
+    // Dock bar — buttons for closed analysis panes (click to restore to home leaf)
+    private final MinimizeBar dockBar = new MinimizeBar(this::restorePane);
+
     // BentoFX layout
     private Bento bento;
     private DockContainerRootBranch rootBranch;
+    private software.coley.bentofx.layout.container.DockContainerBranch centreShellBranch;
     private DockContainerLeaf documentLeaf; // top — holds document tabs
     private Stage mainStage;
     private boolean disposed;
@@ -94,7 +106,7 @@ public class WorkbenchController {
 
     public void initialize(Stage stage) {
         this.mainStage = stage;
-        resetLayout();
+        loadLayoutFromStore();
     }
 
     // --- Public accessors ---
@@ -216,6 +228,14 @@ public class WorkbenchController {
                 tab.editor().editorContent().getStyleClass().remove("editor-focus-ring");
             }
             newTab.editor().editorContent().getStyleClass().add("editor-focus-ring");
+
+            // Contextual analysis area: hide via dividers when document has no analysis,
+            // show when it does. The BentoFX tree is NEVER mutated — just divider positions.
+            if (newTab.editor().relevantToolWindows().isEmpty()) {
+                hideAnalysisArea();
+            } else {
+                showAnalysisArea();
+            }
         } finally {
             switchingTabs = false;
         }
@@ -255,6 +275,61 @@ public class WorkbenchController {
             .filter(SequenceEditorProvider.class::isInstance)
             .map(e -> ((SequenceEditorProvider) e).simSession)
             .toList();
+    }
+
+    // --- Close / Restore (dock bar) ---
+
+    /**
+     * Close a pane: remove from BentoFX tree, show a restore button in the dock bar.
+     * The pane can be restored to its home leaf via the dock bar button or View menu.
+     */
+    public void closePane(PaneId paneId) {
+        var dockable = dockables.get(paneId);
+        if (dockable == null || dockBar.isMinimized(paneId)) return;
+        dockable.inContainer(c -> c.removeDockable(dockable));
+        dockBar.addPane(paneId, paneId.title());
+    }
+
+    /** Restore a closed pane back into its home leaf in the BentoFX tree. */
+    public void restorePane(PaneId paneId) {
+        var dockable = dockables.get(paneId);
+        if (dockable == null || !dockBar.isMinimized(paneId)) return;
+        dockBar.removePane(paneId);
+        var home = homeLeaves.get(paneId);
+        if (home != null && home.getParentContainer() != null) {
+            home.addDockable(dockable);
+            home.selectDockable(dockable);
+        } else {
+            // Home leaf was pruned — create a fresh one in the centre shell
+            var freshLeaf = bento.dockBuilding().leaf(paneId.name().toLowerCase() + "-restored");
+            freshLeaf.setPruneWhenEmpty(true);
+            centreShellBranch.addContainer(freshLeaf);
+            homeLeaves.put(paneId, freshLeaf);
+            freshLeaf.addDockable(dockable);
+            freshLeaf.selectDockable(dockable);
+        }
+    }
+
+    public boolean isPaneClosed(PaneId paneId) { return dockBar.isMinimized(paneId); }
+    public MinimizeBar dockBar() { return dockBar; }
+
+    // --- Contextual analysis area visibility (divider-based, no tree mutation) ---
+
+    /** Saved divider position when analysis area is visible. */
+    private double savedCentreShellDivider = -1;
+
+    /** Hide the bottom area (analysis + timeline) by pushing the centreShell divider to 1.0. */
+    private void hideAnalysisArea() {
+        if (centreShellBranch == null) return;
+        var dividers = centreShellBranch.getDividerPositions();
+        if (dividers.length > 0) savedCentreShellDivider = dividers[0];
+        centreShellBranch.setDividerPositions(1.0);
+    }
+
+    /** Show the bottom area by restoring the centreShell divider. */
+    private void showAnalysisArea() {
+        if (centreShellBranch == null) return;
+        centreShellBranch.setDividerPositions(savedCentreShellDivider > 0 ? savedCentreShellDivider : 0.45);
     }
 
     // --- Pane management ---
@@ -297,14 +372,221 @@ public class WorkbenchController {
     }
 
     public void dockPane(PaneId paneId) {
+        // If the pane is in the dock bar (closed), restore it first
+        if (dockBar.isMinimized(paneId)) {
+            restorePane(paneId);
+            return;
+        }
         var d = dockables.get(paneId); var hl = homeLeaves.get(paneId);
         if (d == null || hl == null) return;
-        hl.addDockable(d); hl.selectDockable(d); focusPane(paneId);
+        // If already in a leaf, move to home
+        if (d.getContainer() != null && d.getContainer() != hl) {
+            d.getContainer().removeDockable(d);
+        }
+        if (d.getContainer() == null) {
+            hl.addDockable(d);
+        }
+        hl.selectDockable(d);
+        focusPane(paneId);
     }
 
     public void resetLayout() { rebuildWorkbench(); }
-    public void loadLayoutFromStore() { resetLayout(); }
-    public void saveLayoutToStore() {}
+
+    private static final java.nio.file.Path LAYOUT_FILE =
+        java.nio.file.Path.of(System.getProperty("user.home"), ".mri-studio", "layout.json");
+    private final PersistentLayoutStore layoutStore = new PersistentLayoutStore(LAYOUT_FILE);
+
+    public void loadLayoutFromStore() {
+        layoutStore.load().ifPresentOrElse(
+            this::restoreLayout,
+            this::rebuildWorkbench
+        );
+    }
+
+    public void saveLayoutToStore() {
+        try {
+            layoutStore.save(captureLayout());
+        } catch (Exception ignored) {}
+    }
+
+    // --- Layout capture: live BentoFX tree → WorkbenchLayoutState ---
+
+    private ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState captureLayout() {
+        // Capture the analysis/timeline portion of the tree (skip docLeaf — it's session-specific).
+        ax.xz.mri.ui.workbench.layout.DockNode dockRoot = null;
+        if (centreShellBranch != null && centreShellBranch.getChildContainers().size() > 1) {
+            dockRoot = captureNode(centreShellBranch.getChildContainers().get(1));
+        }
+        if (dockRoot == null) dockRoot = captureNode(rootBranch);
+        // Detect floating windows (dockables whose container's root != rootBranch)
+        var floatingWindows = new java.util.ArrayList<ax.xz.mri.ui.workbench.layout.FloatingWindowState>();
+        for (var entry : dockables.entrySet()) {
+            var dockable = entry.getValue();
+            if (dockable.getContainer() != null) {
+                var scene = dockable.getContainer().getScene();
+                if (scene != null && scene.getWindow() != mainStage) {
+                    var w = scene.getWindow();
+                    floatingWindows.add(new ax.xz.mri.ui.workbench.layout.FloatingWindowState(
+                        entry.getKey(), w.getX(), w.getY(), w.getWidth(), w.getHeight()));
+                }
+            }
+        }
+        return new ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState(dockRoot, floatingWindows);
+    }
+
+    private ax.xz.mri.ui.workbench.layout.DockNode captureNode(software.coley.bentofx.layout.DockContainer container) {
+        if (container instanceof software.coley.bentofx.layout.container.DockContainerBranch branch) {
+            var children = branch.getChildContainers();
+            if (children.isEmpty()) return null;
+            if (children.size() == 1) return captureNode(children.getFirst());
+            // Binary split — nest if more than 2 children
+            var dividers = branch.getDividerPositions();
+            return captureSplit(branch.getOrientation(), children, dividers, 0);
+        } else if (container instanceof DockContainerLeaf leaf) {
+            var tabs = new java.util.ArrayList<ax.xz.mri.ui.workbench.layout.DockNode>();
+            int selectedIdx = 0;
+            for (int i = 0; i < leaf.getDockables().size(); i++) {
+                var dockable = leaf.getDockables().get(i);
+                var paneId = paneIdOf(dockable);
+                if (paneId != null) {
+                    tabs.add(new ax.xz.mri.ui.workbench.layout.PaneLeaf(paneId));
+                    if (leaf.getSelectedDockable() == dockable) selectedIdx = tabs.size() - 1;
+                }
+            }
+            if (tabs.isEmpty()) return null;
+            if (tabs.size() == 1) return tabs.getFirst();
+            return new ax.xz.mri.ui.workbench.layout.TabNode(tabs, selectedIdx);
+        }
+        return null;
+    }
+
+    /** Recursively build binary SplitNodes from an N-child branch. */
+    private ax.xz.mri.ui.workbench.layout.DockNode captureSplit(
+            Orientation orientation,
+            java.util.List<? extends software.coley.bentofx.layout.DockContainer> children,
+            double[] dividers, int fromIndex) {
+        if (fromIndex >= children.size() - 1) return captureNode(children.get(fromIndex));
+        var first = captureNode(children.get(fromIndex));
+        var rest = (fromIndex < children.size() - 2)
+            ? captureSplit(orientation, children, dividers, fromIndex + 1)
+            : captureNode(children.get(fromIndex + 1));
+        double divPos = fromIndex < dividers.length ? dividers[fromIndex] : 0.5;
+        return new ax.xz.mri.ui.workbench.layout.SplitNode(orientation, divPos, first, rest);
+    }
+
+    // --- Layout restore: WorkbenchLayoutState → BentoFX tree ---
+
+    private void restoreLayout(ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState state) {
+        if (state == null || state.dockRoot() == null) {
+            rebuildWorkbench();
+            return;
+        }
+
+        bento = new Bento();
+        configureBento();
+        dockables.clear();
+        homeLeaves.clear();
+
+        var builder = bento.dockBuilding();
+        var root = builder.root("restored-root");
+
+        // Document leaf (always exists, not persisted in the layout tree)
+        var docLeaf = builder.leaf("document_tabs");
+        docLeaf.setPruneWhenEmpty(false);
+
+        // Rebuild the analysis/timeline tree from the persisted state
+        var restoredContainer = restoreNode(builder, state.dockRoot());
+
+        root.setOrientation(Orientation.VERTICAL);
+        if (restoredContainer != null) {
+            root.addContainers(docLeaf, restoredContainer);
+        } else {
+            root.addContainers(docLeaf);
+        }
+
+        rootBranch = root;
+        centreShellBranch = root;
+        documentLeaf = docLeaf;
+
+        dockContainer.setCenter(rootBranch);
+        dockContainer.setBottom(dockBar);
+
+        // Defer divider positions — SplitPane ignores them before layout.
+        deferDividers(root, 0.45);
+
+        // Restore floating windows
+        for (var fw : state.floatingWindows()) {
+            var dockable = dockables.get(fw.paneId());
+            if (dockable != null && mainStage != null && mainStage.getScene() != null) {
+                bento.stageBuilding().newStageForDockable(
+                    mainStage.getScene(), dockable, fw.x(), fw.y());
+            }
+        }
+    }
+
+    private software.coley.bentofx.layout.DockContainer restoreNode(
+            software.coley.bentofx.building.DockBuilding builder,
+            ax.xz.mri.ui.workbench.layout.DockNode node) {
+        if (node instanceof ax.xz.mri.ui.workbench.layout.PaneLeaf paneLeaf) {
+            return restoreLeaf(builder, paneLeaf.paneId());
+        } else if (node instanceof ax.xz.mri.ui.workbench.layout.TabNode tabNode) {
+            var leaf = builder.leaf("tab-" + System.nanoTime());
+            leaf.setPruneWhenEmpty(false);
+            for (int i = 0; i < tabNode.tabs().size(); i++) {
+                var tab = tabNode.tabs().get(i);
+                if (tab instanceof ax.xz.mri.ui.workbench.layout.PaneLeaf pl) {
+                    var dockable = createDockable(builder, pl.paneId());
+                    if (dockable != null) {
+                        homeLeaves.put(pl.paneId(), leaf);
+                        leaf.addDockable(dockable);
+                    }
+                }
+            }
+            if (tabNode.selectedIndex() >= 0 && tabNode.selectedIndex() < leaf.getDockables().size()) {
+                leaf.selectDockable(leaf.getDockables().get(tabNode.selectedIndex()));
+            }
+            return leaf;
+        } else if (node instanceof ax.xz.mri.ui.workbench.layout.SplitNode splitNode) {
+            var branch = builder.branch("split-" + System.nanoTime());
+            branch.setOrientation(splitNode.orientation());
+            var first = restoreNode(builder, splitNode.first());
+            var second = restoreNode(builder, splitNode.second());
+            if (first != null) branch.addContainer(first);
+            if (second != null) branch.addContainer(second);
+            if (first != null && second != null) {
+                deferDividers(branch, splitNode.dividerPosition());
+            }
+            return branch;
+        }
+        return null;
+    }
+
+    private DockContainerLeaf restoreLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
+        var leaf = builder.leaf(paneId.name().toLowerCase());
+        leaf.setPruneWhenEmpty(true);
+        var dockable = createDockable(builder, paneId);
+        if (dockable != null) {
+            homeLeaves.put(paneId, leaf);
+            leaf.addDockable(dockable);
+            leaf.selectDockable(dockable);
+        }
+        return leaf;
+    }
+
+    private Dockable createDockable(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
+        var pane = panes.get(paneId);
+        if (pane == null) return null;
+        var dockable = builder.dockable(paneId.name());
+        dockable.setTitle(paneId.title());
+        dockable.setNode(pane);
+        dockable.setClosable(false);
+        dockable.setCanBeDragged(true);
+        dockable.setCanBeDroppedToNewWindow(true);
+        dockable.setDragGroup(STUDIO_DRAG_GROUP);
+        dockable.setContextMenuFactory(ignored -> buildToolWindowMenu(paneId));
+        dockables.put(paneId, dockable);
+        return dockable;
+    }
 
     public void markTimelineStale(boolean stale) {
         // No-op for now — per-doc timelines handle their own state
@@ -562,60 +844,59 @@ public class WorkbenchController {
         //   Bottom: Timeline (collapsible bar)
         var centreShell = builder.branch("centre-shell");
 
-        // Document editor leaf (top) — BentoFX tab headers serve as document tabs
+        // Document editor leaf (top)
         var docLeaf = builder.leaf("document_tabs");
         docLeaf.setPruneWhenEmpty(false);
 
-        // Analysis area (middle)
-        var analysisArea = builder.branch("analysis-area");
-        var analysisLeft = builder.branch("analysis-left");
-        var analysisRight = builder.branch("analysis-right");
-        var phaseMaps = builder.branch("phase-maps");
-        var phaseTraces = builder.branch("phase-traces");
+        // Analysis leaf (middle) — ALL analysis panes as tabs in one leaf.
+        // Click a tab to view it, click the selected tab to collapse the entire leaf
+        // to a thin tab bar. Users can drag panes out to float if they need side-by-side.
+        var analysisLeaf = builder.leaf("analysis_tabs");
+        analysisLeaf.setPruneWhenEmpty(false);
+        for (var paneId : ANALYSIS_PANE_IDS) {
+            if (paneId == PaneId.TIMELINE) continue; // timeline gets its own leaf
+            var dockable = builder.dockable(paneId.name());
+            dockable.setTitle(paneId.title());
+            dockable.setNode(panes.get(paneId));
+            dockable.setClosable(false);
+            dockable.setCanBeDragged(true);
+            dockable.setCanBeDroppedToNewWindow(true);
+            dockable.setDragGroup(STUDIO_DRAG_GROUP);
+            dockable.setContextMenuFactory(ignored -> buildToolWindowMenu(paneId));
+            dockables.put(paneId, dockable);
+            homeLeaves.put(paneId, analysisLeaf);
+            analysisLeaf.addDockable(dockable);
+        }
+        if (!analysisLeaf.getDockables().isEmpty()) {
+            analysisLeaf.selectDockable(analysisLeaf.getDockables().getFirst());
+        }
 
-        var geometry = registerLeaf(builder, PaneId.CROSS_SECTION);
-        var sphere = registerLeaf(builder, PaneId.SPHERE);
-        var phaseMapZ = registerLeaf(builder, PaneId.PHASE_MAP_Z);
-        var phaseMapR = registerLeaf(builder, PaneId.PHASE_MAP_R);
-        var tracePhase = registerLeaf(builder, PaneId.TRACE_PHASE);
-        var tracePolar = registerLeaf(builder, PaneId.TRACE_POLAR);
-        var traceMagnitude = registerLeaf(builder, PaneId.TRACE_MAGNITUDE);
-
-        // Timeline (bottom bar)
+        // Timeline leaf (bottom) — its own leaf so it collapses independently
         var timeline = registerLeaf(builder, PaneId.TIMELINE);
 
-        // Orientations
+        // Hierarchy: nest so BOTH analysis and timeline are at edges (BentoFX
+        // collapse only works on first/last child of a branch).
+        //   centreShell = docLeaf | bottomArea
+        //   bottomArea  = analysisLeaf | timeline
+        // analysisLeaf is FIRST in bottomArea → can collapse ✓
+        // timeline is LAST in bottomArea → can collapse ✓
+        var bottomArea = builder.branch("bottom-area");
         root.setOrientation(Orientation.HORIZONTAL);
         centreShell.setOrientation(Orientation.VERTICAL);
-        analysisArea.setOrientation(Orientation.HORIZONTAL);
-        analysisLeft.setOrientation(Orientation.HORIZONTAL);
-        analysisRight.setOrientation(Orientation.VERTICAL);
-        phaseMaps.setOrientation(Orientation.HORIZONTAL);
-        phaseTraces.setOrientation(Orientation.HORIZONTAL);
-
-        // Hierarchy:
-        //   centreShell = docLeaf | analysisArea | timeline
-        //   analysisArea = analysisLeft(geometry, sphere) | analysisRight(phaseMaps, traces, magnitude)
+        bottomArea.setOrientation(Orientation.VERTICAL);
         root.addContainers(centreShell);
-        centreShell.addContainers(docLeaf, analysisArea, timeline);
-        analysisArea.addContainers(analysisLeft, analysisRight);
-        analysisLeft.addContainers(geometry, sphere);
-        analysisRight.addContainers(phaseMaps, phaseTraces, traceMagnitude);
-        phaseMaps.addContainers(phaseMapZ, phaseMapR);
-        phaseTraces.addContainers(tracePhase, tracePolar);
+        centreShell.addContainers(docLeaf, bottomArea);
+        bottomArea.addContainers(analysisLeaf, timeline);
 
-        // Divider positions
-        centreShell.setDividerPositions(0.40, 0.85); // editors 40%, analysis 45%, timeline 15%
-        analysisArea.setDividerPositions(0.4);        // left (geo+sphere) 40%, right (maps+traces) 60%
-        analysisLeft.setDividerPositions(0.55);       // geometry 55%, sphere 45% (square-ish)
-        analysisRight.setDividerPositions(0.4, 0.7);
-        phaseMaps.setDividerPositions(0.5);
-        phaseTraces.setDividerPositions(0.5);
+        deferDividers(centreShell, 0.45);  // editors 45%, bottom area 55%
+        deferDividers(bottomArea, 0.75);   // analysis 75%, timeline 25%
 
         rootBranch = root;
+        centreShellBranch = centreShell;
         documentLeaf = docLeaf;
 
         dockContainer.setCenter(rootBranch);
+        dockContainer.setBottom(dockBar); // auto-hides when empty
     }
 
     private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
@@ -664,13 +945,15 @@ public class WorkbenchController {
     /** Context menu for analysis tool window tabs. */
     private javafx.scene.control.ContextMenu buildToolWindowMenu(PaneId paneId) {
         var menu = new javafx.scene.control.ContextMenu();
+        var closeItem = new MenuItem("Close");
+        closeItem.setOnAction(e -> closePane(paneId));
         var floatItem = new MenuItem(isFloating(paneId) ? "Dock to Default" : "Float");
         floatItem.setOnAction(e -> {
             if (isFloating(paneId)) dockPane(paneId); else floatPane(paneId);
         });
         var dockItem = new MenuItem("Restore to Default Position");
         dockItem.setOnAction(e -> dockPane(paneId));
-        menu.getItems().addAll(floatItem, dockItem);
+        menu.getItems().addAll(closeItem, new SeparatorMenuItem(), floatItem, dockItem);
         return menu;
     }
 
@@ -696,12 +979,22 @@ public class WorkbenchController {
                 }
             }
         });
+        // (No need for DockableParentChanged listener — close/restore uses home leaves,
+        // and contextual hide/show uses dividers without mutating the tree.)
     }
 
     private Scene createDockingScene(Scene src, javafx.scene.layout.Region region, double w, double h) {
         var scene = new Scene(region, w, h);
         if (src != null) scene.getStylesheets().setAll(src.getStylesheets());
         return scene;
+    }
+
+    /**
+     * Set divider positions, deferring to after the scene is attached if needed.
+     */
+    private static void deferDividers(software.coley.bentofx.layout.container.DockContainerBranch branch, double... positions) {
+        branch.setDividerPositions(positions);
+        javafx.application.Platform.runLater(() -> branch.setDividerPositions(positions));
     }
 
     private PaneId paneIdOf(Dockable dockable) {

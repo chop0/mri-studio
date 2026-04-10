@@ -24,6 +24,14 @@ class SimConfigAndEigenfieldTest {
         return session.createSimConfig(name, SimConfigTemplate.LOW_FIELD_MRI, params);
     }
 
+    /** Helper: find the config associated with a sequence (via the sequence's activeSimConfigId). */
+    private static java.util.List<SimulationConfigDocument> configForSequence(ProjectRepository repo, ProjectNodeId seqId) {
+        var seq = (SequenceDocument) repo.node(seqId);
+        if (seq == null || seq.activeSimConfigId() == null) return java.util.List.of();
+        var config = repo.simConfig(seq.activeSimConfigId());
+        return config != null ? java.util.List.of(config) : java.util.List.of();
+    }
+
     // --- Eigenfield CRUD ---
 
     @Test
@@ -96,7 +104,7 @@ class SimConfigAndEigenfieldTest {
         var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
             List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 3.0, 0, ef.id())),
             List.of());
-        var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Old Name", null, config);
+        var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Old Name", config);
         repo.addSimConfig(doc);
 
         var renamed = repo.renameSimConfig(doc.id(), "New Name");
@@ -106,23 +114,19 @@ class SimConfigAndEigenfieldTest {
     }
 
     @Test
-    void simConfigsForSequenceFindsLinkedConfigs() {
+    void simConfigLookupById() {
         var repo = ProjectRepository.untitled();
-        var seqId = new ProjectNodeId("seq-1");
         var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", EigenfieldPreset.UNIFORM_BZ);
         repo.addEigenfield(ef);
-
         var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
             List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 3.0, 0, ef.id())),
             List.of());
-        var linked = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Linked", seqId, config);
-        var unlinked = new SimulationConfigDocument(new ProjectNodeId("sc-2"), "Unlinked", null, config);
-        repo.addSimConfig(linked);
-        repo.addSimConfig(unlinked);
+        var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Test", config);
+        repo.addSimConfig(doc);
 
-        var found = repo.simConfigsForSequence(seqId);
-        assertEquals(1, found.size());
-        assertEquals("Linked", found.getFirst().name());
+        assertNotNull(repo.simConfig(doc.id()));
+        assertEquals("Test", repo.simConfig(doc.id()).name());
+        assertNull(repo.simConfig(new ProjectNodeId("nonexistent")));
     }
 
     // --- Promotion creates sim config ---
@@ -150,12 +154,12 @@ class SimConfigAndEigenfieldTest {
         assertEquals(1, repo.sequenceIds().size());
         var seqId = repo.sequenceIds().getFirst();
 
-        // Should have a sim config linked to that sequence
-        var simConfigs = repo.simConfigsForSequence(seqId);
-        assertEquals(1, simConfigs.size(), "Promotion should auto-create a sim config");
-        var simConfig = simConfigs.getFirst();
+        // The sequence should have an active sim config ID
+        var seqDoc = (SequenceDocument) repo.node(seqId);
+        assertNotNull(seqDoc.activeSimConfigId(), "Promotion should set activeSimConfigId on the sequence");
+        var simConfig = repo.simConfig(seqDoc.activeSimConfigId());
+        assertNotNull(simConfig, "Promotion should auto-create a sim config");
         assertNotNull(simConfig.config());
-        assertEquals(seqId, simConfig.sequenceId());
 
         // Sim config should have 4 field definitions
         assertEquals(4, simConfig.config().fields().size());
@@ -190,7 +194,7 @@ class SimConfigAndEigenfieldTest {
 
         var repo = session.repository.get();
         var seqId = repo.sequenceIds().getFirst();
-        var simConfigs = repo.simConfigsForSequence(seqId);
+        var simConfigs = configForSequence(repo, seqId);
         assertEquals(1, simConfigs.size());
 
         var config = simConfigs.getFirst().config();
@@ -208,7 +212,7 @@ class SimConfigAndEigenfieldTest {
 
         assertNotNull(doc);
         assertEquals("Test Config", doc.name());
-        assertNull(doc.sequenceId());
+        assertNotNull(doc.config());
         assertTrue(repo.simConfigIds().contains(doc.id()));
 
         // Should have 4 fields
@@ -315,7 +319,7 @@ class SimConfigAndEigenfieldTest {
         var sequence = (SequenceDocument) repo.node(seqId);
 
         // The sim config should be loadable and produce a valid BlochData
-        var simConfigs = repo.simConfigsForSequence(seqId);
+        var simConfigs = configForSequence(repo, seqId);
         assertEquals(1, simConfigs.size());
         var simConfig = simConfigs.getFirst();
 
@@ -346,7 +350,7 @@ class SimConfigAndEigenfieldTest {
         var repo = session.repository.get();
         var seqId = repo.sequenceIds().getFirst();
         var sequence = (SequenceDocument) repo.node(seqId);
-        var simConfigs = repo.simConfigsForSequence(seqId);
+        var simConfigs = configForSequence(repo, seqId);
         var data = BlochDataFactory.build(simConfigs.getFirst().config(), sequence.segments(), repo);
 
         assertNotNull(data);
@@ -372,7 +376,7 @@ class SimConfigAndEigenfieldTest {
 
         var repo = session.repository.get();
         var seqId = repo.sequenceIds().getFirst();
-        var config = repo.simConfigsForSequence(seqId).getFirst().config();
+        var config = configForSequence(repo, seqId).getFirst().config();
 
         // Verify field structure: B0 (binary DC), GradX (linear DC), GradZ (linear DC), RF (linear non-DC)
         assertEquals(4, config.fields().size());
@@ -426,7 +430,7 @@ class SimConfigAndEigenfieldTest {
 
         var repo = session.repository.get();
         var seqId = repo.sequenceIds().getFirst();
-        assertTrue(repo.simConfigsForSequence(seqId).size() > 0);
+        assertTrue(configForSequence(repo, seqId).size() > 0);
 
         // The sim config is top-level, not a child of the sequence, so it persists
         // (this is correct — sim configs are independent top-level objects)
