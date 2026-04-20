@@ -518,8 +518,10 @@ public final class InspectorPane extends WorkbenchPane {
         lbl.setStyle("-fx-font-size: 10px;");
         lbl.setMinWidth(90);
 
-        String units = editSession != null ? editSession.unitsForChannel(channel) : "";
-        var converter = SiPrefixConverter.forUnits(units);
+        var ef = editSession != null ? editSession.eigenfieldForChannel(channel) : null;
+        String units = ef != null ? ef.units() : "";
+        double defaultMagnitude = ef != null ? ef.defaultMagnitude() : 1.0;
+        var converter = SiPrefixConverter.forPhysical(units, defaultMagnitude);
 
         var textField = new TextField(converter.format(value));
         textField.setPrefWidth(110);
@@ -561,75 +563,91 @@ public final class InspectorPane extends WorkbenchPane {
      * letters: {@code 15u} = 15×10⁻⁶, {@code 20m} = 20×10⁻³, etc. On blur the
      * field reformats to the canonical display (e.g. "15u" → "15 μT").
      */
+    /**
+     * Formats and parses an amplitude scalar as a physical value.
+     *
+     * <p>Given an eigenfield with units {@code U} and default magnitude
+     * {@code K}, a stored amplitude {@code a} is displayed as {@code a · K}
+     * with an auto-selected SI prefix + {@code U}. Parsing inverts that:
+     * "15 mT" with {@code K = 1, U = "T"} decodes to amplitude 0.015.
+     */
     private static final class SiPrefixConverter {
-        private final String displayUnit;  // e.g. "μT", "mT/m", ""
-        private final double displayScale; // e.g. 1e-6 for μT
+        private final String baseUnits;          // e.g. "T" (no SI prefix)
+        private final double defaultMagnitude;   // eigenfield defaultMagnitude
 
-        private SiPrefixConverter(String displayUnit, double displayScale) {
-            this.displayUnit = displayUnit;
-            this.displayScale = displayScale;
+        private SiPrefixConverter(String baseUnits, double defaultMagnitude) {
+            this.baseUnits = baseUnits;
+            this.defaultMagnitude = defaultMagnitude;
+        }
+
+        /** Dimensionless converter — no prefix, no suffix. */
+        static SiPrefixConverter dimensionless() {
+            return new SiPrefixConverter("", 1);
         }
 
         /**
-         * Build a converter for a channel whose raw values are in the given
-         * base units. The converter's display picks an auto SI prefix
-         * (μ / m / k / M) by magnitude; the unit suffix is the supplied string.
-         * Empty {@code units} means dimensionless (e.g. RF gate).
+         * Build a converter that renders amplitudes as physical peak values
+         * using the given base units and eigenfield calibration.
          */
-        static SiPrefixConverter forUnits(String units) {
-            if (units == null || units.isEmpty()) return new SiPrefixConverter("", 1);
-            // Use a scale of 1 (base) — prefix handling happens at display time via SI conversion.
-            return new SiPrefixConverter(units, 1);
+        static SiPrefixConverter forPhysical(String units, double defaultMagnitude) {
+            if (units == null || units.isEmpty()) return dimensionless();
+            return new SiPrefixConverter(units, defaultMagnitude <= 0 ? 1 : defaultMagnitude);
         }
 
-        /** Format a raw SI value for display — picks an SI prefix dynamically. */
-        String format(double rawValue) {
-            if (Double.isNaN(rawValue)) return "";
-            if (displayUnit.isEmpty()) return formatNumber(rawValue);
-            double abs = Math.abs(rawValue);
-            if (abs == 0) return "0 " + displayUnit;
+        /** Format an amplitude as its physical peak value with auto SI prefix. */
+        String format(double amplitude) {
+            if (Double.isNaN(amplitude)) return "";
+            if (baseUnits.isEmpty()) return formatNumber(amplitude);
+            double physical = amplitude * defaultMagnitude;
+            double abs = Math.abs(physical);
+            if (abs == 0) return "0 " + baseUnits;
             String prefix; double scale;
             if      (abs >= 1e9)  { prefix = "G"; scale = 1e9; }
             else if (abs >= 1e6)  { prefix = "M"; scale = 1e6; }
             else if (abs >= 1e3)  { prefix = "k"; scale = 1e3; }
             else if (abs >= 1)    { prefix = "";  scale = 1;   }
             else if (abs >= 1e-3) { prefix = "m"; scale = 1e-3; }
-            else if (abs >= 1e-6) { prefix = "μ"; scale = 1e-6; }
+            else if (abs >= 1e-6) { prefix = "\u03BC"; scale = 1e-6; }
             else if (abs >= 1e-9) { prefix = "n"; scale = 1e-9; }
             else                  { prefix = "p"; scale = 1e-12; }
-            return formatNumber(rawValue / scale) + " " + prefix + displayUnit;
+            return formatNumber(physical / scale) + " " + prefix + baseUnits;
         }
 
-        /** Parse a user-entered string back to raw SI value. */
+        /**
+         * Parse a user-entered string (e.g. "15 mT", "15u", "15e-6") back to a
+         * raw amplitude. The physical value is divided by
+         * {@code defaultMagnitude} to give the stored amplitude. A bare number
+         * is interpreted as already being in base units.
+         */
         double parse(String text) {
             if (text == null || text.isBlank()) return Double.NaN;
             text = text.strip();
-
-            // Strip the display unit suffix if present
-            if (!displayUnit.isEmpty() && text.endsWith(displayUnit)) {
-                text = text.substring(0, text.length() - displayUnit.length()).strip();
+            if (baseUnits.isEmpty()) {
+                try { return Double.parseDouble(text); }
+                catch (NumberFormatException e) { return Double.NaN; }
             }
 
-            // Check for an SI prefix letter at the end
+            // Strip the base-unit suffix if present (e.g. "15 mT" → "15 m").
+            if (text.endsWith(baseUnits)) {
+                text = text.substring(0, text.length() - baseUnits.length()).strip();
+            }
+
+            double physical;
             if (!text.isEmpty()) {
                 char last = text.charAt(text.length() - 1);
                 Double prefixScale = prefixScale(last);
                 if (prefixScale != null) {
                     String numPart = text.substring(0, text.length() - 1).strip();
-                    try {
-                        return Double.parseDouble(numPart) * prefixScale;
-                    } catch (NumberFormatException e) {
-                        return Double.NaN;
-                    }
+                    try { physical = Double.parseDouble(numPart) * prefixScale; }
+                    catch (NumberFormatException e) { return Double.NaN; }
+                } else {
+                    try { physical = Double.parseDouble(text); }
+                    catch (NumberFormatException e) { return Double.NaN; }
                 }
-            }
-
-            // Bare number → interpreted in display units
-            try {
-                return Double.parseDouble(text) * displayScale;
-            } catch (NumberFormatException e) {
+            } else {
                 return Double.NaN;
             }
+            return defaultMagnitude == 0 ? physical : physical / defaultMagnitude;
         }
 
         private static String formatNumber(double v) {

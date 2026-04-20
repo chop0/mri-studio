@@ -1049,12 +1049,15 @@ public class ClipTrackCanvas extends ResizableCanvas {
     }
 
     /**
-     * Format a value for axis display, using the eigenfield's declared units
-     * and an appropriate SI prefix.
+     * Format an amplitude for axis display, translating through the
+     * eigenfield's defaultMagnitude / units into a human-readable peak.
      */
-    private String formatAxisValue(double value, SequenceChannel channel) {
-        if (channel.isRfGate()) return String.format("%.1f", value);
-        return formatWithUnits(value, editSession.unitsForChannel(channel));
+    private String formatAxisValue(double amplitude, SequenceChannel channel) {
+        if (channel.isRfGate()) return String.format("%.1f", amplitude);
+        var ef = editSession.eigenfieldForChannel(channel);
+        double physical = ef != null ? amplitude * ef.defaultMagnitude() : amplitude;
+        String units = ef != null ? ef.units() : "";
+        return formatWithUnits(physical, units);
     }
 
     /** Pick an SI prefix (μ, m, k, M) that keeps the numeric part in 0.1…1000. */

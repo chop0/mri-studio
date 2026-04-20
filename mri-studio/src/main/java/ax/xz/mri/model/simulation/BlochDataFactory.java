@@ -111,12 +111,28 @@ public final class BlochDataFactory {
         double dt = config.dtSeconds() > 0 ? config.dtSeconds() : representativeDt(segments);
 
         for (var def : config.fields()) {
-            var script = compileScript(def, repository);
+            var eigen = resolveEigenfield(def, repository);
+            EigenfieldScript script = eigen != null ? compile(eigen.script()) : (x, y, z) -> Vec3.ZERO;
+            double defaultMagnitude = eigen != null ? eigen.defaultMagnitude() : 1.0;
 
             double[][] ex = new double[nR][nZ];
             double[][] ey = new double[nR][nZ];
             double[][] ez = new double[nR][nZ];
             sampleEigenfield(script, field.rMm, field.zMm, ex, ey, ez);
+
+            // Bake the eigenfield's defaultMagnitude into the sampled vectors so the
+            // downstream math (amplitude × sample) yields the physical field directly
+            // in the eigenfield's declared units. Unit-normalised scripts have
+            // defaultMagnitude = 1 and this is a no-op.
+            if (defaultMagnitude != 1.0) {
+                for (int ri = 0; ri < nR; ri++) {
+                    for (int zi = 0; zi < nZ; zi++) {
+                        ex[ri][zi] *= defaultMagnitude;
+                        ey[ri][zi] *= defaultMagnitude;
+                        ez[ri][zi] *= defaultMagnitude;
+                    }
+                }
+            }
 
             // The rotating-frame transformation only affects the transverse
             // component of the eigenfield. Longitudinal components flow through
@@ -229,16 +245,16 @@ public final class BlochDataFactory {
         return count == 0 ? 1e-6 : sum / count;
     }
 
-    private static EigenfieldScript compileScript(FieldDefinition def, ProjectRepository repository) {
-        if (repository == null) return (x, y, z) -> new Vec3(0, 0, 0);
-        var node = repository.node(def.eigenfieldId());
-        if (!(node instanceof EigenfieldDocument eigen)) {
-            return (x, y, z) -> new Vec3(0, 0, 0);
-        }
+    private static EigenfieldDocument resolveEigenfield(FieldDefinition def, ProjectRepository repository) {
+        if (repository == null || def.eigenfieldId() == null) return null;
+        return repository.node(def.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
+    }
+
+    private static EigenfieldScript compile(String source) {
         try {
-            return EigenfieldScriptEngine.compile(eigen.script());
+            return EigenfieldScriptEngine.compile(source);
         } catch (RuntimeException ex) {
-            return (x, y, z) -> new Vec3(0, 0, 0);
+            return (x, y, z) -> Vec3.ZERO;
         }
     }
 

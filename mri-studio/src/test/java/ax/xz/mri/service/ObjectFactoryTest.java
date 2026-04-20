@@ -91,7 +91,7 @@ class ObjectFactoryTest {
     @Test
     void findOrCreateEigenfieldCreatesNewIfNoneExist() {
         var repo = ProjectRepository.untitled();
-        var ef = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T");
+        var ef = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T", 1.0);
         assertEquals("Test", ef.name());
         assertEquals(UNIFORM_BZ, ef.script());
         assertTrue(repo.eigenfieldIds().contains(ef.id()));
@@ -100,8 +100,8 @@ class ObjectFactoryTest {
     @Test
     void findOrCreateEigenfieldReusesMatchingExisting() {
         var repo = ProjectRepository.untitled();
-        var ef1 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T");
-        var ef2 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T");
+        var ef1 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T", 1.0);
+        var ef2 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T", 1.0);
         assertEquals(ef1.id(), ef2.id());
         assertEquals(1, repo.eigenfieldIds().size());
     }
@@ -109,8 +109,8 @@ class ObjectFactoryTest {
     @Test
     void findOrCreateEigenfieldDoesNotReuseIfScriptDiffers() {
         var repo = ProjectRepository.untitled();
-        var ef1 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T");
-        var ef2 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", GRADIENT_X, "T/m");
+        var ef1 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", UNIFORM_BZ, "T", 1.0);
+        var ef2 = ObjectFactory.findOrCreateEigenfield(repo, "Test", "desc", GRADIENT_X, "T/m", 1.0);
         assertNotEquals(ef1.id(), ef2.id());
         assertEquals(2, repo.eigenfieldIds().size());
     }

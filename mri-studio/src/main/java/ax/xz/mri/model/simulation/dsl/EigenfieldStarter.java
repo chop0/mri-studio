@@ -9,14 +9,21 @@ package ax.xz.mri.model.simulation.dsl;
  * new {@link ax.xz.mri.project.EigenfieldDocument}; the starter's identity is
  * not retained anywhere in the data model.
  *
- * <p>{@code units} is the default units string for the amplitude scalar of
- * fields created from this starter (e.g. {@code "T"}, {@code "T/m"}).
+ * <p>{@code units} and {@code defaultMagnitude} initialise the eigenfield's
+ * physical-calibration metadata (see
+ * {@link ax.xz.mri.project.EigenfieldDocument}).
  */
 public record EigenfieldStarter(
     String id,
     String name,
     String description,
     String source,
-    String units
+    String units,
+    double defaultMagnitude
 ) {
+    public EigenfieldStarter {
+        if (units == null) throw new IllegalArgumentException("EigenfieldStarter.units must not be null");
+        if (!(defaultMagnitude > 0))
+            throw new IllegalArgumentException("EigenfieldStarter.defaultMagnitude must be positive, got " + defaultMagnitude);
+    }
 }

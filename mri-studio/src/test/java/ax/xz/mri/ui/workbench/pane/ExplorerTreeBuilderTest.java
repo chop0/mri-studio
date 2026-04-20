@@ -53,9 +53,9 @@ class ExplorerTreeBuilderTest {
     void treeShowsEigenfieldsGroup() {
         var repository = ProjectRepository.untitled();
         repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", "return Vec3.of(0, 0, 1);", "T"));
+            new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", "return Vec3.of(0, 0, 1);", "T", 1.0));
         repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-2"), "RF Loop", "RF coil", "return Vec3.of(1, 0, 0);", "T"));
+            new ProjectNodeId("ef-2"), "RF Loop", "RF coil", "return Vec3.of(1, 0, 0);", "T", 1.0));
 
         var root = ExplorerTreeBuilder.build(repository);
 

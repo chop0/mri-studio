@@ -47,11 +47,7 @@ public final class ClipEvaluator {
 
         // Two-sided bandwidth in Hz — the sinc is defined over the media extent.
         // Trimming the clip (changing visible region) doesn't change the sinc shape.
-        double bandwidthHz = clip.param("bandwidthHz", 0);
-        if (bandwidthHz <= 0) {
-            double legacyBW = clip.param("bandwidth", 3.0);
-            bandwidthHz = legacyBW / (clip.mediaDuration() * 1e-6);
-        }
+        double bandwidthHz = clip.param("bandwidthHz", 4000.0);
 
         // centerOffset in μs — offset from media centre
         double centerOffset = clip.param("centerOffset", 0);

@@ -848,9 +848,11 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         var eigenCol = new TableColumn<FieldDefinition, String>("Eigenfield");
         eigenCol.setCellValueFactory(cd -> new SimpleStringProperty(eigenfieldNameFor(cd.getValue().eigenfieldId())));
         var minCol = new TableColumn<FieldDefinition, String>("Min amp");
-        minCol.setCellValueFactory(cd -> new SimpleStringProperty(formatAmp(cd.getValue().minAmplitude())));
+        minCol.setCellValueFactory(cd -> new SimpleStringProperty(
+            formatAmpWithUnits(cd.getValue().minAmplitude(), eigenfieldFor(cd.getValue()))));
         var maxCol = new TableColumn<FieldDefinition, String>("Max amp");
-        maxCol.setCellValueFactory(cd -> new SimpleStringProperty(formatAmp(cd.getValue().maxAmplitude())));
+        maxCol.setCellValueFactory(cd -> new SimpleStringProperty(
+            formatAmpWithUnits(cd.getValue().maxAmplitude(), eigenfieldFor(cd.getValue()))));
         var carrierCol = new TableColumn<FieldDefinition, String>("Carrier");
         carrierCol.setCellValueFactory(cd -> new SimpleStringProperty(
             cd.getValue().kind() == AmplitudeKind.QUADRATURE ? formatFrequency(cd.getValue().carrierHz()) : "\u2014"));
@@ -926,30 +928,55 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         // Eigenfield selector
         fieldsDetail.getChildren().add(buildEigenfieldRow(field));
 
-        // Amplitude bounds
+        // Amplitude bounds — the unit/peak label is driven by the eigenfield's
+        // defaultMagnitude + units, so the user sees "= 15.4 mT" next to "0.0154".
+        var eigen = eigenfieldFor(field);
+        String ampUnits = eigen != null ? eigen.units() : "";
+        double ampScale = eigen != null ? eigen.defaultMagnitude() : 1.0;
         double step = Math.max(Math.abs(field.maxAmplitude() - field.minAmplitude()) / 20.0, 1e-3);
 
         var minNum = numberField(-1e9, 1e9, step);
         minNum.setValue(field.minAmplitude());
+        var minPeak = new Label();
+        minPeak.getStyleClass().add("cfg-row-hint");
+        minPeak.setText(peakLabel(field.minAmplitude(), ampScale, ampUnits));
         minNum.valueProperty().addListener((obs, o, n) -> {
             int idx = store.fields.indexOf(field);
             if (idx < 0) return;
             var current = store.fields.get(idx);
             if (current.minAmplitude() != n.doubleValue())
                 mutateField(idx, current.withMinAmplitude(n.doubleValue()));
+            minPeak.setText(peakLabel(n.doubleValue(), ampScale, ampUnits));
         });
-        fieldsDetail.getChildren().add(rowControl("Min amplitude", minNum, null));
+        var minRow = rowControl("Min amplitude", minNum, ampUnits);
+        minRow.getChildren().add(minPeak);
+        fieldsDetail.getChildren().add(minRow);
 
         var maxNum = numberField(-1e9, 1e9, step);
         maxNum.setValue(field.maxAmplitude());
+        var maxPeak = new Label();
+        maxPeak.getStyleClass().add("cfg-row-hint");
+        maxPeak.setText(peakLabel(field.maxAmplitude(), ampScale, ampUnits));
         maxNum.valueProperty().addListener((obs, o, n) -> {
             int idx = store.fields.indexOf(field);
             if (idx < 0) return;
             var current = store.fields.get(idx);
             if (current.maxAmplitude() != n.doubleValue())
                 mutateField(idx, current.withMaxAmplitude(n.doubleValue()));
+            maxPeak.setText(peakLabel(n.doubleValue(), ampScale, ampUnits));
         });
-        fieldsDetail.getChildren().add(rowControl("Max amplitude", maxNum, null));
+        var maxRow = rowControl("Max amplitude", maxNum, ampUnits);
+        maxRow.getChildren().add(maxPeak);
+        fieldsDetail.getChildren().add(maxRow);
+
+        // Calibration hint: show the eigenfield's default magnitude × units.
+        if (eigen != null && !ampUnits.isEmpty()) {
+            var calib = new Label(String.format(
+                "Amplitude 1 \u2192 %s peak (eigenfield default magnitude \u00D7 units)",
+                formatSIValue(ampScale, ampUnits)));
+            calib.getStyleClass().add("cfg-row-hint");
+            fieldsDetail.getChildren().add(calib);
+        }
 
         if (field.kind() == AmplitudeKind.QUADRATURE) {
             var carrier = numberField(0, 1e10, 1000);
@@ -1026,6 +1053,49 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         var comboRow = new HBox(6, combo, openButton, newButton);
         comboRow.setAlignment(Pos.CENTER_LEFT);
         return rowControl("Eigenfield", comboRow, null);
+    }
+
+    /** Look up the eigenfield document for a given field, or null. */
+    private ax.xz.mri.project.EigenfieldDocument eigenfieldFor(FieldDefinition field) {
+        if (field == null || field.eigenfieldId() == null) return null;
+        var repo = paneContext.session().project.repository.get();
+        return repo.node(field.eigenfieldId()) instanceof ax.xz.mri.project.EigenfieldDocument ef ? ef : null;
+    }
+
+    /** "= 15.4 mT" — amplitude × eigenfield.defaultMagnitude, with auto SI prefix. */
+    private static String peakLabel(double amplitude, double scale, String units) {
+        if (units.isEmpty()) return "= " + formatSIValue(amplitude * scale, "");
+        return "= " + formatSIValue(amplitude * scale, units);
+    }
+
+    /** Format a physical value with an auto SI prefix and appended units. */
+    private static String formatSIValue(double value, String units) {
+        double abs = Math.abs(value);
+        if (abs == 0) return units.isEmpty() ? "0" : "0 " + units;
+        String prefix;
+        double scale;
+        if      (abs >= 1e9)  { prefix = "G";  scale = 1e9; }
+        else if (abs >= 1e6)  { prefix = "M";  scale = 1e6; }
+        else if (abs >= 1e3)  { prefix = "k";  scale = 1e3; }
+        else if (abs >= 1)    { prefix = "";   scale = 1;   }
+        else if (abs >= 1e-3) { prefix = "m";  scale = 1e-3; }
+        else if (abs >= 1e-6) { prefix = "\u03BC"; scale = 1e-6; }
+        else if (abs >= 1e-9) { prefix = "n";  scale = 1e-9; }
+        else                  { prefix = "p";  scale = 1e-12; }
+        double display = value / scale;
+        String num;
+        if (Math.abs(display) >= 100) num = String.format("%.1f", display);
+        else if (Math.abs(display) >= 10) num = String.format("%.2f", display);
+        else num = String.format("%.3f", display);
+        // Trim trailing zeros after decimal
+        if (num.contains(".")) num = num.replaceAll("0+$", "").replaceAll("\\.$", "");
+        return units.isEmpty() ? num : num + " " + prefix + units;
+    }
+
+    /** Table-cell amplitude formatter — peak physical value with SI prefix, or the raw number if no eigenfield. */
+    private static String formatAmpWithUnits(double amplitude, ax.xz.mri.project.EigenfieldDocument ef) {
+        if (ef == null) return formatAmp(amplitude);
+        return formatSIValue(amplitude * ef.defaultMagnitude(), ef.units());
     }
 
     private String eigenfieldNameFor(ProjectNodeId id) {

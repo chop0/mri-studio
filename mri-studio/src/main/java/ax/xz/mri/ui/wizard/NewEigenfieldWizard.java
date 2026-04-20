@@ -39,7 +39,8 @@ public final class NewEigenfieldWizard {
 					nameStep.getValue(),
 					starter.description(),
 					starter.source(),
-					starter.units());
+					starter.units(),
+					starter.defaultMagnitude());
 			})
 			.build(owner)
 			.showAndWait();

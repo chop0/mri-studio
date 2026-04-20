@@ -23,7 +23,7 @@ public final class EigenfieldStarterLibrary {
             // (x, y, z) are in metres. Amplitude scales the return value.
             return Vec3.ZERO;
             """,
-            "T"),
+            "T", 1.0),
 
         new EigenfieldStarter(
             "uniform-bz",
@@ -33,7 +33,7 @@ public final class EigenfieldStarterLibrary {
             // Perfectly homogeneous z-directed field.
             return Vec3.of(0, 0, 1);
             """,
-            "T"),
+            "T", 1.0),
 
         new EigenfieldStarter(
             "helmholtz-b0",
@@ -57,7 +57,7 @@ public final class EigenfieldStarterLibrary {
             double peak = 1.0 / pow(1 + (d / R) * (d / R), 1.5);
             return Vec3.of(0, 0, (bz0 + curvature) / peak);
             """,
-            "T"),
+            "T", 1.0),
 
         new EigenfieldStarter(
             "gradient-x",
@@ -67,7 +67,7 @@ public final class EigenfieldStarterLibrary {
             // Linear x-gradient of Bz.
             return Vec3.of(0, 0, x);
             """,
-            "T/m"),
+            "T/m", 1.0),
 
         new EigenfieldStarter(
             "gradient-z",
@@ -77,7 +77,7 @@ public final class EigenfieldStarterLibrary {
             // Linear z-gradient of Bz.
             return Vec3.of(0, 0, z);
             """,
-            "T/m"),
+            "T/m", 1.0),
 
         new EigenfieldStarter(
             "uniform-b-perp",
@@ -88,7 +88,7 @@ public final class EigenfieldStarterLibrary {
             // Pair with a quadrature (QUADRATURE) amplitude at the Larmor carrier.
             return Vec3.of(1, 0, 0);
             """,
-            "T")
+            "T", 1.0)
     );
 
     public static List<EigenfieldStarter> all() {

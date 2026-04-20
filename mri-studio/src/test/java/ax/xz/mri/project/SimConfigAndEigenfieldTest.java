@@ -37,7 +37,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void addAndRetrieveEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
 
         assertTrue(repo.eigenfieldIds().contains(ef.id()));
@@ -47,7 +47,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void removeEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
         repo.removeEigenfield(ef.id());
 
@@ -58,7 +58,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
         var renamed = repo.renameEigenfield(ef.id(), "Main Magnet");
 
@@ -69,7 +69,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void updateEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
 
         var updated = ef.withScript("return Vec3.of(0, 0, 1 + 0.01 * z);");
@@ -82,7 +82,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void addEigenfieldIsIdempotent() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
         repo.addEigenfield(ef);
 
@@ -94,7 +94,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameSimConfig() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
         var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, 1e-6,
             List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)));
@@ -110,7 +110,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void simConfigLookupById() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
         var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, 1e-6,
             List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)));
@@ -198,7 +198,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void blochDataFactoryProducesValidDataFromFieldConfig() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-b0"), "B0", "d", UNIFORM_BZ_SRC, "T");
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-b0"), "B0", "d", UNIFORM_BZ_SRC, "T", 1.0);
         repo.addEigenfield(ef);
 
         var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6,

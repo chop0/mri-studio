@@ -55,7 +55,7 @@ public final class ObjectFactory {
 	 * Prevents duplication when multiple configs reference the same coil geometry.
 	 */
 	public static EigenfieldDocument findOrCreateEigenfield(
-			ProjectRepository repo, String name, String description, String script, String units) {
+			ProjectRepository repo, String name, String description, String script, String units, double defaultMagnitude) {
 		for (var id : repo.eigenfieldIds()) {
 			var node = repo.node(id);
 			if (node instanceof EigenfieldDocument ef && ef.name().equals(name) && ef.script().equals(script)) {
@@ -63,7 +63,7 @@ public final class ObjectFactory {
 			}
 		}
 		var eigen = new EigenfieldDocument(
-			new ProjectNodeId("ef-" + UUID.randomUUID()), name, description, script, units);
+			new ProjectNodeId("ef-" + UUID.randomUUID()), name, description, script, units, defaultMagnitude);
 		repo.addEigenfield(eigen);
 		return eigen;
 	}
@@ -102,10 +102,10 @@ public final class ObjectFactory {
 		var gzStarter = EigenfieldStarterLibrary.byId("gradient-z").orElseThrow();
 		var rfStarter = EigenfieldStarterLibrary.byId("uniform-b-perp").orElseThrow();
 
-		var b0Eigen = findOrCreateEigenfield(repo, "B0 Helmholtz", b0Starter.description(), b0Starter.source(), b0Starter.units());
-		var gxEigen = findOrCreateEigenfield(repo, "Gradient X (Golay)", gxStarter.description(), gxStarter.source(), gxStarter.units());
-		var gzEigen = findOrCreateEigenfield(repo, "Gradient Z (Maxwell)", gzStarter.description(), gzStarter.source(), gzStarter.units());
-		var rfEigen = findOrCreateEigenfield(repo, "RF Loop", rfStarter.description(), rfStarter.source(), rfStarter.units());
+		var b0Eigen = findOrCreateEigenfield(repo, "B0 Helmholtz", b0Starter.description(), b0Starter.source(), b0Starter.units(), b0Starter.defaultMagnitude());
+		var gxEigen = findOrCreateEigenfield(repo, "Gradient X (Golay)", gxStarter.description(), gxStarter.source(), gxStarter.units(), gxStarter.defaultMagnitude());
+		var gzEigen = findOrCreateEigenfield(repo, "Gradient Z (Maxwell)", gzStarter.description(), gzStarter.source(), gzStarter.units(), gzStarter.defaultMagnitude());
+		var rfEigen = findOrCreateEigenfield(repo, "RF Loop", rfStarter.description(), rfStarter.source(), rfStarter.units(), rfStarter.defaultMagnitude());
 
 		double larmorHz = gamma * b0 / (2 * Math.PI);
 

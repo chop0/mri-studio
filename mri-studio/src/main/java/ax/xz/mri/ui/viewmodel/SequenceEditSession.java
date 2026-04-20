@@ -157,14 +157,18 @@ public final class SequenceEditSession {
      * Returns an empty string for RF-gate / missing config / missing repo.
      */
     public String unitsForChannel(SequenceChannel channel) {
-        if (channel == null || channel.isRfGate()) return "";
+        var ef = eigenfieldForChannel(channel);
+        return ef != null ? ef.units() : "";
+    }
+
+    /** Resolve the {@link ax.xz.mri.project.EigenfieldDocument} behind a channel, or null. */
+    public ax.xz.mri.project.EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
+        if (channel == null || channel.isRfGate()) return null;
         var field = fieldForChannel(channel);
-        if (field == null || field.eigenfieldId() == null) return "";
+        if (field == null || field.eigenfieldId() == null) return null;
         var repo = repositorySupplier.get();
-        if (repo == null) return "";
-        var node = repo.node(field.eigenfieldId());
-        if (node instanceof ax.xz.mri.project.EigenfieldDocument ef) return ef.units();
-        return "";
+        if (repo == null) return null;
+        return repo.node(field.eigenfieldId()) instanceof ax.xz.mri.project.EigenfieldDocument ef ? ef : null;
     }
 
     /**

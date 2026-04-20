@@ -484,9 +484,9 @@ public final class ProjectSessionViewModel {
     }
 
     /** Create a standalone eigenfield document with the given script as the starter. */
-    public EigenfieldDocument createEigenfield(String name, String description, String script, String units) {
+    public EigenfieldDocument createEigenfield(String name, String description, String script, String units, double defaultMagnitude) {
         var repo = repository.get();
-        var ef = ax.xz.mri.service.ObjectFactory.findOrCreateEigenfield(repo, name, description, script, units);
+        var ef = ax.xz.mri.service.ObjectFactory.findOrCreateEigenfield(repo, name, description, script, units, defaultMagnitude);
         explorer.refresh();
         saveProjectQuietly();
         return ef;

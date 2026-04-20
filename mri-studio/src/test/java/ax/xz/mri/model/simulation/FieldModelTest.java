@@ -84,13 +84,13 @@ class FieldModelTest {
 
     @Test
     void eigenfieldDocumentKindIsEigenfield() {
-        var ef = new EigenfieldDocument(EF_B0, "B0", "desc", "return Vec3.of(0,0,1);", "T");
+        var ef = new EigenfieldDocument(EF_B0, "B0", "desc", "return Vec3.of(0,0,1);", "T", 1.0);
         assertEquals(ax.xz.mri.project.ProjectNodeKind.EIGENFIELD, ef.kind());
     }
 
     @Test
     void eigenfieldWithMethodsProduceNewInstances() {
-        var ef = new EigenfieldDocument(EF_B0, "B0", "desc", "return Vec3.of(0,0,1);", "T");
+        var ef = new EigenfieldDocument(EF_B0, "B0", "desc", "return Vec3.of(0,0,1);", "T", 1.0);
         assertEquals("Main", ef.withName("Main").name());
         assertEquals("new", ef.withDescription("new").description());
         assertEquals("return Vec3.ZERO;", ef.withScript("return Vec3.ZERO;").script());
