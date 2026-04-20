@@ -5,9 +5,10 @@ import ax.xz.mri.model.simulation.SimulationConfig;
 /**
  * Project-owned editable simulation configuration.
  *
- * <p>Defines the physical environment (B0, T1, T2, field geometry, isochromats)
- * for live simulation preview. The association between a sequence and its config
- * is stored on the {@link SequenceDocument#activeSimConfigId()}, NOT here.
+ * <p>Defines the physical environment (B0, T1, T2, field geometry, field sources,
+ * and simulation time step) for live simulation preview. The association between
+ * a sequence and its config is stored on the {@link SequenceDocument#activeSimConfigId()},
+ * NOT here.
  */
 public record SimulationConfigDocument(
     ProjectNodeId id,

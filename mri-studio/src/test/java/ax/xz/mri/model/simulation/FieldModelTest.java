@@ -8,12 +8,14 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Tests for the rewritten field model: {@link FieldDefinition}, {@link SimulationConfig}, {@link EigenfieldDocument}. */
+/** Tests for the field model: {@link FieldDefinition}, {@link SimulationConfig}, {@link EigenfieldDocument}. */
 class FieldModelTest {
 
     private static final ProjectNodeId EF_B0 = new ProjectNodeId("ef-b0");
     private static final ProjectNodeId EF_GX = new ProjectNodeId("ef-gx");
     private static final ProjectNodeId EF_RF = new ProjectNodeId("ef-rf");
+
+    private static final double DT = 1e-6;
 
     // --- FieldDefinition / AmplitudeKind ---
 
@@ -32,7 +34,6 @@ class FieldModelTest {
         assertEquals(1.5, original.withMaxAmplitude(1.5).maxAmplitude());
         assertEquals(42e6, original.withCarrierHz(42e6).carrierHz());
         assertEquals(EF_RF, original.withEigenfieldId(EF_RF).eigenfieldId());
-        // Originals unchanged
         assertEquals("B0", original.name());
         assertEquals(AmplitudeKind.STATIC, original.kind());
     }
@@ -48,27 +49,24 @@ class FieldModelTest {
 
     @Test
     void totalChannelCountSumsOverFields() {
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5,
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, DT,
             List.of(
                 new FieldDefinition("B0", EF_B0, AmplitudeKind.STATIC, 0, 0, 1.5),
                 new FieldDefinition("Gx", EF_GX, AmplitudeKind.REAL, 0, -1, 1),
                 new FieldDefinition("RF", EF_RF, AmplitudeKind.QUADRATURE, 1e6, 0, 200e-6)
-            ),
-            List.of());
-        assertEquals(3, config.totalChannelCount());  // STATIC=0 + REAL=1 + QUADRATURE=2
+            ));
+        assertEquals(3, config.totalChannelCount());
     }
 
     @Test
     void omegaSimIsGammaTimesReferenceB0() {
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5,
-            List.of(), List.of());
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, DT, List.of());
         assertEquals(267.522e6 * 1.5, config.omegaSim(), 1e-3);
     }
 
     @Test
     void withReferenceB0TeslaReturnsUpdatedCopy() {
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5,
-            List.of(), List.of());
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, DT, List.of());
         assertEquals(3.0, config.withReferenceB0Tesla(3.0).referenceB0Tesla());
         assertEquals(1.5, config.referenceB0Tesla());
     }
@@ -77,7 +75,7 @@ class FieldModelTest {
     void withFieldsProducesImmutableCopy() {
         var fields = new java.util.ArrayList<>(List.of(
             new FieldDefinition("B0", EF_B0, AmplitudeKind.STATIC, 0, 0, 3.0)));
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, fields, List.of());
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, DT, fields);
         fields.add(new FieldDefinition("Extra", EF_GX, AmplitudeKind.REAL, 0, -1, 1));
         assertEquals(1, config.fields().size());
     }
@@ -97,5 +95,44 @@ class FieldModelTest {
         assertEquals("new", ef.withDescription("new").description());
         assertEquals("return Vec3.ZERO;", ef.withScript("return Vec3.ZERO;").script());
         assertEquals("B0", ef.name());
+    }
+
+    // --- dt validation ---
+
+    @Test
+    void zeroOrNegativeDtRejected() {
+        assertThrows(IllegalArgumentException.class, () ->
+            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 0.0, List.of()));
+        assertThrows(IllegalArgumentException.class, () ->
+            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, -1e-6, List.of()));
+        assertThrows(IllegalArgumentException.class, () ->
+            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, Double.NaN, List.of()));
+    }
+
+    @Test
+    void withDtSecondsCopies() {
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, DT, List.of());
+        var updated = config.withDtSeconds(5e-7);
+        assertEquals(5e-7, updated.dtSeconds(), 0);
+        assertEquals(DT, config.dtSeconds(), 0);
+        assertEquals(1000, updated.t1Ms(), 0);
+        assertEquals(1.5, updated.referenceB0Tesla(), 0);
+    }
+
+    @Test
+    void larmorAndNyquistDerivations() {
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6, List.of());
+        assertEquals(267.522e6 * 1.5 / (2 * Math.PI), config.larmorHz(), 1e-3);
+        assertEquals(500_000, config.nyquistHz(), 1e-6);
+    }
+
+    @Test
+    void jsonRoundtripPreservesDt() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var original = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 2.5e-6, List.of());
+        String json = mapper.writeValueAsString(original);
+        var parsed = mapper.readValue(json, SimulationConfig.class);
+        assertEquals(2.5e-6, parsed.dtSeconds(), 0);
+        assertEquals(1.5, parsed.referenceB0Tesla(), 0);
     }
 }

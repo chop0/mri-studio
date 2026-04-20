@@ -49,3 +49,45 @@ tasks.register<JavaExec>("runOptimiser") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("ax.xz.mri.optimisation.cli.OptimiserCliMain")
 }
+
+// Package the modular JavaFX app as a proper native macOS .app bundle via jpackage.
+// jpackage produces a native launcher (not a shell script) so the process registers
+// with macOS Launch Services under this bundle identifier.
+tasks.register<Exec>("packageApp") {
+    group = "distribution"
+    description = "Creates a native .app bundle via jpackage."
+    dependsOn("installDist")
+
+    val installDir = layout.buildDirectory.dir("install/mri-studio/lib").get().asFile
+    val outDir = layout.buildDirectory.dir("jpackage").get().asFile
+
+    doFirst {
+        outDir.deleteRecursively()
+        outDir.mkdirs()
+    }
+
+    // Use the JDK the application is compiled against (24), not Gradle's own JDK.
+    val launcher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(24)
+    }
+    val jdkRoot = launcher.map { it.metadata.installationPath.asFile.absolutePath }
+    val jpackageBin = jdkRoot.map { "$it/bin/jpackage" }
+
+    // Bypass jlink entirely — it can't handle automatic modules like commons-compiler.
+    // Use the full JDK as the runtime image.
+    commandLine(
+        jpackageBin.get(),
+        "--type", "app-image",
+        "--name", "MriStudio",
+        "--app-version", "1.0.0",
+        "--vendor", "ax.xz.mri",
+        "--runtime-image", jdkRoot.get(),
+        "--module-path", installDir.absolutePath,
+        "--module", "ax.xz.mri/ax.xz.mri.MriStudioApp",
+        "--dest", outDir.absolutePath,
+        "--mac-package-identifier", "ax.xz.mri.studio",
+        "--mac-package-name", "MriStudio",
+        "--java-options", "--enable-native-access=javafx.graphics",
+        "--java-options", "-Dapple.awt.application.name=MriStudio"
+    )
+}

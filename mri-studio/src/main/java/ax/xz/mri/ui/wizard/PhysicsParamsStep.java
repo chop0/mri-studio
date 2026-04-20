@@ -21,6 +21,7 @@ public final class PhysicsParamsStep implements WizardStep {
 	private final Spinner<Double> fovRSpinner;
 	private final Spinner<Integer> nZSpinner;
 	private final Spinner<Integer> nRSpinner;
+	private final Spinner<Double> dtSpinner;
 	private final BooleanBinding valid = Bindings.createBooleanBinding(() -> true);
 	private final VBox root;
 
@@ -37,6 +38,8 @@ public final class PhysicsParamsStep implements WizardStep {
 		fovRSpinner = dblSpinner(0.1, 500, defaults.fovRMm(), 1);
 		nZSpinner = intSpinner(2, 500, defaults.nZ());
 		nRSpinner = intSpinner(2, 100, defaults.nR());
+		dtSpinner = dblSpinner(0.01, 1000, defaults.dtSeconds() * 1e6, 0.1); // in μs
+		dtSpinner.setPrefWidth(130);
 
 		var header = new Label("Physics & spatial parameters");
 		header.getStyleClass().add("section-header");
@@ -52,7 +55,8 @@ public final class PhysicsParamsStep implements WizardStep {
 		grid.addRow(row++, new Label("FOV Z (mm)"), fovZSpinner);
 		grid.addRow(row++, new Label("FOV R (mm)"), fovRSpinner);
 		grid.addRow(row++, new Label("Grid Z"), nZSpinner);
-		grid.addRow(row, new Label("Grid R"), nRSpinner);
+		grid.addRow(row++, new Label("Grid R"), nRSpinner);
+		grid.addRow(row, new Label("Time step (\u03bcs)"), dtSpinner);
 
 		root = new VBox(10, header, grid);
 		root.setPadding(new Insets(4));
@@ -67,7 +71,8 @@ public final class PhysicsParamsStep implements WizardStep {
 			gammaSpinner.getValue(),
 			t1Spinner.getValue(), t2Spinner.getValue(),
 			sliceSpinner.getValue(), fovZSpinner.getValue(), fovRSpinner.getValue(),
-			nZSpinner.getValue(), nRSpinner.getValue()
+			nZSpinner.getValue(), nRSpinner.getValue(),
+			dtSpinner.getValue() * 1e-6  // μs -> s
 		);
 	}
 

@@ -125,8 +125,8 @@ class ObjectFactoryTest {
         assertEquals(params.t1Ms(), config.t1Ms());
         assertEquals(params.gamma(), config.gamma());
         assertEquals(1.5, config.referenceB0Tesla());
+        assertEquals(params.dtSeconds(), config.dtSeconds());
         assertEquals(0, config.fields().size());
-        assertEquals(3, config.isochromats().size());
     }
 
     // --- SimConfigTemplate ---

@@ -619,6 +619,10 @@ public class WorkbenchController {
         chooser.setTitle("Open Project");
         File dir = chooser.showDialog(mainStage);
         if (dir == null) return;
+        openProjectDirectory(dir);
+    }
+
+    public void openProjectDirectory(File dir) {
         try { session.project.openProject(dir.toPath()); updateShellStatus(); }
         catch (Exception ex) { showError("Failed to open project", ex.getMessage()); }
     }

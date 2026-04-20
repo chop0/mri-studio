@@ -55,8 +55,10 @@ public final class BlochDataFactory {
 
     public static BlochData build(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
         var field = buildFieldMap(config, segments, repository);
-        var iso = buildIsochromats(config);
-        return new BlochData(field, iso, Map.of());
+        // Probe points (isochromats) are runtime / per-sequence concerns, not config.
+        // They're populated by IsochromatCollectionModel.resetToDefaults() from the
+        // model's own hardcoded defaults.
+        return new BlochData(field, List.of(), Map.of());
     }
 
     public static BlochData build(SimulationConfig config, List<Segment> segments) {
@@ -104,8 +106,9 @@ public final class BlochDataFactory {
         double omegaSim = config.gamma() * config.referenceB0Tesla();
 
         // Representative dt — the step used when reasoning about Nyquist for
-        // fast-field classification. Uses the median segment dt; falls back to 1 µs.
-        double dt = representativeDt(segments);
+        // fast-field classification. Prefer the config's dt (authoritative); fall back
+        // to the segment-averaged dt for legacy paths that may pass mismatched data.
+        double dt = config.dtSeconds() > 0 ? config.dtSeconds() : representativeDt(segments);
 
         for (var def : config.fields()) {
             var script = compileScript(def, repository);
@@ -261,12 +264,4 @@ public final class BlochDataFactory {
         }
     }
 
-    private static List<BlochData.IsochromatDef> buildIsochromats(SimulationConfig config) {
-        var iso = new ArrayList<BlochData.IsochromatDef>();
-        for (var pt : config.isochromats()) {
-            boolean inSlice = Math.abs(pt.zMm()) <= config.sliceHalfMm();
-            iso.add(new BlochData.IsochromatDef(pt.name(), pt.colour(), inSlice));
-        }
-        return iso;
-    }
 }

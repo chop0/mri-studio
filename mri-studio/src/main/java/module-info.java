@@ -5,6 +5,7 @@ module ax.xz.mri {
     requires bento.fx;
     requires org.codehaus.commons.compiler;
     requires org.codehaus.janino;
+    requires java.desktop;
 
     opens ax.xz.mri.model.field    to com.fasterxml.jackson.databind;
     opens ax.xz.mri.model.sequence to com.fasterxml.jackson.databind;

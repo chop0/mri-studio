@@ -1,0 +1,138 @@
+package ax.xz.mri.ui.workbench.pane.config;
+
+import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.SimulationConfig;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.IntegerBinding;
+import javafx.beans.binding.DoubleBinding;
+import javafx.beans.property.DoubleProperty;
+import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleDoubleProperty;
+import javafx.beans.property.SimpleIntegerProperty;
+import javafx.beans.property.SimpleObjectProperty;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+
+import java.util.List;
+
+/**
+ * Observable store over a {@link SimulationConfig} record. Exposes one JavaFX
+ * property per field plus derived bindings. Maintains two-way sync between the
+ * record and the properties so the UI can be wired with plain bidirectional
+ * bindings and derived {@link javafx.beans.binding.StringBinding}s.
+ *
+ * <p>The store is the single source of truth: every mutation goes through
+ * {@link #setConfig(SimulationConfig)} (e.g. on undo/redo/revert) or via a
+ * property edit (which rebuilds the config internally). A re-entrancy guard
+ * prevents oscillation between the two paths.
+ */
+public final class ConfigStore {
+    /** Canonical config value. Observe this for "config changed" events. */
+    public final ObjectProperty<SimulationConfig> config = new SimpleObjectProperty<>();
+
+    // Per-field observable properties — wire UI controls bidirectionally to these.
+    public final DoubleProperty  t1Ms             = new SimpleDoubleProperty();
+    public final DoubleProperty  t2Ms             = new SimpleDoubleProperty();
+    public final DoubleProperty  gamma            = new SimpleDoubleProperty();
+    public final DoubleProperty  sliceHalfMm      = new SimpleDoubleProperty();
+    public final DoubleProperty  fovZMm           = new SimpleDoubleProperty();
+    public final DoubleProperty  fovRMm           = new SimpleDoubleProperty();
+    public final IntegerProperty nZ               = new SimpleIntegerProperty();
+    public final IntegerProperty nR               = new SimpleIntegerProperty();
+    public final DoubleProperty  referenceB0Tesla = new SimpleDoubleProperty();
+    public final DoubleProperty  dtSeconds        = new SimpleDoubleProperty();
+    public final ObservableList<FieldDefinition> fields = FXCollections.observableArrayList();
+
+    // Derived bindings.
+    public final DoubleBinding  larmorHz;
+    public final DoubleBinding  nyquistHz;
+    public final IntegerBinding totalChannels;
+
+    private boolean syncing;
+
+    public ConfigStore(SimulationConfig initial) {
+        larmorHz = Bindings.createDoubleBinding(
+            () -> gamma.get() * referenceB0Tesla.get() / (2 * Math.PI),
+            gamma, referenceB0Tesla);
+        nyquistHz = Bindings.createDoubleBinding(
+            () -> dtSeconds.get() > 0 ? 1.0 / (2 * dtSeconds.get()) : Double.POSITIVE_INFINITY,
+            dtSeconds);
+        totalChannels = Bindings.createIntegerBinding(() -> {
+            int sum = 0;
+            for (var f : fields) sum += f.channelCount();
+            return sum;
+        }, fields);
+
+        // Load initial state — properties first, then publish the config.
+        writeFrom(initial);
+        config.set(initial);
+
+        // User edits on any scalar field rebuild the config and republish.
+        t1Ms.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withT1Ms(n.doubleValue())));
+        t2Ms.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withT2Ms(n.doubleValue())));
+        gamma.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withGamma(n.doubleValue())));
+        sliceHalfMm.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withSliceHalfMm(n.doubleValue())));
+        fovZMm.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withFovZMm(n.doubleValue())));
+        fovRMm.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withFovRMm(n.doubleValue())));
+        nZ.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withNZ(n.intValue())));
+        nR.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withNR(n.intValue())));
+        referenceB0Tesla.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withReferenceB0Tesla(n.doubleValue())));
+        dtSeconds.addListener((obs, o, n) -> rebuildFromProperties(c -> {
+            double v = n.doubleValue();
+            return v > 0 ? c.withDtSeconds(v) : c;
+        }));
+        fields.addListener((javafx.collections.ListChangeListener<FieldDefinition>) ch ->
+            rebuildFromProperties(c -> c.withFields(List.copyOf(fields))));
+
+        // External config change (undo, revert, etc.) pushes into the scalar properties.
+        config.addListener((obs, oldC, newC) -> {
+            if (syncing || newC == null) return;
+            syncing = true;
+            try { writeFrom(newC); } finally { syncing = false; }
+        });
+    }
+
+    /** Replace the authoritative config. Triggers property refresh. */
+    public void setConfig(SimulationConfig c) {
+        if (c == null || c.equals(config.get())) return;
+        config.set(c);
+    }
+
+    public SimulationConfig getConfig() {
+        return config.get();
+    }
+
+    private void rebuildFromProperties(java.util.function.UnaryOperator<SimulationConfig> delta) {
+        if (syncing) return;
+        var current = config.get();
+        if (current == null) return;
+        var next = delta.apply(current);
+        if (next == null || next.equals(current)) return;
+        syncing = true;
+        try { config.set(next); } finally { syncing = false; }
+    }
+
+    private void writeFrom(SimulationConfig c) {
+        if (c == null) return;
+        t1Ms.set(c.t1Ms());
+        t2Ms.set(c.t2Ms());
+        gamma.set(c.gamma());
+        sliceHalfMm.set(c.sliceHalfMm());
+        fovZMm.set(c.fovZMm());
+        fovRMm.set(c.fovRMm());
+        nZ.set(c.nZ());
+        nR.set(c.nR());
+        referenceB0Tesla.set(c.referenceB0Tesla());
+        dtSeconds.set(c.dtSeconds());
+        if (!listEquals(fields, c.fields())) fields.setAll(c.fields());
+    }
+
+    private static boolean listEquals(List<FieldDefinition> a, List<FieldDefinition> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            if (!a.get(i).equals(b.get(i))) return false;
+        }
+        return true;
+    }
+}

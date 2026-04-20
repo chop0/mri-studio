@@ -32,10 +32,11 @@ public final class ObjectFactory {
 		double gamma,
 		double t1Ms, double t2Ms,
 		double sliceHalfMm, double fovZMm, double fovRMm,
-		int nZ, int nR
+		int nZ, int nR,
+		double dtSeconds
 	) {
 		public static final PhysicsParams DEFAULTS =
-			new PhysicsParams(267.522e6, 1000, 100, 5, 20, 30, 50, 5);
+			new PhysicsParams(267.522e6, 1000, 100, 5, 20, 30, 50, 5, 1e-6);
 	}
 
 	public static SimulationConfig buildConfig(PhysicsParams p, double referenceB0Tesla, List<FieldDefinition> fields) {
@@ -44,12 +45,8 @@ public final class ObjectFactory {
 			p.sliceHalfMm, p.fovZMm, p.fovRMm,
 			Math.max(2, p.nZ), Math.max(2, p.nR),
 			referenceB0Tesla,
-			fields,
-			List.of(
-				new SimulationConfig.IsoPoint(0, 0, "Centre", "#e06000"),
-				new SimulationConfig.IsoPoint(0, 2, "z = 2 mm", "#1976d2"),
-				new SimulationConfig.IsoPoint(0, -2, "z = -2 mm", "#2e7d32")
-			)
+			p.dtSeconds,
+			fields
 		);
 	}
 
@@ -83,7 +80,8 @@ public final class ObjectFactory {
 			field.fovZ * 1e3,
 			field.fovX * 1e3,
 			field.zMm != null ? field.zMm.length : 50,
-			field.rMm != null ? field.rMm.length : 5
+			field.rMm != null ? field.rMm.length : 5,
+			PhysicsParams.DEFAULTS.dtSeconds()
 		);
 	}
 

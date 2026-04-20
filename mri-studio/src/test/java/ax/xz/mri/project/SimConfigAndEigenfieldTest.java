@@ -96,9 +96,8 @@ class SimConfigAndEigenfieldTest {
         var repo = ProjectRepository.untitled();
         var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0,
-            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)),
-            List.of());
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, 1e-6,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)));
         var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Old Name", config);
         repo.addSimConfig(doc);
 
@@ -113,9 +112,8 @@ class SimConfigAndEigenfieldTest {
         var repo = ProjectRepository.untitled();
         var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0,
-            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)),
-            List.of());
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0, 1e-6,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)));
         var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Test", config);
         repo.addSimConfig(doc);
 
@@ -203,9 +201,8 @@ class SimConfigAndEigenfieldTest {
         var ef = new EigenfieldDocument(new ProjectNodeId("ef-b0"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
 
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5,
-            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 1.5)),
-            List.of(new SimulationConfig.IsoPoint(0, 0, "Centre", "#ff0000")));
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 1.5)));
 
         var segments = List.of(new Segment(1e-6, 0, 2), new Segment(1e-6, 2, 0));
         var data = BlochDataFactory.build(config, segments, repo);
@@ -218,7 +215,8 @@ class SimConfigAndEigenfieldTest {
         assertEquals(0.1, data.field().t2, 1e-10);
         assertNotNull(data.field().staticBz);
         assertNotNull(data.field().mz0);
-        assertEquals(1, data.iso().size());
+        // Probe points no longer come from config — they're runtime state.
+        assertEquals(0, data.iso().size());
 
         // Uniform Bz at amplitude 1.5 T means local Bz matches the reference everywhere
         // → staticBz (off-resonance) is zero.
