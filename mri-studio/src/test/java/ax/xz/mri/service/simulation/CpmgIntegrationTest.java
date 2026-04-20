@@ -109,7 +109,7 @@ class CpmgIntegrationTest {
         double normalisedSlope = dBzPerMetre / b0Amplitude;
         String script = String.format("return Vec3.of(0, 0, 1 + %s * z);", normalisedSlope);
         var eigen = new EigenfieldDocument(
-            new ProjectNodeId("ef-test-" + name), name, "test off-resonance", script);
+            new ProjectNodeId("ef-test-" + name), name, "test off-resonance", script, "T");
         repo.addEigenfield(eigen);
 
         var newFields = new ArrayList<FieldDefinition>(base.fields());

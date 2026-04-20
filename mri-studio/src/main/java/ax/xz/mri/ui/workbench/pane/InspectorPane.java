@@ -1,8 +1,9 @@
 package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.model.sequence.ClipShape;
-import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.project.CaptureDocument;
 import ax.xz.mri.project.ImportLinkDocument;
 import ax.xz.mri.project.ImportedCaptureDocument;
@@ -394,8 +395,8 @@ public final class InspectorPane extends WorkbenchPane {
     private void populateClipProperties(SequenceEditSession editSession, SignalClip clip) {
         int selCount = editSession.selectedClipIds.size();
 
-        // Header
-        var channelLabel = new Label(clip.channel().label());
+        // Header — derive label from the active config (fields) or RF-gate sentinel.
+        var channelLabel = new Label(channelLabel(editSession, clip.channel()));
         channelLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 12;");
         var shapeCombo = new ComboBox<ClipShape>();
         shapeCombo.getItems().addAll(ClipShape.values());
@@ -429,7 +430,7 @@ public final class InspectorPane extends WorkbenchPane {
             v -> { suppressRefresh = true; try { editSession.moveClip(clip.id(), v); } finally { suppressRefresh = false; } });
         row = addInspectorField(grid, row, "Duration (μs)", clip.duration(), editSession.dt.get(), editSession.totalDuration.get(), 1,
             v -> { suppressRefresh = true; try { editSession.resizeClip(clip.id(), v); } finally { suppressRefresh = false; } });
-        row = addSiField(grid, row, "Amplitude", clip.amplitude(), clip.channel(),
+        row = addSiField(grid, row, "Amplitude", clip.amplitude(), editSession, clip.channel(),
             v -> { suppressRefresh = true; try { editSession.setClipAmplitude(clip.id(), v); } finally { suppressRefresh = false; } });
 
         // Shape-specific params
@@ -502,13 +503,23 @@ public final class InspectorPane extends WorkbenchPane {
      * The channel's unit already includes an SI prefix (μT, mT/m), so the converter
      * uses a fixed display scale and unit string.
      */
+    /** Compose a user-friendly label for a SequenceChannel. */
+    private static String channelLabel(SequenceEditSession editSession, SequenceChannel channel) {
+        if (channel.isRfGate()) return "RF Gate";
+        var field = editSession != null ? editSession.fieldForChannel(channel) : null;
+        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
+        return ax.xz.mri.ui.viewmodel.EditorTrack.labelFor(field.name(), field.kind(), channel.subIndex());
+    }
+
     private int addSiField(GridPane grid, int row, String label, double value,
-                            SignalChannel channel, java.util.function.DoubleConsumer onUpdate) {
+                            SequenceEditSession editSession, SequenceChannel channel,
+                            java.util.function.DoubleConsumer onUpdate) {
         var lbl = new Label(label);
         lbl.setStyle("-fx-font-size: 10px;");
         lbl.setMinWidth(90);
 
-        var converter = SiPrefixConverter.forChannel(channel);
+        String units = editSession != null ? editSession.unitsForChannel(channel) : "";
+        var converter = SiPrefixConverter.forUnits(units);
 
         var textField = new TextField(converter.format(value));
         textField.setPrefWidth(110);
@@ -559,20 +570,34 @@ public final class InspectorPane extends WorkbenchPane {
             this.displayScale = displayScale;
         }
 
-        static SiPrefixConverter forChannel(SignalChannel ch) {
-            return switch (ch) {
-                case B1X, B1Y -> new SiPrefixConverter("μT", 1e-6);
-                case GX, GZ   -> new SiPrefixConverter("mT/m", 1e-3);
-                case RF_GATE  -> new SiPrefixConverter("", 1);
-            };
+        /**
+         * Build a converter for a channel whose raw values are in the given
+         * base units. The converter's display picks an auto SI prefix
+         * (μ / m / k / M) by magnitude; the unit suffix is the supplied string.
+         * Empty {@code units} means dimensionless (e.g. RF gate).
+         */
+        static SiPrefixConverter forUnits(String units) {
+            if (units == null || units.isEmpty()) return new SiPrefixConverter("", 1);
+            // Use a scale of 1 (base) — prefix handling happens at display time via SI conversion.
+            return new SiPrefixConverter(units, 1);
         }
 
-        /** Format a raw SI value for display. */
+        /** Format a raw SI value for display — picks an SI prefix dynamically. */
         String format(double rawValue) {
             if (Double.isNaN(rawValue)) return "";
-            double display = displayScale != 0 ? rawValue / displayScale : rawValue;
-            String num = formatNumber(display);
-            return displayUnit.isEmpty() ? num : num + " " + displayUnit;
+            if (displayUnit.isEmpty()) return formatNumber(rawValue);
+            double abs = Math.abs(rawValue);
+            if (abs == 0) return "0 " + displayUnit;
+            String prefix; double scale;
+            if      (abs >= 1e9)  { prefix = "G"; scale = 1e9; }
+            else if (abs >= 1e6)  { prefix = "M"; scale = 1e6; }
+            else if (abs >= 1e3)  { prefix = "k"; scale = 1e3; }
+            else if (abs >= 1)    { prefix = "";  scale = 1;   }
+            else if (abs >= 1e-3) { prefix = "m"; scale = 1e-3; }
+            else if (abs >= 1e-6) { prefix = "μ"; scale = 1e-6; }
+            else if (abs >= 1e-9) { prefix = "n"; scale = 1e-9; }
+            else                  { prefix = "p"; scale = 1e-12; }
+            return formatNumber(rawValue / scale) + " " + prefix + displayUnit;
         }
 
         /** Parse a user-entered string back to raw SI value. */

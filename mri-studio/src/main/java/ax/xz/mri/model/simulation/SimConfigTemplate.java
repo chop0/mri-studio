@@ -40,10 +40,10 @@ public enum SimConfigTemplate {
 			var gzStarter = EigenfieldStarterLibrary.byId("gradient-z").orElseThrow();
 			var rfStarter = EigenfieldStarterLibrary.byId("uniform-b-perp").orElseThrow();
 
-			var b0 = ObjectFactory.findOrCreateEigenfield(repo, "B0 Helmholtz", b0Starter.description(), b0Starter.source());
-			var gx = ObjectFactory.findOrCreateEigenfield(repo, "Gradient X", gxStarter.description(), gxStarter.source());
-			var gz = ObjectFactory.findOrCreateEigenfield(repo, "Gradient Z", gzStarter.description(), gzStarter.source());
-			var rf = ObjectFactory.findOrCreateEigenfield(repo, "RF Transverse", rfStarter.description(), rfStarter.source());
+			var b0 = ObjectFactory.findOrCreateEigenfield(repo, "B0 Helmholtz", b0Starter.description(), b0Starter.source(), b0Starter.units());
+			var gx = ObjectFactory.findOrCreateEigenfield(repo, "Gradient X", gxStarter.description(), gxStarter.source(), gxStarter.units());
+			var gz = ObjectFactory.findOrCreateEigenfield(repo, "Gradient Z", gzStarter.description(), gzStarter.source(), gzStarter.units());
+			var rf = ObjectFactory.findOrCreateEigenfield(repo, "RF Transverse", rfStarter.description(), rfStarter.source(), rfStarter.units());
 
 			double larmorHz = gamma * b0Tesla / (2 * Math.PI);
 

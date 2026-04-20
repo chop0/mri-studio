@@ -22,7 +22,8 @@ public final class EigenfieldStarterLibrary {
             // Zero field — edit to taste.
             // (x, y, z) are in metres. Amplitude scales the return value.
             return Vec3.ZERO;
-            """),
+            """,
+            "T"),
 
         new EigenfieldStarter(
             "uniform-bz",
@@ -31,7 +32,8 @@ public final class EigenfieldStarterLibrary {
             """
             // Perfectly homogeneous z-directed field.
             return Vec3.of(0, 0, 1);
-            """),
+            """,
+            "T"),
 
         new EigenfieldStarter(
             "helmholtz-b0",
@@ -54,7 +56,8 @@ public final class EigenfieldStarterLibrary {
             );
             double peak = 1.0 / pow(1 + (d / R) * (d / R), 1.5);
             return Vec3.of(0, 0, (bz0 + curvature) / peak);
-            """),
+            """,
+            "T"),
 
         new EigenfieldStarter(
             "gradient-x",
@@ -63,7 +66,8 @@ public final class EigenfieldStarterLibrary {
             """
             // Linear x-gradient of Bz.
             return Vec3.of(0, 0, x);
-            """),
+            """,
+            "T/m"),
 
         new EigenfieldStarter(
             "gradient-z",
@@ -72,7 +76,8 @@ public final class EigenfieldStarterLibrary {
             """
             // Linear z-gradient of Bz.
             return Vec3.of(0, 0, z);
-            """),
+            """,
+            "T/m"),
 
         new EigenfieldStarter(
             "uniform-b-perp",
@@ -82,7 +87,8 @@ public final class EigenfieldStarterLibrary {
             // Uniform transverse B1 — ideal RF coil pointing along +x.
             // Pair with a quadrature (QUADRATURE) amplitude at the Larmor carrier.
             return Vec3.of(1, 0, 0);
-            """)
+            """,
+            "T")
     );
 
     public static List<EigenfieldStarter> all() {

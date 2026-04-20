@@ -3,8 +3,11 @@ package ax.xz.mri.ui.viewmodel;
 import ax.xz.mri.model.sequence.ClipBaker;
 import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.sequence.ClipShape;
-import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.SequenceDocument;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -63,7 +66,12 @@ public final class SequenceEditSession {
 
     // --- Simulation config association (which config is active for this sequence) ---
     public final ObjectProperty<ax.xz.mri.project.ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
+    /** Resolved config snapshot; drives default amplitudes and baking. Nullable. */
+    public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
     private ax.xz.mri.project.ProjectNodeId originalSimConfigId;
+
+    /** Project repository supplier — used to resolve eigenfield metadata (e.g. units). */
+    private java.util.function.Supplier<ax.xz.mri.project.ProjectRepository> repositorySupplier = () -> null;
 
     // --- Snapping ---
     public final BooleanProperty snapEnabled = new SimpleBooleanProperty(true);
@@ -85,12 +93,13 @@ public final class SequenceEditSession {
         originalDocument.set(document);
 
         ClipSequence clipSeq = document.clipSequence();
+        var config = activeConfig.get();
         if (clipSeq != null) {
             clips.setAll(clipSeq.clips());
             dt.set(clipSeq.dt());
             totalDuration.set(clipSeq.totalDuration());
         } else {
-            var converted = ClipBaker.fromLegacy(document.segments(), document.pulse());
+            var converted = ClipBaker.fromLegacy(document.segments(), document.pulse(), config);
             clips.setAll(converted.clips());
             dt.set(converted.dt());
             totalDuration.set(converted.totalDuration());
@@ -98,7 +107,7 @@ public final class SequenceEditSession {
 
         selectedClipIds.clear();
         primarySelectedClipId.set(null);
-        tracks.setAll(EditorTrack.defaultTracks());
+        tracks.setAll(EditorTrack.defaultTracks(config));
         viewStart.set(0);
         viewEnd.set(totalDuration.get());
         undoStack.clear();
@@ -112,7 +121,7 @@ public final class SequenceEditSession {
     public SequenceDocument toDocument() {
         var orig = originalDocument.get();
         var clipSeq = new ClipSequence(dt.get(), totalDuration.get(), List.copyOf(clips));
-        var baked = ClipBaker.bake(clipSeq);
+        var baked = ClipBaker.bake(clipSeq, activeConfig.get());
         return new SequenceDocument(
             orig.id(), orig.name(),
             baked.segments(), baked.pulseSegments(),
@@ -123,9 +132,7 @@ public final class SequenceEditSession {
     public boolean isDirty() {
         var orig = originalDocument.get();
         if (orig == null) return false;
-        // Config association changed?
         if (!java.util.Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
-        // Clip data changed?
         if (orig.clipSequence() != null) {
             return !clips.equals(orig.clipSequence().clips())
                 || dt.get() != orig.clipSequence().dt()
@@ -138,6 +145,51 @@ public final class SequenceEditSession {
     public void setOriginalSimConfigId(ax.xz.mri.project.ProjectNodeId configId) {
         this.originalSimConfigId = configId;
         this.activeSimConfigId.set(configId);
+    }
+
+    /** Provide a repository supplier so the session can resolve eigenfield metadata. */
+    public void setRepositorySupplier(java.util.function.Supplier<ax.xz.mri.project.ProjectRepository> supplier) {
+        this.repositorySupplier = supplier != null ? supplier : () -> null;
+    }
+
+    /**
+     * Resolve the display units declared by the eigenfield behind a channel.
+     * Returns an empty string for RF-gate / missing config / missing repo.
+     */
+    public String unitsForChannel(SequenceChannel channel) {
+        if (channel == null || channel.isRfGate()) return "";
+        var field = fieldForChannel(channel);
+        if (field == null || field.eigenfieldId() == null) return "";
+        var repo = repositorySupplier.get();
+        if (repo == null) return "";
+        var node = repo.node(field.eigenfieldId());
+        if (node instanceof ax.xz.mri.project.EigenfieldDocument ef) return ef.units();
+        return "";
+    }
+
+    /**
+     * Replace the live config snapshot driving defaults + track layout. Called
+     * from outside (e.g. when the user edits field amplitudes). Rebuilds track
+     * labels so the editor stays in sync with field renames.
+     */
+    public void applyActiveConfig(SimulationConfig config) {
+        if (java.util.Objects.equals(activeConfig.get(), config)) return;
+        activeConfig.set(config);
+        // Refresh track labels / lineup (preserve collapse state where the channel
+        // still exists, otherwise default).
+        var oldTracks = new ArrayList<>(tracks);
+        var newTracks = EditorTrack.defaultTracks(config);
+        for (int i = 0; i < newTracks.size(); i++) {
+            var nt = newTracks.get(i);
+            for (var ot : oldTracks) {
+                if (ot.channel().equals(nt.channel())) {
+                    newTracks.set(i, nt.withCollapsed(ot.collapsed()));
+                    break;
+                }
+            }
+        }
+        tracks.setAll(newTracks);
+        bumpRevision();
     }
 
     // ==================== Selection ====================
@@ -186,7 +238,7 @@ public final class SequenceEditSession {
     }
 
     /** Select all clips overlapping a time×channel region (for rubber-band). */
-    public void selectClipsInRegion(double timeStart, double timeEnd, Set<SignalChannel> channels, boolean addToExisting) {
+    public void selectClipsInRegion(double timeStart, double timeEnd, Set<SequenceChannel> channels, boolean addToExisting) {
         if (!addToExisting) selectedClipIds.clear();
         double tMin = Math.min(timeStart, timeEnd);
         double tMax = Math.max(timeStart, timeEnd);
@@ -217,27 +269,25 @@ public final class SequenceEditSession {
         return -1;
     }
 
-    /** Get the primary selected clip, or null. */
     public SignalClip primarySelectedClip() {
         return findClip(primarySelectedClipId.get());
     }
 
-    /** Get all clips on a given channel, sorted by start time. */
-    public List<SignalClip> clipsOnChannel(SignalChannel channel) {
+    public List<SignalClip> clipsOnChannel(SequenceChannel channel) {
         return clips.stream()
-            .filter(c -> c.channel() == channel)
+            .filter(c -> c.channel().equals(channel))
             .sorted((a, b) -> Double.compare(a.startTime(), b.startTime()))
             .toList();
     }
 
     // ==================== Track management ====================
 
-    public void addTrack(SignalChannel channel) {
+    public void addTrack(SequenceChannel channel, String label) {
         pushUndo();
-        int count = (int) tracks.stream().filter(t -> t.channel() == channel).count();
+        int count = (int) tracks.stream().filter(t -> t.channel().equals(channel)).count();
         tracks.add(new EditorTrack(
             UUID.randomUUID().toString(), channel,
-            channel.label() + " " + (count + 1), false
+            label + " " + (count + 1), false
         ));
         bumpRevision();
     }
@@ -245,8 +295,7 @@ public final class SequenceEditSession {
     public void removeTrack(String trackId) {
         var track = tracks.stream().filter(t -> t.id().equals(trackId)).findFirst().orElse(null);
         if (track == null) return;
-        // Don't remove the last track for a channel
-        long channelCount = tracks.stream().filter(t -> t.channel() == track.channel()).count();
+        long channelCount = tracks.stream().filter(t -> t.channel().equals(track.channel())).count();
         if (channelCount <= 1) return;
         pushUndo();
         tracks.removeIf(t -> t.id().equals(trackId));
@@ -293,7 +342,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Delete all selected clips. */
     public void deleteSelectedClips() {
         if (selectedClipIds.isEmpty()) return;
         pushUndo();
@@ -313,7 +361,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Move all selected clips by a time delta. Single undo snapshot. */
     public void moveSelectedClips(double deltaMicros) {
         if (selectedClipIds.isEmpty()) return;
         pushUndo();
@@ -327,10 +374,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /**
-     * Resize clip from the right edge. If the user extends past the current media
-     * extent, the mediaDuration grows to accommodate (infinite extension).
-     */
     public void resizeClip(String clipId, double newDuration) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
@@ -339,7 +382,6 @@ public final class SequenceEditSession {
         double neededMedia = clip.mediaOffset() + newDuration;
         pushUndo();
         if (neededMedia > clip.mediaDuration()) {
-            // Grow the media extent to fit
             clips.set(idx, clip.withDuration(newDuration).withMediaDuration(neededMedia));
         } else {
             clips.set(idx, clip.withDuration(newDuration));
@@ -347,11 +389,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /**
-     * Premiere-style left-edge trim: adjusts startTime and mediaOffset together,
-     * keeping the waveform in place. If extended past the media start, the media
-     * extent grows (mediaOffset goes to 0, mediaDuration increases).
-     */
     public void resizeClipLeft(String clipId, double newStartTime) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
@@ -361,13 +398,10 @@ public final class SequenceEditSession {
         double newDuration = clip.endTime() - newStartTime;
         double newMediaOffset = clip.mediaOffset() + delta;
         double newMediaDuration = clip.mediaDuration();
-
         if (newMediaOffset < 0) {
-            // Extending past media start — grow media extent
             newMediaDuration += -newMediaOffset;
             newMediaOffset = 0;
         }
-
         pushUndo();
         clips.set(idx, new SignalClip(
             clip.id(), clip.channel(), clip.shape(),
@@ -405,7 +439,7 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    public void changeClipChannel(String clipId, SignalChannel newChannel) {
+    public void changeClipChannel(String clipId, SequenceChannel newChannel) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         pushUndo();
@@ -413,7 +447,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Duplicate all selected clips, offset slightly. */
     public void duplicateSelectedClips() {
         var sel = selectedClips();
         if (sel.isEmpty()) return;
@@ -440,7 +473,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Change which simulation config is active for this sequence. Tracked by undo. */
     public void setActiveSimConfig(ax.xz.mri.project.ProjectNodeId configId) {
         if (java.util.Objects.equals(configId, activeSimConfigId.get())) return;
         pushUndo();
@@ -456,10 +488,6 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /**
-     * Re-centre a clip's media extent around its current visible portion,
-     * giving equal headroom on both sides for future trimming.
-     */
     public void recentreClip(String clipId) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
@@ -526,11 +554,6 @@ public final class SequenceEditSession {
 
     // ==================== Split ====================
 
-    /**
-     * Split a clip at the given time into two clips.
-     * For sinc clips, preserves bandwidth and adjusts centerOffset so the waveform doesn't shift.
-     * For spline clips, remaps control points proportionally.
-     */
     public void splitClip(String clipId, double splitTime) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
@@ -541,17 +564,12 @@ public final class SequenceEditSession {
         double leftDuration = splitTime - clip.startTime();
         double rightDuration = clip.endTime() - splitTime;
 
-        // Left half
         var leftParams = new java.util.HashMap<>(clip.params());
         var rightParams = new java.util.HashMap<>(clip.params());
 
         if (clip.shape() == ClipShape.SINC) {
-            // Preserve the sinc's true centre by adjusting centerOffset
             double originalCenter = clip.duration() / 2.0 + clip.param("centerOffset", 0);
-            // Left clip: center is at originalCenter relative to original start
-            // Left clip's own center would be at leftDuration/2, so offset = originalCenter - leftDuration/2
             leftParams.put("centerOffset", originalCenter - leftDuration / 2.0);
-            // Right clip: the sinc center in right-clip-local coords
             double rightLocalCenter = originalCenter - leftDuration;
             rightParams.put("centerOffset", rightLocalCenter - rightDuration / 2.0);
         }
@@ -579,12 +597,12 @@ public final class SequenceEditSession {
         var leftClip = new SignalClip(
             UUID.randomUUID().toString(), clip.channel(), clip.shape(),
             clip.startTime(), leftDuration, clip.amplitude(),
-            leftParams, leftPoints
+            0, leftDuration, leftParams, leftPoints
         );
         var rightClip = new SignalClip(
             UUID.randomUUID().toString(), clip.channel(), clip.shape(),
             splitTime, rightDuration, clip.amplitude(),
-            rightParams, rightPoints
+            0, rightDuration, rightParams, rightPoints
         );
 
         clips.set(idx, leftClip);
@@ -598,16 +616,11 @@ public final class SequenceEditSession {
 
     // ==================== Snapping ====================
 
-    /**
-     * Snap a time value to nearby clip edges or grid points.
-     * Returns the snapped time, or the original if nothing is close.
-     */
     public double snapTime(double rawTime) {
         if (!snapEnabled.get()) return rawTime;
         double viewSpan = viewEnd.get() - viewStart.get();
         double threshold = viewSpan * SNAP_THRESHOLD_FRACTION;
 
-        // Snap to clip edges (across all clips)
         double bestSnap = rawTime;
         double bestDist = threshold;
         for (var clip : clips) {
@@ -618,7 +631,6 @@ public final class SequenceEditSession {
         }
         if (bestDist < threshold) return bestSnap;
 
-        // Snap to grid
         double grid = snapGridSize.get();
         if (grid > 0) {
             double snapped = Math.round(rawTime / grid) * grid;
@@ -650,12 +662,11 @@ public final class SequenceEditSession {
 
     // ==================== Convenience factories ====================
 
-    public SignalClip createDefaultClip(ClipShape shape, SignalChannel channel, double startTime) {
+    public SignalClip createDefaultClip(ClipShape shape, SequenceChannel channel, double startTime) {
         double clipDuration = (viewEnd.get() - viewStart.get()) * 0.15;
         clipDuration = Math.max(dt.get() * 5, clipDuration);
-        // Media extent is 2× the visible duration to allow trimming headroom
         double mediaDuration = clipDuration * 2.0;
-        double mediaOffset = clipDuration * 0.5; // centered in the media
+        double mediaOffset = clipDuration * 0.5;
         double amplitude = defaultAmplitudeForChannel(channel);
 
         var params = defaultParamsForShape(shape, mediaDuration);
@@ -675,18 +686,9 @@ public final class SequenceEditSession {
         );
     }
 
-    /**
-     * Create a clip with the given visible start and duration, centred within a
-     * generous media extent. The waveform is defined over the full media, so the
-     * visible portion shows the middle of the shape. Extending either edge reveals
-     * more of the underlying waveform.
-     */
-    public SignalClip createClipCentred(ClipShape shape, SignalChannel channel, double startTime, double duration) {
-        // Media is 4× the visible duration, clip is centred within it.
-        // This gives plenty of headroom for extending in either direction.
+    public SignalClip createClipCentred(ClipShape shape, SequenceChannel channel, double startTime, double duration) {
         double mediaDuration = duration * 4.0;
-        double mediaOffset = duration * 1.5; // centres the visible portion: (4-1)/2 = 1.5
-
+        double mediaOffset = duration * 1.5;
         double amplitude = defaultAmplitudeForChannel(channel);
         var params = defaultParamsForShape(shape, mediaDuration);
         List<SignalClip.SplinePoint> splinePoints = List.of();
@@ -705,12 +707,39 @@ public final class SequenceEditSession {
         );
     }
 
-    private double defaultAmplitudeForChannel(SignalChannel channel) {
-        return switch (channel) {
-            case B1X, B1Y -> 15e-6;
-            case GX, GZ   -> 0.02;
-            case RF_GATE  -> 1.0;
-        };
+    /**
+     * Default amplitude for a newly-created clip on the given channel.
+     *
+     * <p>For field-backed channels, uses the configured {@link FieldDefinition#maxAmplitude()}
+     * of the corresponding field (falling back to {@code |min|} or 1 if no config).
+     * For {@link SequenceChannel#RF_GATE} returns 1 (gate on).
+     */
+    private double defaultAmplitudeForChannel(SequenceChannel channel) {
+        if (channel.isRfGate()) return 1.0;
+        var field = fieldForChannel(channel);
+        if (field == null) return 1.0;
+        double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+        if (m == 0) return 1.0;
+        // For bipolar REAL fields, seed at 2/3 of max; for unipolar, at max.
+        if (field.minAmplitude() < 0) return 0.66 * field.maxAmplitude();
+        return field.maxAmplitude();
+    }
+
+    /**
+     * Look up the {@link FieldDefinition} corresponding to a given channel in
+     * the currently-active config. Returns {@code null} for RF-gate or if no
+     * config / no matching field.
+     */
+    public FieldDefinition fieldForChannel(SequenceChannel channel) {
+        if (channel == null || channel.isRfGate()) return null;
+        var config = activeConfig.get();
+        if (config == null) return null;
+        for (var f : config.fields()) {
+            if (f.name().equals(channel.fieldName()) && channel.subIndex() < f.kind().channelCount()) {
+                return f;
+            }
+        }
+        return null;
     }
 
     private Map<String, Double> defaultParamsForShape(ClipShape shape, double clipDuration) {
@@ -741,18 +770,7 @@ public final class SequenceEditSession {
 
     private void pushUndo() {
         undoStack.push(captureSnapshot());
-        if (undoStack.size() > MAX_UNDO) {
-            var temp = new ArrayDeque<EditSnapshot>(MAX_UNDO);
-            int count = 0;
-            for (var snapshot : undoStack) {
-                if (count++ >= MAX_UNDO) break;
-                temp.push(snapshot);
-            }
-            undoStack.clear();
-            var reversed = new ArrayDeque<EditSnapshot>(temp.size());
-            while (!temp.isEmpty()) reversed.push(temp.pop());
-            while (!reversed.isEmpty()) undoStack.push(reversed.pop());
-        }
+        while (undoStack.size() > MAX_UNDO) undoStack.removeLast();
         redoStack.clear();
         updateUndoRedoFlags();
     }

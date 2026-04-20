@@ -1,9 +1,10 @@
 package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.model.sequence.ClipEvaluator;
-import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
-import ax.xz.mri.model.hardware.HardwareLimits;
+import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
@@ -212,35 +213,51 @@ public class SequenceOverviewBar extends ResizableCanvas {
 
     private void drawCompressedWaveforms(GraphicsContext g, AxisScrubBar.Bounds bounds, double domain) {
         int pixelCount = (int) Math.max(1, Math.min(bounds.width(), 800));
-        var channels = new SignalChannel[] { SignalChannel.B1X, SignalChannel.GX, SignalChannel.GZ };
-        Color[] colours = { B1_COLOUR, GX_COLOUR, GZ_COLOUR };
-        double[] maxVals = { HardwareLimits.B1_MAX, HardwareLimits.GX_MAX, HardwareLimits.GZ_MAX };
+        var config = editSession.activeConfig.get();
+        if (config == null || config.fields().isEmpty()) return;
+
+        // One line per field-channel slot (STATIC fields contribute none).
+        var slots = new java.util.ArrayList<SequenceChannel>();
+        var maxes = new java.util.ArrayList<Double>();
+        var colours = new java.util.ArrayList<Color>();
+        for (var field : config.fields()) {
+            int count = field.kind().channelCount();
+            double fMax = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+            if (fMax == 0) fMax = 1;
+            for (int sub = 0; sub < count; sub++) {
+                slots.add(SequenceChannel.ofField(field.name(), sub));
+                maxes.add(fMax);
+                colours.add(colourForKind(field.kind(), field.name()));
+            }
+        }
 
         int currentRevision = editSession.revision.get();
-        if (currentRevision != cachedRevision || pixelCount != cachedPixelCount) {
+        if (currentRevision != cachedRevision || pixelCount != cachedPixelCount || cachedChannelSamples == null
+                || cachedChannelSamples.length != slots.size()) {
             cachedRevision = currentRevision;
             cachedPixelCount = pixelCount;
-            cachedChannelSamples = new double[channels.length][pixelCount];
+            cachedChannelSamples = new double[slots.size()][pixelCount];
             var clips = editSession.clips;
-            for (int ch = 0; ch < channels.length; ch++) {
+            for (int ch = 0; ch < slots.size(); ch++) {
                 for (int px = 0; px < pixelCount; px++) {
                     double t = (px / (double) pixelCount) * domain;
-                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(clips, channels[ch], t);
+                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(clips, slots.get(ch), t);
                 }
             }
         }
 
         double xScale = bounds.width() / pixelCount;
-        for (int ch = 0; ch < channels.length; ch++) {
-            g.setStroke(colours[ch].deriveColor(0, 1, 1, 0.6));
+        double midY = bounds.y() + bounds.height() / 2;
+        double halfH = bounds.height() * 0.35;
+
+        for (int ch = 0; ch < slots.size(); ch++) {
+            g.setStroke(colours.get(ch).deriveColor(0, 1, 1, 0.6));
             g.setLineWidth(0.8);
             g.beginPath();
 
-            double midY = bounds.y() + bounds.height() / 2;
-            double halfH = bounds.height() * 0.35;
-
+            double fMax = maxes.get(ch);
             for (int px = 0; px < pixelCount; px++) {
-                double normalised = maxVals[ch] > 0 ? cachedChannelSamples[ch][px] / maxVals[ch] : 0;
+                double normalised = fMax > 0 ? cachedChannelSamples[ch][px] / fMax : 0;
                 normalised = Math.max(-1, Math.min(1, normalised));
                 double y = midY - normalised * halfH;
 
@@ -251,12 +268,18 @@ public class SequenceOverviewBar extends ResizableCanvas {
         }
     }
 
-    private Color channelColour(SignalChannel ch) {
-        return switch (ch) {
-            case B1X, B1Y -> B1_COLOUR;
-            case GX -> GX_COLOUR;
-            case GZ -> GZ_COLOUR;
-            case RF_GATE -> GATE_COLOUR;
+    private Color channelColour(SequenceChannel ch) {
+        if (ch.isRfGate()) return GATE_COLOUR;
+        var field = editSession.fieldForChannel(ch);
+        if (field == null) return GX_COLOUR;
+        return colourForKind(field.kind(), field.name());
+    }
+
+    private static Color colourForKind(AmplitudeKind kind, String fieldName) {
+        return switch (kind) {
+            case QUADRATURE -> B1_COLOUR;
+            case REAL -> (Math.abs(fieldName.hashCode()) % 2 == 0) ? GX_COLOUR : GZ_COLOUR;
+            case STATIC -> GX_COLOUR; // unreachable — no channels
         };
     }
 }

@@ -32,7 +32,7 @@ import java.util.UUID;
  */
 public record SignalClip(
     String id,
-    SignalChannel channel,
+    SequenceChannel channel,
     ClipShape shape,
     @JsonProperty("start_time") double startTime,
     double duration,
@@ -49,15 +49,7 @@ public record SignalClip(
         if (id == null) id = UUID.randomUUID().toString();
         params = params == null ? Map.of() : Map.copyOf(params);
         splinePoints = splinePoints == null ? List.of() : List.copyOf(splinePoints);
-        // Default mediaDuration to duration if not set (backward compat)
         if (mediaDuration <= 0) mediaDuration = duration;
-    }
-
-    /** Legacy constructor without media offset/duration. */
-    public SignalClip(String id, SignalChannel channel, ClipShape shape,
-                      double startTime, double duration, double amplitude,
-                      Map<String, Double> params, List<SplinePoint> splinePoints) {
-        this(id, channel, shape, startTime, duration, amplitude, 0, duration, params, splinePoints);
     }
 
     /** End time in microseconds on the timeline. */
@@ -112,7 +104,7 @@ public record SignalClip(
         return new SignalClip(id, channel, newShape, startTime, duration, amplitude, mediaOffset, mediaDuration, params, splinePoints);
     }
 
-    public SignalClip withChannel(SignalChannel newChannel) {
+    public SignalClip withChannel(SequenceChannel newChannel) {
         return new SignalClip(id, newChannel, shape, startTime, duration, amplitude, mediaOffset, mediaDuration, params, splinePoints);
     }
 }

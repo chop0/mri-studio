@@ -2,7 +2,10 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.ClipShape;
-import ax.xz.mri.model.sequence.SignalChannel;
+import ax.xz.mri.model.sequence.SequenceChannel;
+import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.ui.framework.ResizableCanvas;
@@ -95,7 +98,7 @@ public class ClipTrackCanvas extends ResizableCanvas {
     // Clip creation via drag
     private double createClipStartTime;
     private double createClipCurrentX; // for preview
-    private SignalChannel createClipChannel;
+    private SequenceChannel createClipChannel;
 
     // Track reorder
     private int reorderSourceTrack = -1;
@@ -160,10 +163,13 @@ public class ClipTrackCanvas extends ResizableCanvas {
 
     private double trackWeight(EditorTrack track) {
         if (track.collapsed()) return 0; // collapsed tracks use fixed height, not weight
-        return switch (track.channel()) {
-            case B1X, B1Y -> WEIGHT_B1;
-            case GX, GZ -> WEIGHT_G;
-            case RF_GATE -> WEIGHT_GATE;
+        if (track.channel().isRfGate()) return WEIGHT_GATE;
+        var field = editSession.fieldForChannel(track.channel());
+        if (field == null) return WEIGHT_G;
+        return switch (field.kind()) {
+            case QUADRATURE -> WEIGHT_B1;   // RF-like (2-channel I/Q)
+            case REAL -> WEIGHT_G;          // gradient-like (1-channel)
+            case STATIC -> WEIGHT_G;        // unreachable — STATIC has no channels
         };
     }
 
@@ -247,32 +253,53 @@ public class ClipTrackCanvas extends ResizableCanvas {
         return -(y - mid) / (h * 0.42) * max;
     }
 
-    private double channelMax(SignalChannel ch) {
-        return switch (ch) {
-            case B1X, B1Y -> HardwareLimits.B1_MAX * 1.15;
-            case GX -> HardwareLimits.GX_MAX * 1.15;
-            case GZ -> HardwareLimits.GZ_MAX * 1.15;
-            case RF_GATE -> 1.15;
+    /** Y-axis half-span for a track — the displayed range is ±channelMax, with a 15% headroom. */
+    private double channelMax(SequenceChannel ch) {
+        if (ch.isRfGate()) return 1.15;
+        var field = editSession.fieldForChannel(ch);
+        if (field != null) {
+            double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+            if (m > 0) return m * 1.15;
+        }
+        // Config-less sequence — fall back to a generous unit range.
+        return 1.15;
+    }
+
+    /** Hardware limit line shown as a red dashed overlay. Mirrors channelMax / 1.15. */
+    private double channelHardwareMax(SequenceChannel ch) {
+        if (ch.isRfGate()) return 1.0;
+        var field = editSession.fieldForChannel(ch);
+        if (field != null) {
+            double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+            if (m > 0) return m;
+        }
+        return 1.0;
+    }
+
+    private Color channelColour(SequenceChannel ch) {
+        if (ch.isRfGate()) return GATE_COLOUR;
+        var field = editSession.fieldForChannel(ch);
+        if (field == null) return GX_COLOUR;
+        return switch (field.kind()) {
+            case QUADRATURE -> B1_COLOUR;
+            case REAL -> fieldPaletteColour(field.name());
+            case STATIC -> GX_COLOUR;
         };
     }
 
-    private double channelHardwareMax(SignalChannel ch) {
-        return switch (ch) {
-            case B1X, B1Y -> HardwareLimits.B1_MAX;
-            case GX -> HardwareLimits.GX_MAX;
-            case GZ -> HardwareLimits.GZ_MAX;
-            case RF_GATE -> 1.0;
-        };
+    /** Deterministic colour for a REAL field, cycled by field name. */
+    private static Color fieldPaletteColour(String fieldName) {
+        int h = Math.abs(fieldName.hashCode()) % REAL_PALETTE.length;
+        return REAL_PALETTE[h];
     }
 
-    private Color channelColour(SignalChannel ch) {
-        return switch (ch) {
-            case B1X, B1Y -> B1_COLOUR;
-            case GX -> GX_COLOUR;
-            case GZ -> GZ_COLOUR;
-            case RF_GATE -> GATE_COLOUR;
-        };
-    }
+    private static final Color[] REAL_PALETTE = {
+        Color.web("#2e7d32"), // GX-like green
+        Color.web("#7b1fa2"), // GZ-like purple
+        Color.web("#c2185b"), // magenta
+        Color.web("#00897b"), // teal
+        Color.web("#ef6c00"), // deep orange
+    };
 
     // ==================== Hit testing ====================
 
@@ -556,7 +583,7 @@ public class ClipTrackCanvas extends ResizableCanvas {
             double yMin = Math.min(rubberStartY, rubberEndY);
             double yMax = Math.max(rubberStartY, rubberEndY);
             // Collect channels from tracks that overlap the Y range
-            var channels = new LinkedHashSet<SignalChannel>();
+            var channels = new LinkedHashSet<SequenceChannel>();
             var tracks = currentTracks();
             for (int i = 0; i < tracks.size(); i++) {
                 double tTop = trackTop(i);
@@ -614,17 +641,28 @@ public class ClipTrackCanvas extends ResizableCanvas {
                 toggleCollapse.setOnAction(e -> editSession.setTrackCollapsed(track.id(), !track.collapsed()));
                 menu.getItems().add(toggleCollapse);
 
-                // Add track for each channel
+                // Add track for each available channel in the active config
                 var addMenu = new Menu("Add Track");
-                for (var ch : SignalChannel.values()) {
-                    var item = new MenuItem(ch.label());
-                    item.setOnAction(e -> editSession.addTrack(ch));
-                    addMenu.getItems().add(item);
+                var config = editSession.activeConfig.get();
+                if (config != null) {
+                    for (var field : config.fields()) {
+                        int count = field.kind().channelCount();
+                        for (int sub = 0; sub < count; sub++) {
+                            var channel = SequenceChannel.ofField(field.name(), sub);
+                            String label = EditorTrack.labelFor(field.name(), field.kind(), sub);
+                            var item = new MenuItem(label);
+                            item.setOnAction(e -> editSession.addTrack(channel, label));
+                            addMenu.getItems().add(item);
+                        }
+                    }
                 }
+                var gateItem = new MenuItem("RF Gate");
+                gateItem.setOnAction(e -> editSession.addTrack(SequenceChannel.RF_GATE, "RF Gate"));
+                addMenu.getItems().add(gateItem);
                 menu.getItems().addAll(addMenu);
 
                 var removeItem = new MenuItem("Remove Track");
-                long count = currentTracks().stream().filter(t -> t.channel() == track.channel()).count();
+                long count = currentTracks().stream().filter(t -> t.channel().equals(track.channel())).count();
                 removeItem.setDisable(count <= 1);
                 removeItem.setOnAction(e -> editSession.removeTrack(track.id()));
                 menu.getItems().add(removeItem);
@@ -767,7 +805,7 @@ public class ClipTrackCanvas extends ResizableCanvas {
             }
 
             // Zero line
-            if (track.channel() != SignalChannel.RF_GATE) {
+            if (!track.channel().isRfGate()) {
                 double zeroY = valueToY(ti, 0);
                 g.setStroke(Color.color(0, 0, 0, 0.08));
                 g.setLineWidth(0.5);
@@ -777,7 +815,7 @@ public class ClipTrackCanvas extends ResizableCanvas {
             }
 
             // Hardware limit lines
-            if (track.channel() != SignalChannel.RF_GATE) {
+            if (!track.channel().isRfGate()) {
                 double hwMax = channelHardwareMax(track.channel());
                 double yPos = valueToY(ti, hwMax);
                 double yNeg = valueToY(ti, -hwMax);
@@ -1010,11 +1048,27 @@ public class ClipTrackCanvas extends ResizableCanvas {
         return String.format("%.0f μs", micros);
     }
 
-    private String formatAxisValue(double value, SignalChannel channel) {
-        return switch (channel) {
-            case B1X, B1Y -> String.format("%.0f μT", value * 1e6);
-            case GX, GZ   -> String.format("%.0f mT/m", value * 1e3);
-            case RF_GATE  -> String.format("%.1f", value);
-        };
+    /**
+     * Format a value for axis display, using the eigenfield's declared units
+     * and an appropriate SI prefix.
+     */
+    private String formatAxisValue(double value, SequenceChannel channel) {
+        if (channel.isRfGate()) return String.format("%.1f", value);
+        return formatWithUnits(value, editSession.unitsForChannel(channel));
+    }
+
+    /** Pick an SI prefix (μ, m, k, M) that keeps the numeric part in 0.1…1000. */
+    private static String formatWithUnits(double value, String units) {
+        if (units == null || units.isEmpty()) return String.format("%.3g", value);
+        double abs = Math.abs(value);
+        if (abs == 0) return "0 " + units;
+        if (abs >= 1e9)  return String.format("%.2f G%s", value / 1e9, units);
+        if (abs >= 1e6)  return String.format("%.2f M%s", value / 1e6, units);
+        if (abs >= 1e3)  return String.format("%.2f k%s", value / 1e3, units);
+        if (abs >= 1)    return String.format("%.2f %s",  value,       units);
+        if (abs >= 1e-3) return String.format("%.2f m%s", value * 1e3, units);
+        if (abs >= 1e-6) return String.format("%.2f μ%s", value * 1e6, units);
+        if (abs >= 1e-9) return String.format("%.2f n%s", value * 1e9, units);
+        return String.format("%.3g %s", value, units);
     }
 }

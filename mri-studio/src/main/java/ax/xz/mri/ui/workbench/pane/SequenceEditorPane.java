@@ -47,6 +47,10 @@ public final class SequenceEditorPane extends WorkbenchPane {
             trackCanvas.setActiveCreationShape(toolPalette.activeClipShape())
         );
 
+        // Give the edit session access to the project repository so it can resolve
+        // eigenfield metadata (e.g. display units) on demand.
+        editSession.setRepositorySupplier(() -> paneContext.session().project.repository.get());
+
         editSession.revision.addListener((obs, o, n) -> notifyTitleChanged());
 
         // --- Buttons ---
@@ -133,6 +137,13 @@ public final class SequenceEditorPane extends WorkbenchPane {
         session.stale.addListener((obs, o, n) -> {
             if (paneContext.controller() != null) paneContext.controller().markTimelineStale(n);
         });
+        // Push the active config into the edit session so:
+        //  1. tracks rebuild to match the field layout,
+        //  2. track Y-axis scale uses FieldDefinition.maxAmplitude,
+        //  3. default clip amplitudes are computed from the active config,
+        //  4. inspector displays eigenfield-declared units.
+        editSession.applyActiveConfig(session.activeConfig.get());
+        session.activeConfig.addListener((obs, o, n) -> editSession.applyActiveConfig(n));
     }
 
     public void setOnTitleChanged(Runnable callback) { this.onTitleChanged = callback; }

@@ -1,5 +1,9 @@
 package ax.xz.mri.model.sequence;
 
+import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.SimulationConfig;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -7,9 +11,12 @@ import java.util.List;
  * Bakes a {@link ClipSequence} into flat {@link Segment}/{@link PulseSegment} arrays
  * that the MRI simulator can consume.
  *
- * <p>The baking process evaluates every clip at each discrete time step, summing
- * overlapping clips per channel (additive semantics), and produces a single segment
- * spanning the entire sequence duration.
+ * <p>Baking walks the time axis at {@code seq.dt()}, evaluates every clip at each
+ * step (overlaps combine additively), and emits a single {@link PulseSegment}
+ * spanning the full duration. The per-step {@link PulseStep#controls()} array is
+ * sized to {@code config.totalChannelCount()} and ordered to match the
+ * {@link SimulationConfig#fields()} list — the same order the simulator uses when
+ * interpreting controls through each {@link FieldDefinition}.
  */
 public final class ClipBaker {
     private ClipBaker() {}
@@ -20,11 +27,16 @@ public final class ClipBaker {
     /**
      * Bake a clip sequence into simulator-compatible segments and pulse data.
      *
-     * <p>Produces a single segment covering the full duration. The time step {@code dt}
-     * is taken from the clip sequence. RF gate is evaluated as a continuous channel;
-     * steps where gate >= 0.5 are considered RF-on.
+     * <p>RF gate is evaluated from {@link SequenceChannel#RF_GATE}; steps where
+     * gate ≥ 0.5 are considered RF-on.
+     *
+     * @param seq    the editable clip sequence
+     * @param config the simulation config describing the channel layout.
+     *               May be {@code null} for a sequence with no active config —
+     *               in that case only the RF gate channel is baked and the
+     *               control array is empty.
      */
-    public static BakeResult bake(ClipSequence seq) {
+    public static BakeResult bake(ClipSequence seq, SimulationConfig config) {
         if (seq == null || seq.totalDuration() <= 0 || seq.dt() <= 0) {
             return new BakeResult(List.of(), List.of());
         }
@@ -34,134 +46,107 @@ public final class ClipBaker {
         int totalSteps = seq.totalSteps();
         var clips = seq.clips();
 
-        // Evaluate every step
+        // Pre-compute the channel layout from the config.
+        int totalChannels = config == null ? 0 : config.totalChannelCount();
+        var channelSlots = new SequenceChannel[totalChannels];
+        if (config != null) {
+            int cursor = 0;
+            for (var field : config.fields()) {
+                int count = field.kind().channelCount();
+                for (int sub = 0; sub < count; sub++) {
+                    channelSlots[cursor + sub] = SequenceChannel.ofField(field.name(), sub);
+                }
+                cursor += count;
+            }
+        }
+
         var steps = new ArrayList<PulseStep>(totalSteps);
         for (int i = 0; i < totalSteps; i++) {
             double t = i * dtMicros;
-            double b1x = ClipEvaluator.evaluateChannel(clips, SignalChannel.B1X, t);
-            double b1y = ClipEvaluator.evaluateChannel(clips, SignalChannel.B1Y, t);
-            double gx  = ClipEvaluator.evaluateChannel(clips, SignalChannel.GX, t);
-            double gz  = ClipEvaluator.evaluateChannel(clips, SignalChannel.GZ, t);
-            double gate = ClipEvaluator.evaluateChannel(clips, SignalChannel.RF_GATE, t);
-            steps.add(new PulseStep(new double[]{b1x, b1y, gx, gz}, gate));
+            double[] controls = new double[totalChannels];
+            for (int k = 0; k < totalChannels; k++) {
+                controls[k] = ClipEvaluator.evaluateChannel(clips, channelSlots[k], t);
+            }
+            double gate = ClipEvaluator.evaluateChannel(clips, SequenceChannel.RF_GATE, t);
+            steps.add(new PulseStep(controls, gate));
         }
 
-        // Count RF-on and free-precession steps
         int nPulse = 0;
-        for (var step : steps) {
-            if (step.isRfOn()) nPulse++;
-        }
+        for (var step : steps) if (step.isRfOn()) nPulse++;
         int nFree = totalSteps - nPulse;
 
-        // Single segment spanning the entire duration
         var segment = new Segment(dtSeconds, nFree, nPulse);
         var pulseSegment = new PulseSegment(List.copyOf(steps));
-
         return new BakeResult(List.of(segment), List.of(pulseSegment));
     }
 
     /**
-     * Convert a legacy segment-based sequence into a clip sequence.
+     * Convert a legacy segment-based sequence into a clip sequence, using the
+     * supplied config's field order to map control-array indices back to
+     * {@link SequenceChannel}s. Each contiguous non-zero run on a channel
+     * becomes a {@link ClipShape#CONSTANT} clip.
      *
-     * <p>Each non-zero channel region in the step data is converted to a CONSTANT clip.
-     * This provides a starting point for editing legacy/imported sequences in the clip editor.
+     * @param segments   legacy segments (provides dt + step counts)
+     * @param pulse      per-segment pulse data (the actual control values)
+     * @param config     the config whose field layout corresponds to the legacy
+     *                   control-array layout; if {@code null}, only the RF gate
+     *                   is decoded
      */
-    public static ClipSequence fromLegacy(List<Segment> segments, List<PulseSegment> pulse) {
+    public static ClipSequence fromLegacy(List<Segment> segments, List<PulseSegment> pulse, SimulationConfig config) {
         if (segments.isEmpty() || pulse.isEmpty()) {
             return new ClipSequence(10.0, 300.0, List.of());
         }
 
-        // Compute total duration and use the first segment's dt
-        double dt = segments.getFirst().dt() * 1e6; // convert to μs
+        double dt = segments.getFirst().dt() * 1e6; // μs
         double totalDuration = 0;
-        for (var seg : segments) {
-            totalDuration += seg.totalSteps() * seg.dt() * 1e6;
-        }
+        for (var seg : segments) totalDuration += seg.totalSteps() * seg.dt() * 1e6;
 
-        // Walk through all steps and extract contiguous non-zero regions per channel
-        var clips = new ArrayList<SignalClip>();
-        var channels = SignalChannel.values();
-
-        double time = 0;
-        for (int segIdx = 0; segIdx < segments.size() && segIdx < pulse.size(); segIdx++) {
-            var seg = segments.get(segIdx);
-            var steps = pulse.get(segIdx).steps();
-            double segDt = seg.dt() * 1e6;
-
-            for (int stepIdx = 0; stepIdx < steps.size(); stepIdx++) {
-                var step = steps.get(stepIdx);
-                double stepTime = time + stepIdx * segDt;
-
-                for (var ch : channels) {
-                    double value = channelValue(step, ch);
-                    if (Math.abs(value) > 1e-15) {
-                        // Find the extent of this constant-value run
-                        int runEnd = stepIdx + 1;
-                        while (runEnd < steps.size() &&
-                               Math.abs(channelValue(steps.get(runEnd), ch) - value) < 1e-15) {
-                            runEnd++;
-                        }
-                        double clipDuration = (runEnd - stepIdx) * segDt;
-                        clips.add(new SignalClip(
-                            null, ch, ClipShape.CONSTANT,
-                            stepTime, clipDuration, value,
-                            null, null
-                        ));
-                        // Skip ahead (outer loop will continue from runEnd for other channels,
-                        // but we need to track per-channel — this is simplified)
-                    }
+        // Build the channel layout matching the legacy control array.
+        var slots = new ArrayList<SequenceChannel>();
+        if (config != null) {
+            for (var field : config.fields()) {
+                int count = field.kind().channelCount();
+                for (int sub = 0; sub < count; sub++) {
+                    slots.add(SequenceChannel.ofField(field.name(), sub));
                 }
             }
-            time += steps.size() * segDt;
         }
+        // The RF gate is always present (decoded from PulseStep.rfGate()).
+        slots.add(SequenceChannel.RF_GATE);
 
-        // Deduplicate — the simple approach above may create overlapping clips
-        // For legacy conversion, a simpler approach: one constant clip per step per non-zero channel
-        // Actually, let's do a cleaner per-channel sweep
-        clips.clear();
-        time = 0;
-        for (var ch : channels) {
+        var clips = new ArrayList<SignalClip>();
+        for (int slotIndex = 0; slotIndex < slots.size(); slotIndex++) {
+            var slot = slots.get(slotIndex);
+            boolean isGate = slot.isRfGate();
+            int controlIndex = isGate ? -1 : slotIndex;
             double channelTime = 0;
             for (int segIdx = 0; segIdx < segments.size() && segIdx < pulse.size(); segIdx++) {
                 var seg = segments.get(segIdx);
-                var steps = pulse.get(segIdx).steps();
+                var stepList = pulse.get(segIdx).steps();
                 double segDt = seg.dt() * 1e6;
-
                 int stepIdx = 0;
-                while (stepIdx < steps.size()) {
-                    double value = channelValue(steps.get(stepIdx), ch);
-                    if (Math.abs(value) < 1e-15) {
-                        stepIdx++;
-                        continue;
-                    }
-                    // Start of a non-zero region — find its extent
+                while (stepIdx < stepList.size()) {
+                    double value = isGate ? stepList.get(stepIdx).rfGate() : stepList.get(stepIdx).control(controlIndex);
+                    if (Math.abs(value) < 1e-15) { stepIdx++; continue; }
                     int runStart = stepIdx;
-                    while (stepIdx < steps.size() &&
-                           Math.abs(channelValue(steps.get(stepIdx), ch) - value) < 1e-15) {
+                    while (stepIdx < stepList.size()) {
+                        double v = isGate ? stepList.get(stepIdx).rfGate() : stepList.get(stepIdx).control(controlIndex);
+                        if (Math.abs(v - value) >= 1e-15) break;
                         stepIdx++;
                     }
                     double clipStart = channelTime + runStart * segDt;
                     double clipDuration = (stepIdx - runStart) * segDt;
                     clips.add(new SignalClip(
-                        null, ch, ClipShape.CONSTANT,
+                        null, slot, ClipShape.CONSTANT,
                         clipStart, clipDuration, value,
+                        0, clipDuration,
                         null, null
                     ));
                 }
-                channelTime += steps.size() * segDt;
+                channelTime += stepList.size() * segDt;
             }
         }
 
         return new ClipSequence(dt, totalDuration, clips);
-    }
-
-    private static double channelValue(PulseStep step, SignalChannel ch) {
-        return switch (ch) {
-            case B1X -> step.control(0);
-            case B1Y -> step.control(1);
-            case GX  -> step.control(2);
-            case GZ  -> step.control(3);
-            case RF_GATE -> step.rfGate();
-        };
     }
 }

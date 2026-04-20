@@ -173,10 +173,10 @@ public final class ClipEvaluator {
      * Evaluate the total signal on a given channel at time {@code t} by summing
      * all overlapping clips (additive overlap semantics).
      */
-    public static double evaluateChannel(List<SignalClip> clips, SignalChannel channel, double t) {
+    public static double evaluateChannel(List<SignalClip> clips, SequenceChannel channel, double t) {
         double sum = 0;
         for (var clip : clips) {
-            if (clip.channel() == channel) {
+            if (clip.channel().equals(channel)) {
                 sum += evaluate(clip, t);
             }
         }

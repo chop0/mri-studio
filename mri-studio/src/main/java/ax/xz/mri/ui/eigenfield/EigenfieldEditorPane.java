@@ -53,6 +53,7 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
     private final TextArea scriptEditor = new TextArea();
     private final TextField nameField = new TextField();
     private final TextField descriptionField = new TextField();
+    private final TextField unitsField = new TextField();
     private final Label statusLabel = new Label("Ready");
     private final Button compileButton = new Button("Compile");
 
@@ -121,8 +122,19 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         });
         descriptionField.setOnAction(e -> applyDescription(descriptionField.getText()));
 
+        unitsField.setPromptText("T · T/m · Hz · …");
+        unitsField.setPrefColumnCount(7);
+        unitsField.setTooltip(new javafx.scene.control.Tooltip(
+            "Units of the amplitude scalar. Scaling an amplitude A produces the field A · unitVector."));
+        unitsField.focusedProperty().addListener((obs, o, focused) -> {
+            if (!focused) applyUnits(unitsField.getText());
+        });
+        unitsField.setOnAction(e -> applyUnits(unitsField.getText()));
+
         var row = new HBox(8,
             new Label("Name"), nameField,
+            new Separator(Orientation.VERTICAL),
+            new Label("Units"), unitsField,
             new Separator(Orientation.VERTICAL),
             new Label("Description"), descriptionField);
         row.setAlignment(Pos.CENTER_LEFT);
@@ -227,6 +239,7 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         try {
             nameField.setText(document.name());
             descriptionField.setText(document.description() == null ? "" : document.description());
+            unitsField.setText(document.units() == null ? "" : document.units());
             scriptEditor.setText(document.script());
         } finally {
             suppressScriptListener = false;
@@ -264,6 +277,16 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         if (newDescription.equals(document.description())) return;
         pushUndo();
         document = document.withDescription(newDescription);
+        persistToRepository();
+        notifyTitleChanged();
+    }
+
+    private void applyUnits(String newUnits) {
+        if (newUnits == null) newUnits = "";
+        newUnits = newUnits.strip();
+        if (newUnits.equals(document.units())) return;
+        pushUndo();
+        document = document.withUnits(newUnits);
         persistToRepository();
         notifyTitleChanged();
     }
