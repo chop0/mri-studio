@@ -46,6 +46,7 @@ public final class ProjectSessionViewModel {
     private java.util.function.Consumer<SimulationConfigDocument> onSimConfigOpened;
     private java.util.function.Consumer<SequenceDocument> onSequenceOpened;
     private java.util.function.BiConsumer<ProjectNodeId, ax.xz.mri.project.ActiveCapture> onCaptureOpened;
+    private java.util.function.Consumer<EigenfieldDocument> onEigenfieldOpened;
 
     public void setOnSimConfigOpened(java.util.function.Consumer<SimulationConfigDocument> callback) {
         this.onSimConfigOpened = callback;
@@ -55,6 +56,9 @@ public final class ProjectSessionViewModel {
     }
     public void setOnCaptureOpened(java.util.function.BiConsumer<ProjectNodeId, ax.xz.mri.project.ActiveCapture> callback) {
         this.onCaptureOpened = callback;
+    }
+    public void setOnEigenfieldOpened(java.util.function.Consumer<EigenfieldDocument> callback) {
+        this.onEigenfieldOpened = callback;
     }
 
     public ProjectSessionViewModel() {
@@ -306,9 +310,9 @@ public final class ProjectSessionViewModel {
                     onSimConfigOpened.accept(simConfig);
                 }
             }
-            case EigenfieldDocument _ -> {
-                // Eigenfields have no editor yet — just show in inspector
+            case EigenfieldDocument eigen -> {
                 inspector.inspectedNodeId.set(nodeId);
+                if (onEigenfieldOpened != null) onEigenfieldOpened.accept(eigen);
             }
             case SimulationDocument simulation -> openNode(simulation.captureId());
             case ImportLinkDocument _ -> {
@@ -409,7 +413,8 @@ public final class ProjectSessionViewModel {
         var fieldMap = capture != null ? capture.field() : null;
         var params = ax.xz.mri.service.ObjectFactory.extractFromFieldMap(fieldMap);
         var fields = ax.xz.mri.service.ObjectFactory.fieldsFromImport(fieldMap, repo);
-        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
+        double referenceB0 = ax.xz.mri.service.ObjectFactory.extractB0(fieldMap);
+        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, referenceB0, fields);
 
         var configDoc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()),
@@ -469,7 +474,7 @@ public final class ProjectSessionViewModel {
             ax.xz.mri.service.ObjectFactory.PhysicsParams params) {
         var repo = repository.get();
         var fields = template.createFields(repo);
-        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, fields);
+        var config = ax.xz.mri.service.ObjectFactory.buildConfig(params, template.referenceB0Tesla(), fields);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         repo.addSimConfig(doc);
@@ -478,24 +483,25 @@ public final class ProjectSessionViewModel {
         return doc;
     }
 
-    /** Create a standalone eigenfield document. */
-    public EigenfieldDocument createEigenfield(String name, String description, ax.xz.mri.model.simulation.EigenfieldPreset preset) {
+    /** Create a standalone eigenfield document with the given script as the starter. */
+    public EigenfieldDocument createEigenfield(String name, String description, String script) {
         var repo = repository.get();
-        var ef = ax.xz.mri.service.ObjectFactory.findOrCreateEigenfield(repo, name, description, preset);
+        var ef = ax.xz.mri.service.ObjectFactory.findOrCreateEigenfield(repo, name, description, script);
         explorer.refresh();
         saveProjectQuietly();
         return ef;
     }
 
-    /** Create an empty sequence. */
+    /** Create an empty sequence with a single zero-channel segment. */
     public ax.xz.mri.project.SequenceDocument createEmptySequence(String name) {
         var repo = repository.get();
+        // Zero channels — the sequence editor will grow steps when a sim-config is associated.
+        var steps = new java.util.ArrayList<ax.xz.mri.model.sequence.PulseStep>();
+        for (int i = 0; i < 100; i++) steps.add(new ax.xz.mri.model.sequence.PulseStep(new double[0], 0));
         var doc = new ax.xz.mri.project.SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,
             List.of(new ax.xz.mri.model.sequence.Segment(1e-5, 0, 100)),
-            List.of(new ax.xz.mri.model.sequence.PulseSegment(
-                java.util.Collections.nCopies(100, new ax.xz.mri.model.sequence.PulseStep(0, 0, 0, 0, 0))
-            ))
+            List.of(new ax.xz.mri.model.sequence.PulseSegment(steps))
         );
         repo.addSequence(doc);
         explorer.refresh();

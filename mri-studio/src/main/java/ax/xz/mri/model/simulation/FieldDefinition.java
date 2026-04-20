@@ -1,6 +1,7 @@
 package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.project.ProjectNodeId;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
@@ -8,58 +9,52 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *
  * <p>Each field contributes to the total B-field at every spatial point:
  * <pre>B(r, t) = Σ_i  a_i(t) · E_i(r)</pre>
- * where {@code a_i(t)} is the time-varying amplitude and {@code E_i(r)} is the
+ * where {@code a_i(t)} is the time-varying amplitude (interpreted as a
+ * baseband signal at {@link #carrierHz}) and {@code E_i(r)} is the field's
  * eigenfield (spatial shape at unit amplitude).
  *
- * <p>Amplitudes carry physical units (Tesla for B0/RF, T/m for gradients).
- * The eigenfield is normalised to unit peak; amplitude scales it.
- *
- * <p>Baseband frequency determines control channel count:
- * <ul>
- *   <li>DC (0 Hz) → 1 control channel (scalar amplitude)</li>
- *   <li>Non-DC → 2 control channels (I/Q quadrature)</li>
- * </ul>
+ * <p>The number of pulse-sequence control scalars per time step is driven
+ * by {@link #kind}: {@code STATIC} = 0, {@code REAL} = 1, {@code QUADRATURE} = 2.
+ * Amplitudes carry physical units (Tesla, or T/m for gradients).
  */
 public record FieldDefinition(
-	String name,
-	@JsonProperty("control_type") ControlType controlType,
-	@JsonProperty("min_amplitude") double minAmplitude,
-	@JsonProperty("max_amplitude") double maxAmplitude,
-	@JsonProperty("baseband_frequency_hz") double basebandFrequencyHz,
-	@JsonProperty("eigenfield_id") ProjectNodeId eigenfieldId
+    String name,
+    @JsonProperty("eigenfield_id") ProjectNodeId eigenfieldId,
+    AmplitudeKind kind,
+    @JsonProperty("carrier_hz") double carrierHz,
+    @JsonProperty("min_amplitude") double minAmplitude,
+    @JsonProperty("max_amplitude") double maxAmplitude
 ) {
-	/** True if this field operates at DC (baseband = 0 Hz). */
-	public boolean isDC() {
-		return basebandFrequencyHz == 0.0;
-	}
+    public FieldDefinition {
+        if (kind == null) kind = AmplitudeKind.REAL;
+    }
 
-	/** Number of pulse-sequence control channels this field requires. */
-	public int controlChannelCount() {
-		if (controlType == ControlType.BINARY) return 0;
-		return isDC() ? 1 : 2;
-	}
+    @JsonIgnore
+    public int channelCount() {
+        return kind.channelCount();
+    }
 
-	public FieldDefinition withName(String newName) {
-		return new FieldDefinition(newName, controlType, minAmplitude, maxAmplitude, basebandFrequencyHz, eigenfieldId);
-	}
+    public FieldDefinition withName(String newName) {
+        return new FieldDefinition(newName, eigenfieldId, kind, carrierHz, minAmplitude, maxAmplitude);
+    }
 
-	public FieldDefinition withControlType(ControlType newControlType) {
-		return new FieldDefinition(name, newControlType, minAmplitude, maxAmplitude, basebandFrequencyHz, eigenfieldId);
-	}
+    public FieldDefinition withKind(AmplitudeKind newKind) {
+        return new FieldDefinition(name, eigenfieldId, newKind, carrierHz, minAmplitude, maxAmplitude);
+    }
 
-	public FieldDefinition withMinAmplitude(double newMin) {
-		return new FieldDefinition(name, controlType, newMin, maxAmplitude, basebandFrequencyHz, eigenfieldId);
-	}
+    public FieldDefinition withCarrierHz(double newCarrierHz) {
+        return new FieldDefinition(name, eigenfieldId, kind, newCarrierHz, minAmplitude, maxAmplitude);
+    }
 
-	public FieldDefinition withMaxAmplitude(double newMax) {
-		return new FieldDefinition(name, controlType, minAmplitude, newMax, basebandFrequencyHz, eigenfieldId);
-	}
+    public FieldDefinition withMinAmplitude(double newMin) {
+        return new FieldDefinition(name, eigenfieldId, kind, carrierHz, newMin, maxAmplitude);
+    }
 
-	public FieldDefinition withBasebandFrequencyHz(double newFreq) {
-		return new FieldDefinition(name, controlType, minAmplitude, maxAmplitude, newFreq, eigenfieldId);
-	}
+    public FieldDefinition withMaxAmplitude(double newMax) {
+        return new FieldDefinition(name, eigenfieldId, kind, carrierHz, minAmplitude, newMax);
+    }
 
-	public FieldDefinition withEigenfieldId(ProjectNodeId newId) {
-		return new FieldDefinition(name, controlType, minAmplitude, maxAmplitude, basebandFrequencyHz, newId);
-	}
+    public FieldDefinition withEigenfieldId(ProjectNodeId newId) {
+        return new FieldDefinition(name, newId, kind, carrierHz, minAmplitude, maxAmplitude);
+    }
 }

@@ -98,7 +98,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 			configStripContainer.getChildren().add(new Label("No simulation config"));
 		} else {
 			configStripContainer.getChildren().addAll(
-				new Label("B\u2080: " + String.format("%.4f T", cfg.b0Tesla())),
+				new Label("B\u2080: " + String.format("%.4f T", cfg.referenceB0Tesla())),
 				new Label("T\u2081: " + String.format("%.0f ms", cfg.t1Ms())),
 				new Label("T\u2082: " + String.format("%.0f ms", cfg.t2Ms())),
 				new Label(cfg.fields().size() + " fields")

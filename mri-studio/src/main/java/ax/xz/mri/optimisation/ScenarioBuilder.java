@@ -23,6 +23,27 @@ public final class ScenarioBuilder {
     ) {
     }
 
+    /**
+     * Estimate per-channel bounds by taking the max absolute amplitude across the
+     * seed pulse for each channel index. Each returned pair is {@code {−max, +max}}.
+     * Used only when the legacy import path can't supply explicit bounds.
+     */
+    private static double[][] inferBounds(List<PulseSegment> pulse, int channels, boolean upper) {
+        double[] max = new double[channels];
+        for (var seg : pulse) for (var step : seg.steps()) {
+            for (int k = 0; k < Math.min(channels, step.channelCount()); k++) {
+                max[k] = Math.max(max[k], Math.abs(step.control(k)));
+            }
+        }
+        double[][] bounds = new double[channels][2];
+        for (int k = 0; k < channels; k++) {
+            double m = max[k] > 0 ? max[k] * 2.0 : 1.0;
+            bounds[k][0] = -m;
+            bounds[k][1] = +m;
+        }
+        return bounds;
+    }
+
     public OptimisationRequest buildRequest(BlochData data, BuildOptions options) {
         var scenario = data.scenarios().get(options.seedScenarioName());
         if (scenario == null) throw new IllegalArgumentException("Unknown scenario: " + options.seedScenarioName());
@@ -32,8 +53,12 @@ public final class ScenarioBuilder {
         var pulse = scenario.pulses().get(iterationKey);
         if (pulse == null) throw new IllegalArgumentException("Unknown iteration: " + iterationKey);
 
+        // Total per-step control scalars = all channel amplitudes + RF gate.
+        int perStepControls = pulse.isEmpty() || pulse.get(0).steps().isEmpty()
+            ? 1
+            : pulse.get(0).steps().get(0).channelCount() + 1;
         var fullSpecs = data.field().segments.stream()
-            .map(segment -> new ControlSegmentSpec(segment.dt(), segment.nFree(), segment.nPulse(), 5))
+            .map(segment -> new ControlSegmentSpec(segment.dt(), segment.nFree(), segment.nPulse(), perStepControls))
             .toList();
         List<PulseSegment> optimisedSegments = PulseParameterCodec.copySegments(pulse);
         SequenceTemplate template;
@@ -73,8 +98,9 @@ public final class ScenarioBuilder {
             optimisedSegments,
             parameterisation,
             PulseParameterCodec.defaultFreeMask(template, options.freeMaskMode()),
-            PulseParameterCodec.defaultLowerBounds(template),
-            PulseParameterCodec.defaultUpperBounds(template),
+            // Channel bounds inferred from the seed pulse's maximum amplitude per channel.
+            PulseParameterCodec.defaultLowerBounds(template, inferBounds(pulse, perStepControls - 1, false)),
+            PulseParameterCodec.defaultUpperBounds(template, inferBounds(pulse, perStepControls - 1, true)),
             ContinuationSchedule.defaultForIterations(options.totalIterations()),
             options.snapshotEvery(),
             new AtomicBoolean(false)

@@ -18,8 +18,8 @@ class MaskedParameterOptimiserTest {
     void optimisesOnlyFreeControlsAndRecordsSnapshots() {
         var template = SequenceTemplate.finiteTrain(List.of(new ControlSegmentSpec(1e-6, 2, 0, 5)));
         var initialSegments = List.of(new PulseSegment(List.of(
-            new PulseStep(0.0, 0.0, 0.0, 0.0, 0.0),
-            new PulseStep(0.0, 0.0, 0.0, 0.0, 0.0)
+            new PulseStep(new double[]{0.0, 0.0, 0.0, 0.0}, 0.0),
+            new PulseStep(new double[]{0.0, 0.0, 0.0, 0.0}, 0.0)
         )));
         double[] target = new double[]{0.25, 0.0, 0.0, 0.0, 0.0, -0.4, 0.0, 0.0, 0.0, 0.0};
         boolean[] freeMask = new boolean[]{true, false, false, false, false, true, false, false, false, false};

@@ -1,6 +1,5 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.simulation.EigenfieldPreset;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
@@ -54,9 +53,9 @@ class ExplorerTreeBuilderTest {
     void treeShowsEigenfieldsGroup() {
         var repository = ProjectRepository.untitled();
         repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", EigenfieldPreset.BIOT_SAVART_HELMHOLTZ));
+            new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", "return Vec3.of(0, 0, 1);"));
         repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-2"), "RF Loop", "RF coil", EigenfieldPreset.UNIFORM_B_PERP));
+            new ProjectNodeId("ef-2"), "RF Loop", "RF coil", "return Vec3.of(1, 0, 0);"));
 
         var root = ExplorerTreeBuilder.build(repository);
 

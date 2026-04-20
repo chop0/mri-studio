@@ -2,7 +2,9 @@ package ax.xz.mri.optimisation;
 
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.sequence.PulseSegment;
+import ax.xz.mri.optimisation.ProblemGeometry.DynamicFieldSamples;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Pure Java CPU objective engine. */
@@ -21,16 +23,17 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
     public double[] gradient(OptimisationProblem problem, List<PulseSegment> segments) {
         double[] base = PulseParameterCodec.flatten(segments);
         double[] gradient = new double[base.length];
+        double epsilon = Math.max(finiteDifferenceFactor, 1e-12);
         for (int index = 0; index < base.length; index++) {
-            double scale = Math.max(gradientScaleForControlIndex(index), 1e-6);
-            double epsilon = scale * finiteDifferenceFactor;
+            double scale = Math.max(Math.abs(base[index]), 1.0);
+            double h = scale * epsilon;
             double original = base[index];
-            base[index] = original + epsilon;
+            base[index] = original + h;
             double upper = evaluateInternal(problem, PulseParameterCodec.split(base, problem.sequenceTemplate()), false).value();
-            base[index] = original - epsilon;
+            base[index] = original - h;
             double lower = evaluateInternal(problem, PulseParameterCodec.split(base, problem.sequenceTemplate()), false).value();
             base[index] = original;
-            gradient[index] = (upper - lower) / (2.0 * epsilon);
+            gradient[index] = (upper - lower) / (2.0 * h);
         }
         return gradient;
     }
@@ -44,36 +47,46 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
         return super.evaluateInternal(problem, segments, captureSignal);
     }
 
+    /**
+     * Build a {@link ProblemGeometry} from the runtime {@link FieldMap},
+     * flattening the 2D {@code [r][z]} spatial arrays to one point per
+     * {@code (ri, zi)} sample. Per-dynamic-field eigenfield samples are
+     * flattened in the same order.
+     */
     public static ProblemGeometry geometryFromFieldMap(FieldMap field, int radialStride, int axialStride) {
         int rs = Math.max(1, radialStride);
         int zs = Math.max(1, axialStride);
         int nr = (field.rMm.length + rs - 1) / rs;
         int nz = (field.zMm.length + zs - 1) / zs;
         int count = nr * nz;
+
         double[] mx0 = new double[count];
         double[] my0 = new double[count];
         double[] mz0 = new double[count];
-        double[] dBz = new double[count];
-        double[] gxm = new double[count];
-        double[] gzm = new double[count];
-        double[] b1s = new double[count];
+        double[] staticBz = new double[count];
         double[] wIn = new double[count];
         double[] wOut = new double[count];
+
+        int dynamicCount = field.dynamicFields == null ? 0 : field.dynamicFields.size();
+        double[][] exFlat = new double[dynamicCount][count];
+        double[][] eyFlat = new double[dynamicCount][count];
+        double[][] ezFlat = new double[dynamicCount][count];
+
         double sliceHalf = field.sliceHalf == null ? 0.005 : field.sliceHalf;
         int offset = 0;
         for (int ri = 0; ri < field.rMm.length; ri += rs) {
-            double rM = Math.abs(field.rMm[ri]) * 1e-3;
             for (int zi = 0; zi < field.zMm.length; zi += zs) {
                 double zM = field.zMm[zi] * 1e-3;
                 mx0[offset] = field.mx0 == null ? 0.0 : field.mx0[ri][zi];
                 my0[offset] = field.my0 == null ? 0.0 : field.my0[ri][zi];
                 mz0[offset] = field.mz0 == null ? 1.0 : field.mz0[ri][zi];
-                dBz[offset] = field.dBzUt[ri][zi] * 1e-6;
-                gxm[offset] = rM + zM * zM / (2.0 * field.b0n);
-                gzm[offset] = zM + sq(rM / 2.0) / (2.0 * field.b0n);
-                b1s[offset] = 1.0
-                    + 0.12 * sq(rM / (field.fovX / 2.0))
-                    + 0.08 * sq(zM / (field.fovZ / 2.0));
+                staticBz[offset] = field.staticBz == null ? 0.0 : field.staticBz[ri][zi];
+                for (int d = 0; d < dynamicCount; d++) {
+                    var df = field.dynamicFields.get(d);
+                    exFlat[d][offset] = df.ex[ri][zi];
+                    eyFlat[d][offset] = df.ey[ri][zi];
+                    ezFlat[d][offset] = df.ez[ri][zi];
+                }
                 double geomIn = Math.abs(zM) < sliceHalf ? 1.0 : 0.0;
                 double mp0 = Math.hypot(mx0[offset], my0[offset]);
                 wIn[offset] = field.mx0 == null ? geomIn : (geomIn > 0 && mp0 > 0.3 ? 1.0 : 0.0);
@@ -101,6 +114,16 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
         }
         double sMax = 0.0;
         for (double value : wIn) sMax += value;
-        return new ProblemGeometry(mx0, my0, mz0, dBz, gxm, gzm, b1s, wIn, wOut, sMax, field.gamma, field.t1, field.t2, nr, nz);
+
+        var dynamics = new ArrayList<DynamicFieldSamples>(dynamicCount);
+        for (int d = 0; d < dynamicCount; d++) {
+            var df = field.dynamicFields.get(d);
+            dynamics.add(new DynamicFieldSamples(
+                df.name, df.channelOffset, df.channelCount, df.deltaOmega,
+                exFlat[d], eyFlat[d], ezFlat[d]));
+        }
+
+        return new ProblemGeometry(mx0, my0, mz0, staticBz, wIn, wOut, List.copyOf(dynamics),
+            sMax, field.gamma, field.t1, field.t2, nr, nz);
     }
 }

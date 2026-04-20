@@ -36,11 +36,17 @@ class PulseParameterCodecTest {
     }
 
     @Test
-    void defaultBoundsUseHardwareLimitsAndBinaryGateRange() {
+    void defaultBoundsApplyPerChannelBoundsAndBinaryGateRange() {
         var template = OptimisationTestSupport.finiteTemplateFor(OptimisationTestSupport.pulseA());
 
-        double[] lower = PulseParameterCodec.defaultLowerBounds(template);
-        double[] upper = PulseParameterCodec.defaultUpperBounds(template);
+        double[][] channelBounds = {
+            {-OptimisationHardwareLimits.B1_MAX, OptimisationHardwareLimits.B1_MAX},
+            {-OptimisationHardwareLimits.B1_MAX, OptimisationHardwareLimits.B1_MAX},
+            {-OptimisationHardwareLimits.GX_MAX, OptimisationHardwareLimits.GX_MAX},
+            {-OptimisationHardwareLimits.GZ_MAX, OptimisationHardwareLimits.GZ_MAX}
+        };
+        double[] lower = PulseParameterCodec.defaultLowerBounds(template, channelBounds);
+        double[] upper = PulseParameterCodec.defaultUpperBounds(template, channelBounds);
 
         assertEquals(template.flattenedLength(), lower.length);
         assertEquals(-OptimisationHardwareLimits.B1_MAX, lower[0], 0.0);

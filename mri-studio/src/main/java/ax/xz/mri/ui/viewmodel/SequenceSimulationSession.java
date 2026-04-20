@@ -77,18 +77,30 @@ public final class SequenceSimulationSession {
         if (orig == null) return;
 
         simulating.set(true);
+        try {
+            // Bake the clip sequence
+            var doc = editSession.toDocument();
+            var segments = doc.segments();
+            var pulse = doc.pulse();
+            var data = BlochDataFactory.build(config, segments, projectSession.repository.get());
 
-        // Bake the clip sequence
-        var doc = editSession.toDocument();
-        var segments = doc.segments();
-        var pulse = doc.pulse();
-        var data = BlochDataFactory.build(config, segments, projectSession.repository.get());
+            // Push through the single unified path — this is the ONLY place data reaches the panes
+            studioSession.loadSimulationResult(data, pulse);
 
-        // Push through the single unified path — this is the ONLY place data reaches the panes
-        studioSession.loadSimulationResult(data, pulse);
-
-        stale.set(false);
-        simulating.set(false);
+            stale.set(false);
+        } catch (RuntimeException | Error ex) {
+            // Surface the failure through the Messages pane so the loading indicator clears
+            // (via the finally block) and the user sees a readable explanation instead of an
+            // unhandled exception on the JavaFX thread.
+            String configName = activeConfigDoc.get() != null ? activeConfigDoc.get().name() : "(unnamed)";
+            studioSession.messages.logError(
+                "Simulation",
+                "Simulation failed for config '" + configName + "': " + ex.getMessage(),
+                ex);
+            // Leave `stale` set — the current data is not trustworthy for this sequence.
+        } finally {
+            simulating.set(false);
+        }
     }
 
     private void scheduleSimulation() {

@@ -36,7 +36,7 @@ public final class ImportViewerProvider implements DocumentEditorProvider {
 		if (capture.field() != null) {
 			root.getChildren().add(detailLabel(String.format(
 				"B\u2080: %.4f T  |  T\u2081: %.0f ms  |  T\u2082: %.0f ms",
-				capture.field().b0n, capture.field().t1 * 1e3, capture.field().t2 * 1e3)));
+				capture.field().b0Ref, capture.field().t1 * 1e3, capture.field().t2 * 1e3)));
 			root.getChildren().add(detailLabel(String.format(
 				"FOV: %.1f \u00d7 %.1f mm  |  Grid: %d \u00d7 %d",
 				capture.field().fovZ * 1e3, capture.field().fovX * 1e3,

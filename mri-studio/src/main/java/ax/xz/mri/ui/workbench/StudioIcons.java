@@ -36,6 +36,7 @@ public final class StudioIcons {
             case OPTIMISATION_CONFIG -> drawSliders(g);
             case BOOKMARK -> drawPin(g);
             case EIGENFIELD -> drawEigenfield(g);
+            case MESSAGES -> drawMessages(g);
         }
         return canvas;
     }
@@ -133,6 +134,27 @@ public final class StudioIcons {
         g.strokeOval(3.2, 2.0, 5.2, 5.2);
         g.strokeLine(5.8, 7.2, 5.8, 11.3);
         g.strokeLine(5.8, 11.3, 4.2, 12.5);
+        g.setStroke(INK);
+    }
+
+    /** Messages icon — speech bubble with three dashes inside. */
+    private static void drawMessages(GraphicsContext g) {
+        g.setFill(SOFT);
+        g.fillRoundRect(1.5, 2.5, 11, 7.5, 2.4, 2.4);
+        g.strokeRoundRect(1.5, 2.5, 11, 7.5, 2.4, 2.4);
+        // Tail
+        g.fillPolygon(
+            new double[]{4.2, 6.2, 4.2},
+            new double[]{10.0, 10.0, 12.2},
+            3);
+        g.strokePolygon(
+            new double[]{4.2, 6.2, 4.2},
+            new double[]{10.0, 10.0, 12.2},
+            3);
+        g.setStroke(ACCENT);
+        g.strokeLine(3.6, 5.1, 10.4, 5.1);
+        g.strokeLine(3.6, 6.7, 10.4, 6.7);
+        g.strokeLine(3.6, 8.3, 8.4, 8.3);
         g.setStroke(INK);
     }
 

@@ -323,10 +323,15 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
                     double t = analysis.segmentWindows().get(segmentIndex).startMicros();
                     for (var step : steps) {
                         if (t >= viewStart - viewSpan * 0.01 && t <= viewEnd + viewSpan * 0.01) {
+                            // Legacy channel layout preserved for the timeline viewer:
+                            //   0,1 = b1x, b1y (I, Q) → displayed as magnitude when RF gate is on
+                            //   2   = gx
+                            //   3   = gz
                             double value = switch (trackIndex) {
-                                case 0 -> step.effectiveB1Magnitude();
-                                case 1 -> step.gz();
-                                default -> step.gx();
+                                case 0 -> step.isRfOn()
+                                    ? Math.hypot(step.control(0), step.control(1)) : 0.0;
+                                case 1 -> step.control(3);  // Gz
+                                default -> step.control(2); // Gx
                             };
                             double x = timeToPixel(t);
                             double y = track.centered()

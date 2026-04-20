@@ -52,8 +52,14 @@ public final class SnapshotExporter {
 
     private static List<Object> encodePulse(List<PulseSegment> segments) {
         return segments.stream().map(segment -> segment.steps().stream()
-            .map(step -> List.of(step.b1x(), step.b1y(), step.gx(), step.gz(), step.rfGate()))
-            .map(values -> (Object) values)
+            .map(SnapshotExporter::encodeStep)
             .toList()).map(values -> (Object) values).toList();
+    }
+
+    private static List<Object> encodeStep(ax.xz.mri.model.sequence.PulseStep step) {
+        var out = new java.util.ArrayList<Object>(step.channelCount() + 1);
+        for (var v : step.controls()) out.add(v);
+        out.add(step.rfGate());
+        return out;
     }
 }

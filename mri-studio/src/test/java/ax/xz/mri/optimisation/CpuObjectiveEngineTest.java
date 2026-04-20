@@ -73,7 +73,7 @@ class CpuObjectiveEngineTest {
     @Test
     void rfPenaltyOnlyCaseHasExpectedClosedFormValue() {
         var segments = List.of(new PulseSegment(List.of(
-            new PulseStep(OptimisationHardwareLimits.B1_MAX, 0.0, 0.0, 0.0, 1.0)
+            new PulseStep(new double[]{OptimisationHardwareLimits.B1_MAX, 0.0, 0.0, 0.0}, 1.0)
         )));
         var template = SequenceTemplate.finiteTrain(List.of(new ControlSegmentSpec(1.0, 0, 1, 5)));
         var geometry = OptimisationTestSupport.singlePointGeometry(0.0, 0.0, 0.0);
@@ -85,7 +85,10 @@ class CpuObjectiveEngineTest {
 
         var evaluation = engine.evaluate(problem, segments);
 
-        assertEquals(1.0, evaluation.value(), 1e-9);
+        // RF penalty normalisation: value = rfPower / rfPowerRef.
+        // rfPower = (I² + Q²) · dt = B1_MAX² · 1.0. rfPowerRef = 1 per QUADRATURE pair · rfTimeRef = 1.0.
+        double expected = OptimisationHardwareLimits.B1_MAX * OptimisationHardwareLimits.B1_MAX;
+        assertEquals(expected, evaluation.value(), 1e-12);
         assertEquals(2, evaluation.signalTrace().points().size());
     }
 }

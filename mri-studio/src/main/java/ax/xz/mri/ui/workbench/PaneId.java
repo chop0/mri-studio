@@ -13,8 +13,10 @@ public enum PaneId {
     TRACE_PHASE("Phase Trace"),
     TRACE_POLAR("Polar Trace"),
     TRACE_MAGNITUDE("Magnitude Trace"),
+    MESSAGES("Messages"),
     SEQUENCE_EDITOR("Sequence Editor"),
-    SIM_CONFIG_EDITOR("Simulation Config");
+    SIM_CONFIG_EDITOR("Simulation Config"),
+    EIGENFIELD_EDITOR("Eigenfield Editor");
 
     private final String title;
 

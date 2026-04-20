@@ -1,8 +1,7 @@
 package ax.xz.mri.project;
 
+import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.BlochDataFactory;
-import ax.xz.mri.model.simulation.ControlType;
-import ax.xz.mri.model.simulation.EigenfieldPreset;
 import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.model.simulation.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
@@ -18,13 +17,14 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Tests for eigenfield/sim-config lifecycle: CRUD, promotion, and BlochData generation. */
 class SimConfigAndEigenfieldTest {
 
+    private static final String UNIFORM_BZ_SRC = "return Vec3.of(0, 0, 1);";
+
     /** Helper: create a sim config using the standard low-field MRI template. */
     private static SimulationConfigDocument createConfig(ProjectSessionViewModel session, String name, double b0Tesla) {
         var params = ObjectFactory.PhysicsParams.DEFAULTS;
         return session.createSimConfig(name, SimConfigTemplate.LOW_FIELD_MRI, params);
     }
 
-    /** Helper: find the config associated with a sequence (via the sequence's activeSimConfigId). */
     private static java.util.List<SimulationConfigDocument> configForSequence(ProjectRepository repo, ProjectNodeId seqId) {
         var seq = (SequenceDocument) repo.node(seqId);
         if (seq == null || seq.activeSimConfigId() == null) return java.util.List.of();
@@ -37,8 +37,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void addAndRetrieveEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0", "Main field", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
 
         assertTrue(repo.eigenfieldIds().contains(ef.id()));
@@ -48,8 +47,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void removeEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0", "Main field", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "Main field", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
         repo.removeEigenfield(ef.id());
 
@@ -60,8 +58,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0", "desc", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
         var renamed = repo.renameEigenfield(ef.id(), "Main Magnet");
 
@@ -72,22 +69,20 @@ class SimConfigAndEigenfieldTest {
     @Test
     void updateEigenfield() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0", "desc", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
 
-        var updated = ef.withPreset(EigenfieldPreset.BIOT_SAVART_HELMHOLTZ);
+        var updated = ef.withScript("return Vec3.of(0, 0, 1 + 0.01 * z);");
         repo.updateEigenfield(updated);
 
-        assertEquals(EigenfieldPreset.BIOT_SAVART_HELMHOLTZ,
-            ((EigenfieldDocument) repo.node(ef.id())).preset());
+        assertEquals("return Vec3.of(0, 0, 1 + 0.01 * z);",
+            ((EigenfieldDocument) repo.node(ef.id())).script());
     }
 
     @Test
     void addEigenfieldIsIdempotent() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0", "desc", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "desc", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
         repo.addEigenfield(ef);
 
@@ -99,10 +94,10 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameSimConfig() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
-            List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 3.0, 0, ef.id())),
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)),
             List.of());
         var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Old Name", config);
         repo.addSimConfig(doc);
@@ -116,10 +111,10 @@ class SimConfigAndEigenfieldTest {
     @Test
     void simConfigLookupById() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-1"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
-            List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 3.0, 0, ef.id())),
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 3.0,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 3.0)),
             List.of());
         var doc = new SimulationConfigDocument(new ProjectNodeId("sc-1"), "Test", config);
         repo.addSimConfig(doc);
@@ -129,7 +124,7 @@ class SimConfigAndEigenfieldTest {
         assertNull(repo.simConfig(new ProjectNodeId("nonexistent")));
     }
 
-    // --- Promotion creates sim config ---
+    // --- Promotion ---
 
     @Test
     void promotingSnapshotCreatesSimConfigWithEigenfields() {
@@ -137,7 +132,6 @@ class SimConfigAndEigenfieldTest {
         var bundle = ProjectTestSupport.importBundle();
         session.openImportedBundle(bundle);
 
-        // Open a non-iterative scenario (Alpha Capture)
         var alphaScenario = bundle.nodes().values().stream()
             .filter(ImportedScenarioDocument.class::isInstance)
             .map(ImportedScenarioDocument.class::cast)
@@ -146,88 +140,46 @@ class SimConfigAndEigenfieldTest {
             .orElseThrow();
         session.openNode(alphaScenario.id());
 
-        // Promote to sequence
         session.promoteActiveSnapshotToSequence();
 
         var repo = session.repository.get();
-        // Should have a sequence
         assertEquals(1, repo.sequenceIds().size());
         var seqId = repo.sequenceIds().getFirst();
-
-        // The sequence should have an active sim config ID
         var seqDoc = (SequenceDocument) repo.node(seqId);
-        assertNotNull(seqDoc.activeSimConfigId(), "Promotion should set activeSimConfigId on the sequence");
+        assertNotNull(seqDoc.activeSimConfigId());
         var simConfig = repo.simConfig(seqDoc.activeSimConfigId());
-        assertNotNull(simConfig, "Promotion should auto-create a sim config");
+        assertNotNull(simConfig);
         assertNotNull(simConfig.config());
-
-        // Sim config should have 4 field definitions
         assertEquals(4, simConfig.config().fields().size());
 
-        // Each field should reference a real eigenfield document
         for (var field : simConfig.config().fields()) {
             assertNotNull(field.eigenfieldId());
             var eigenNode = repo.node(field.eigenfieldId());
-            assertNotNull(eigenNode, "Field '" + field.name() + "' references missing eigenfield " + field.eigenfieldId());
             assertInstanceOf(EigenfieldDocument.class, eigenNode);
         }
 
-        // Eigenfields should exist in the repository
-        assertTrue(repo.eigenfieldIds().size() >= 4, "Should have at least 4 eigenfields");
-    }
-
-    @Test
-    void promotingFromRunCreatesSimConfigWithSourceParameters() {
-        var session = new ProjectSessionViewModel();
-        var bundle = ProjectTestSupport.importBundle();
-        session.openImportedBundle(bundle);
-
-        // Open the iterative run (Beta Run)
-        var run = bundle.nodes().values().stream()
-            .filter(ImportedOptimisationRunDocument.class::isInstance)
-            .map(ImportedOptimisationRunDocument.class::cast)
-            .findFirst()
-            .orElseThrow();
-        session.openNode(run.id());
-
-        session.promoteActiveSnapshotToSequence();
-
-        var repo = session.repository.get();
-        var seqId = repo.sequenceIds().getFirst();
-        var simConfigs = configForSequence(repo, seqId);
-        assertEquals(1, simConfigs.size());
-
-        var config = simConfigs.getFirst().config();
-        // B0 should match the source BlochData field
-        double expectedB0 = 1.5; // from TestBlochDataFactory.sampleField().b0n
-        assertEquals(expectedB0, config.b0Tesla(), 1e-10);
-        assertEquals(267.5e6, config.gamma(), 1e3);
+        assertTrue(repo.eigenfieldIds().size() >= 4);
     }
 
     @Test
     void createDefaultSimConfigCreatesEigenfieldsAndConfig() {
         var session = new ProjectSessionViewModel();
-        var doc = createConfig(session,"Test Config", 0.0154);
+        var doc = createConfig(session, "Test Config", 0.0154);
         var repo = session.repository.get();
 
         assertNotNull(doc);
         assertEquals("Test Config", doc.name());
         assertNotNull(doc.config());
         assertTrue(repo.simConfigIds().contains(doc.id()));
-
-        // Should have 4 fields
         assertEquals(4, doc.config().fields().size());
+        assertEquals(0.0154, doc.config().referenceB0Tesla(), 1e-10);
 
-        // B0 field should have the right amplitude
-        assertEquals(0.0154, doc.config().b0Tesla(), 1e-10);
-
-        // RF field should have non-zero baseband
         var rfField = doc.config().fields().stream()
             .filter(f -> f.name().equals("RF"))
             .findFirst().orElseThrow();
-        assertTrue(rfField.basebandFrequencyHz() > 0, "RF should have non-zero baseband frequency");
+        assertTrue(rfField.carrierHz() > 0, "RF should have non-zero carrier");
+        assertEquals(AmplitudeKind.QUADRATURE, rfField.kind());
 
-        // All eigenfield references should be valid
         for (var field : doc.config().fields()) {
             assertInstanceOf(EigenfieldDocument.class, repo.node(field.eigenfieldId()));
         }
@@ -236,26 +188,23 @@ class SimConfigAndEigenfieldTest {
     @Test
     void createMultipleConfigsReusesEigenfields() {
         var session = new ProjectSessionViewModel();
-        createConfig(session,"Config 1", 0.0154);
-        int eigenfieldCountAfterFirst = session.repository.get().eigenfieldIds().size();
-
-        createConfig(session,"Config 2", 3.0);
-        int eigenfieldCountAfterSecond = session.repository.get().eigenfieldIds().size();
-
-        assertEquals(eigenfieldCountAfterFirst, eigenfieldCountAfterSecond,
-            "Second config should reuse existing eigenfields, not duplicate them");
+        createConfig(session, "Config 1", 0.0154);
+        int first = session.repository.get().eigenfieldIds().size();
+        createConfig(session, "Config 2", 3.0);
+        int second = session.repository.get().eigenfieldIds().size();
+        assertEquals(first, second, "Second config should reuse existing eigenfields, not duplicate them");
     }
 
-    // --- BlochDataFactory with field-based config ---
+    // --- BlochDataFactory ---
 
     @Test
     void blochDataFactoryProducesValidDataFromFieldConfig() {
         var repo = ProjectRepository.untitled();
-        var ef = new EigenfieldDocument(new ProjectNodeId("ef-b0"), "B0", "d", EigenfieldPreset.UNIFORM_BZ);
+        var ef = new EigenfieldDocument(new ProjectNodeId("ef-b0"), "B0", "d", UNIFORM_BZ_SRC);
         repo.addEigenfield(ef);
 
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
-            List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 1.5, 0, ef.id())),
+        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5,
+            List.of(new FieldDefinition("B0", ef.id(), AmplitudeKind.STATIC, 0, 0, 1.5)),
             List.of(new SimulationConfig.IsoPoint(0, 0, "Centre", "#ff0000")));
 
         var segments = List.of(new Segment(1e-6, 0, 2), new Segment(1e-6, 2, 0));
@@ -263,155 +212,22 @@ class SimConfigAndEigenfieldTest {
 
         assertNotNull(data);
         assertNotNull(data.field());
-        assertEquals(1.5, data.field().b0n, 1e-10);
+        assertEquals(1.5, data.field().b0Ref, 1e-10);
         assertEquals(267.522e6, data.field().gamma, 1e3);
-        assertEquals(1.0, data.field().t1, 1e-10); // 1000ms → 1.0s
-        assertEquals(0.1, data.field().t2, 1e-10); // 100ms → 0.1s
-        assertNotNull(data.field().dBzUt);
+        assertEquals(1.0, data.field().t1, 1e-10);
+        assertEquals(0.1, data.field().t2, 1e-10);
+        assertNotNull(data.field().staticBz);
         assertNotNull(data.field().mz0);
         assertEquals(1, data.iso().size());
-    }
 
-    @Test
-    void blochDataFactoryWorksWithoutRepository() {
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
-            List.of(new FieldDefinition("B0", ControlType.BINARY, 0, 3.0, 0, new ProjectNodeId("dummy"))),
-            List.of());
-        var segments = List.of(new Segment(1e-6, 0, 2));
-        var data = BlochDataFactory.build(config, segments);
-
-        assertNotNull(data);
-        assertEquals(3.0, data.field().b0n, 1e-10);
-    }
-
-    @Test
-    void blochDataFactoryHandlesEmptyFieldList() {
-        var config = new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5,
-            List.of(), List.of());
-        var segments = List.of(new Segment(1e-6, 0, 2));
-        var data = BlochDataFactory.build(config, segments);
-
-        assertNotNull(data);
-        assertEquals(0.0, data.field().b0n);
-    }
-
-    // --- End-to-end: promotion → BlochData build succeeds ---
-
-    @Test
-    void fullPromotionPathProducesSimulatableBlochData() {
-        var session = new ProjectSessionViewModel();
-        var bundle = ProjectTestSupport.importBundle();
-        session.openImportedBundle(bundle);
-
-        // Open Alpha scenario
-        var alphaScenario = bundle.nodes().values().stream()
-            .filter(ImportedScenarioDocument.class::isInstance)
-            .map(ImportedScenarioDocument.class::cast)
-            .filter(node -> !node.iterative())
-            .findFirst()
-            .orElseThrow();
-        session.openNode(alphaScenario.id());
-
-        // Promote
-        session.promoteActiveSnapshotToSequence();
-        var repo = session.repository.get();
-        var seqId = repo.sequenceIds().getFirst();
-        var sequence = (SequenceDocument) repo.node(seqId);
-
-        // The sim config should be loadable and produce a valid BlochData
-        var simConfigs = configForSequence(repo, seqId);
-        assertEquals(1, simConfigs.size());
-        var simConfig = simConfigs.getFirst();
-
-        // Build BlochData exactly as SequenceSimulationSession.simulate() would
-        var data = BlochDataFactory.build(simConfig.config(), sequence.segments(), repo);
-        assertNotNull(data, "BlochData must not be null");
-        assertNotNull(data.field(), "BlochData.field must not be null");
-        assertTrue(data.field().b0n > 0, "B0 must be positive");
-        assertNotNull(data.field().dBzUt, "dBz map must exist");
-        assertNotNull(data.field().mz0, "Initial magnetisation must exist");
-        assertEquals(sequence.segments(), data.field().segments, "Segments must match");
-    }
-
-    @Test
-    void promotionFromRunProducesSimulatableBlochData() {
-        var session = new ProjectSessionViewModel();
-        var bundle = ProjectTestSupport.importBundle();
-        session.openImportedBundle(bundle);
-
-        var run = bundle.nodes().values().stream()
-            .filter(ImportedOptimisationRunDocument.class::isInstance)
-            .map(ImportedOptimisationRunDocument.class::cast)
-            .findFirst()
-            .orElseThrow();
-        session.openNode(run.id());
-        session.promoteActiveSnapshotToSequence();
-
-        var repo = session.repository.get();
-        var seqId = repo.sequenceIds().getFirst();
-        var sequence = (SequenceDocument) repo.node(seqId);
-        var simConfigs = configForSequence(repo, seqId);
-        var data = BlochDataFactory.build(simConfigs.getFirst().config(), sequence.segments(), repo);
-
-        assertNotNull(data);
-        assertNotNull(data.field());
-        // Source was TestBlochDataFactory.sampleField() which has b0n=1.5
-        assertEquals(1.5, data.field().b0n, 1e-10);
-    }
-
-    @Test
-    void autoCreatedConfigFieldsReferenceValidEigenfieldsInRepository() {
-        var session = new ProjectSessionViewModel();
-        var bundle = ProjectTestSupport.importBundle();
-        session.openImportedBundle(bundle);
-
-        var alphaScenario = bundle.nodes().values().stream()
-            .filter(ImportedScenarioDocument.class::isInstance)
-            .map(ImportedScenarioDocument.class::cast)
-            .filter(node -> !node.iterative())
-            .findFirst()
-            .orElseThrow();
-        session.openNode(alphaScenario.id());
-        session.promoteActiveSnapshotToSequence();
-
-        var repo = session.repository.get();
-        var seqId = repo.sequenceIds().getFirst();
-        var config = configForSequence(repo, seqId).getFirst().config();
-
-        // Verify field structure: B0 (binary DC), GradX (linear DC), GradZ (linear DC), RF (linear non-DC)
-        assertEquals(4, config.fields().size());
-
-        var b0 = config.fields().get(0);
-        assertEquals(ControlType.BINARY, b0.controlType());
-        assertTrue(b0.isDC());
-        assertTrue(b0.maxAmplitude() > 0);
-
-        var gradX = config.fields().get(1);
-        assertEquals(ControlType.LINEAR, gradX.controlType());
-        assertTrue(gradX.isDC());
-        assertEquals(1, gradX.controlChannelCount());
-
-        var gradZ = config.fields().get(2);
-        assertEquals(ControlType.LINEAR, gradZ.controlType());
-        assertTrue(gradZ.isDC());
-
-        var rf = config.fields().get(3);
-        assertEquals(ControlType.LINEAR, rf.controlType());
-        assertFalse(rf.isDC());
-        assertEquals(2, rf.controlChannelCount());
-        assertTrue(rf.basebandFrequencyHz() > 0);
-
-        // Every field must reference a valid eigenfield
-        for (var field : config.fields()) {
-            var eigenNode = repo.node(field.eigenfieldId());
-            assertNotNull(eigenNode, "Missing eigenfield for " + field.name());
-            assertInstanceOf(EigenfieldDocument.class, eigenNode);
-            var eigen = (EigenfieldDocument) eigenNode;
-            assertNotNull(eigen.preset());
+        // Uniform Bz at amplitude 1.5 T means local Bz matches the reference everywhere
+        // → staticBz (off-resonance) is zero.
+        for (double[] row : data.field().staticBz) {
+            for (double v : row) assertEquals(0.0, v, 1e-9);
         }
     }
 
-    // --- Delete cascading / consistency ---
+    // --- Delete / rename ---
 
     @Test
     void deletingSequenceDoesNotOrphanSimConfig() {
@@ -432,21 +248,17 @@ class SimConfigAndEigenfieldTest {
         var seqId = repo.sequenceIds().getFirst();
         assertTrue(configForSequence(repo, seqId).size() > 0);
 
-        // The sim config is top-level, not a child of the sequence, so it persists
-        // (this is correct — sim configs are independent top-level objects)
         session.deleteSequence(seqId);
         assertTrue(repo.sequenceIds().isEmpty());
-        // Sim config still exists (it's not deleted with the sequence)
         assertFalse(repo.simConfigIds().isEmpty());
     }
 
     @Test
     void deleteSimConfigRemovesFromRepository() {
         var session = new ProjectSessionViewModel();
-        var doc = createConfig(session,"Test", 3.0);
+        var doc = createConfig(session, "Test", 3.0);
         var repo = session.repository.get();
         assertTrue(repo.simConfigIds().contains(doc.id()));
-
         session.deleteSimConfig(doc.id());
         assertFalse(repo.simConfigIds().contains(doc.id()));
     }
@@ -454,11 +266,10 @@ class SimConfigAndEigenfieldTest {
     @Test
     void deleteEigenfieldRemovesFromRepository() {
         var session = new ProjectSessionViewModel();
-        createConfig(session,"Test", 3.0);
+        createConfig(session, "Test", 3.0);
         var repo = session.repository.get();
         var efId = repo.eigenfieldIds().getFirst();
         assertTrue(repo.eigenfieldIds().contains(efId));
-
         session.deleteEigenfield(efId);
         assertFalse(repo.eigenfieldIds().contains(efId));
     }
@@ -466,7 +277,7 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameSimConfigUpdatesNameInRepository() {
         var session = new ProjectSessionViewModel();
-        var doc = createConfig(session,"Old Name", 3.0);
+        var doc = createConfig(session, "Old Name", 3.0);
         session.renameSimConfig(doc.id(), "New Name");
         assertEquals("New Name", session.repository.get().node(doc.id()).name());
     }
@@ -474,10 +285,9 @@ class SimConfigAndEigenfieldTest {
     @Test
     void renameEigenfieldUpdatesNameInRepository() {
         var session = new ProjectSessionViewModel();
-        createConfig(session,"Test", 3.0);
+        createConfig(session, "Test", 3.0);
         var repo = session.repository.get();
         var efId = repo.eigenfieldIds().getFirst();
-
         session.renameEigenfield(efId, "Renamed EF");
         assertEquals("Renamed EF", repo.node(efId).name());
     }

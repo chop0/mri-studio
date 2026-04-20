@@ -152,9 +152,10 @@ public final class LegacyImportService {
     }
 
     private static List<PulseSegment> copyPulse(List<PulseSegment> pulse) {
-        return pulse.stream().map(segment -> new PulseSegment(segment.steps().stream()
-            .map(step -> new ax.xz.mri.model.sequence.PulseStep(step.b1x(), step.b1y(), step.gx(), step.gz(), step.rfGate()))
-            .toList())).toList();
+        return pulse.stream()
+            .map(segment -> new PulseSegment(
+                segment.steps().stream().map(ax.xz.mri.model.sequence.PulseStep::copy).toList()))
+            .toList();
     }
 
     private static ProjectNodeId stableId(String prefix, String... parts) {

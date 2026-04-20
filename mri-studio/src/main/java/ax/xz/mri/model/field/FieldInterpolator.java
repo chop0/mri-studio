@@ -2,23 +2,19 @@ package ax.xz.mri.model.field;
 
 /**
  * Bilinear interpolation into the spatial field map.
- * Exact port of {@code getFieldAt()} and {@code bilerp()} from physics.ts.
+ *
+ * <p>Produces a {@link FieldPoint} with static Bz and per-dynamic-field
+ * eigenfield components at the requested (r, z). No shape formulas are
+ * hardcoded — every spatial dependence comes from the user-authored
+ * eigenfield scripts baked into {@link FieldMap#dynamicFields}.
  */
 public final class FieldInterpolator {
     private FieldInterpolator() {}
 
-    /**
-     * Evaluate all field quantities at position ({@code rMm}, {@code zMm}).
-     *
-     * @param rMm  radial position in millimetres (always non-negative)
-     * @param zMm  axial position in millimetres
-     */
     public static FieldPoint interpolate(FieldMap f, double rMm, double zMm) {
-        double rM  = Math.abs(rMm) * 1e-3;   // mm → m (for curvature terms)
-        double zM  = zMm * 1e-3;
-        double rm  = Math.abs(rMm);           // mm, used for grid lookup
+        double rm = Math.abs(rMm);
 
-        double dBz = bilerp(f.dBzUt, f.rMm, f.zMm, rm, zMm) * 1e-6;  // μT → T
+        double staticBz = f.staticBz != null ? bilerp(f.staticBz, f.rMm, f.zMm, rm, zMm) : 0.0;
 
         double mx0 = 0, my0 = 0, mz0 = 1;
         if (f.mx0 != null) {
@@ -27,24 +23,27 @@ public final class FieldInterpolator {
             mz0 = bilerp(f.mz0, f.rMm, f.zMm, rm, zMm);
         }
 
-        double B = f.b0n;
-        return new FieldPoint(
-            dBz, mx0, my0, mz0,
-            rM + zM * zM / (2 * B),                           // gxm
-            zM + (rM / 2) * (rM / 2) / (2 * B),              // gzm
-            1 + 0.12 * sq(rM / (f.fovX / 2))
-              + 0.08 * sq(zM / (f.fovZ / 2))                  // b1s
-        );
+        int n = f.dynamicFields == null ? 0 : f.dynamicFields.size();
+        double[] ex = new double[n];
+        double[] ey = new double[n];
+        double[] ez = new double[n];
+        for (int i = 0; i < n; i++) {
+            var df = f.dynamicFields.get(i);
+            ex[i] = bilerp(df.ex, f.rMm, f.zMm, rm, zMm);
+            ey[i] = bilerp(df.ey, f.rMm, f.zMm, rm, zMm);
+            ez[i] = bilerp(df.ez, f.rMm, f.zMm, rm, zMm);
+        }
+
+        return new FieldPoint(staticBz, mx0, my0, mz0, ex, ey, ez);
     }
 
     /**
      * Bilinear interpolation; clamps to grid edges.
-     * grid is indexed [r][z]; rArr and zArr are the axis sample positions.
+     * {@code grid} is indexed {@code [r][z]}; {@code rArr} and {@code zArr} are the axis sample positions.
      */
     public static double bilerp(double[][] grid, double[] rArr, double[] zArr, double r, double z) {
         int nr = rArr.length, nz = zArr.length;
         if (nr == 0 || nz == 0) return 0;
-        // Handle single-point grids (no interpolation needed)
         if (nr == 1 && nz == 1) return grid[0][0];
         double ri = nr > 1 ? (r - rArr[0]) / (rArr[nr - 1] - rArr[0]) * (nr - 1) : 0;
         double zi = nz > 1 ? (z - zArr[0]) / (zArr[nz - 1] - zArr[0]) * (nz - 1) : 0;
@@ -58,6 +57,4 @@ public final class FieldInterpolator {
              + (1 - fr) *      fz  * grid[r0][z1]
              +      fr  *      fz  * grid[r1][z1];
     }
-
-    private static double sq(double x) { return x * x; }
 }

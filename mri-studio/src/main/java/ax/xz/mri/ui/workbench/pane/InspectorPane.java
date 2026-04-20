@@ -138,7 +138,7 @@ public final class InspectorPane extends WorkbenchPane {
                 content.getChildren().add(infoLine("Name", simConfig.name()));
                 var cfg = simConfig.config();
                 if (cfg != null) {
-                    content.getChildren().add(infoLine("B₀", String.format("%.4f T", cfg.b0Tesla())));
+                    content.getChildren().add(infoLine("B₀ ref", String.format("%.4f T", cfg.referenceB0Tesla())));
                     content.getChildren().add(infoLine("T₁", String.format("%.0f ms", cfg.t1Ms())));
                     content.getChildren().add(infoLine("T₂", String.format("%.0f ms", cfg.t2Ms())));
                     content.getChildren().add(infoLine("Fields", String.valueOf(cfg.fields().size())));
@@ -152,8 +152,8 @@ public final class InspectorPane extends WorkbenchPane {
             case ax.xz.mri.project.EigenfieldDocument eigenfield -> {
                 content.getChildren().add(infoLine("Type", "Eigenfield"));
                 content.getChildren().add(infoLine("Name", eigenfield.name()));
-                content.getChildren().add(infoLine("Preset", eigenfield.preset().displayName()));
-                content.getChildren().add(infoLine("Description", eigenfield.description()));
+                content.getChildren().add(infoLine("Description",
+                    eigenfield.description() == null ? "" : eigenfield.description()));
             }
             case SimulationDocument simulation -> {
                 content.getChildren().add(infoLine("Type", "Simulation"));

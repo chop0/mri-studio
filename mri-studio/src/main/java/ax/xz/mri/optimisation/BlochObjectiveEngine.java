@@ -4,6 +4,7 @@ import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.SignalTrace;
+import ax.xz.mri.optimisation.ProblemGeometry.DynamicFieldSamples;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +42,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         var my = geometry.my0().clone();
         var mz = geometry.mz0().clone();
         var timeMicros = 0.0;
+        double tSeconds = 0.0;
         var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
         if (captureSignal) {
             signalPoints.add(new SignalTrace.Point(0.0, coherentSignalMagnitude(geometry.wIn(), mx, my)));
@@ -55,17 +57,19 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double gateBinary = 0.0;
         double totalDt = 0.0;
 
+        int quadratureChannels = countQuadratureChannels(geometry);
+
         for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
             var segment = segments.get(segmentIndex);
             var spec = problem.sequenceTemplate().segments().get(segmentIndex);
-            double[][] previousRf = new double[2][2];
+            double[][] previousQuad = new double[2][quadratureChannels];
             double previousGate = 0.0;
             boolean haveGate = false;
             for (int stepIndex = 0; stepIndex < spec.totalSteps(); stepIndex++) {
                 var step = segment.steps().get(stepIndex);
                 double dt = spec.dt();
                 totalDt += dt;
-                applyStep(geometry, step, dt, mx, my, mz, geometry.t1(), geometry.t2());
+                applyStep(geometry, step, dt, tSeconds, mx, my, mz, geometry.t1(), geometry.t2());
                 double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
                 double sx = weightedSum(geometry.wIn(), mx);
                 double sy = weightedSum(geometry.wIn(), my);
@@ -75,24 +79,29 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 jIn += sigGate * (sx * sx + sy * sy);
                 jOut += sigGate * (sxOut * sxOut + syOut * syOut);
                 powerOut += sigGate * powerOutStep;
-                rfPower += (step.b1x() * step.b1x() + step.b1y() * step.b1y()) * dt;
+                double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
+                rfPower += sumOfSquares(quadNow) * dt;
                 if (stepIndex >= 2) {
-                    double d2x = step.b1x() - 2.0 * previousRf[0][0] + previousRf[1][0];
-                    double d2y = step.b1y() - 2.0 * previousRf[0][1] + previousRf[1][1];
-                    rfSmooth += (d2x * d2x + d2y * d2y) * dt;
+                    double smooth = 0.0;
+                    for (int k = 0; k < quadratureChannels; k++) {
+                        double d2 = quadNow[k] - 2.0 * previousQuad[0][k] + previousQuad[1][k];
+                        smooth += d2 * d2;
+                    }
+                    rfSmooth += smooth * dt;
                 }
                 if (haveGate) {
                     double dg = step.rfGate() - previousGate;
                     gateSwitch += dg * dg * dt;
                 }
                 gateBinary += step.rfGate() * (1.0 - step.rfGate()) * dt;
-                previousRf[1][0] = previousRf[0][0];
-                previousRf[1][1] = previousRf[0][1];
-                previousRf[0][0] = step.b1x();
-                previousRf[0][1] = step.b1y();
+                for (int k = 0; k < quadratureChannels; k++) {
+                    previousQuad[1][k] = previousQuad[0][k];
+                    previousQuad[0][k] = quadNow[k];
+                }
                 previousGate = step.rfGate();
                 haveGate = true;
                 timeMicros += dt * 1e6;
+                tSeconds += dt;
                 if (captureSignal) {
                     signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * coherentSignalMagnitude(geometry.wIn(), mx, my)));
                 }
@@ -102,7 +111,8 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double signalRef = Math.max(geometry.sMax() * geometry.sMax(), 1.0);
         double powerRef = Math.max(geometry.sMax(), 1.0);
         double rfTimeRef = Math.max(totalDt, 1e-12);
-        double rfPowerRef = OptimisationHardwareLimits.B1_MAX * OptimisationHardwareLimits.B1_MAX * rfTimeRef;
+        double rfRef = referenceRfPower(geometry) * rfTimeRef;
+        double rfPowerRef = Math.max(rfRef, 1e-30);
 
         double value = -(
             jIn / signalRef
@@ -130,6 +140,11 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         for (int point = 0; point < geometry.pointCount(); point++) {
             cycleMaps[point] = identity4();
         }
+        double tCycle = 0.0;
+        for (int segmentIndex = 0; segmentIndex < prefixSegments; segmentIndex++) {
+            var spec = template.segments().get(segmentIndex);
+            tCycle += spec.dt() * spec.totalSteps();
+        }
         for (int segmentIndex = prefixSegments; segmentIndex < segments.size(); segmentIndex++) {
             var segment = segments.get(segmentIndex);
             var spec = template.segments().get(segmentIndex);
@@ -137,8 +152,9 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 var step = segment.steps().get(stepIndex);
                 double dt = spec.dt();
                 for (int point = 0; point < geometry.pointCount(); point++) {
-                    cycleMaps[point] = multiply(stepMatrix(geometry, point, step, dt), cycleMaps[point]);
+                    cycleMaps[point] = multiply(stepMatrix(geometry, point, step, dt, tCycle), cycleMaps[point]);
                 }
+                tCycle += dt;
             }
         }
 
@@ -165,11 +181,13 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         var prefixMx = geometry.mx0().clone();
         var prefixMy = geometry.my0().clone();
         var prefixMz = geometry.mz0().clone();
+        double tPrefix = 0.0;
         for (int segmentIndex = 0; segmentIndex < prefixSegments; segmentIndex++) {
             var segment = segments.get(segmentIndex);
             var spec = template.segments().get(segmentIndex);
             for (var step : segment.steps()) {
-                applyStep(geometry, step, spec.dt(), prefixMx, prefixMy, prefixMz, geometry.t1(), geometry.t2());
+                applyStep(geometry, step, spec.dt(), tPrefix, prefixMx, prefixMy, prefixMz, geometry.t1(), geometry.t2());
+                tPrefix += spec.dt();
             }
         }
 
@@ -199,10 +217,14 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double gateSwitch = 0.0;
         double gateBinary = 0.0;
         double totalDt = 0.0;
+
+        int quadratureChannels = countQuadratureChannels(geometry);
+        double tSeconds = 0.0;
+
         for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
             var segment = segments.get(segmentIndex);
             var spec = template.segments().get(segmentIndex);
-            double[][] previousRf = new double[2][2];
+            double[][] previousQuad = new double[2][quadratureChannels];
             double previousGate = 0.0;
             boolean haveGate = false;
             for (int stepIndex = 0; stepIndex < spec.totalSteps(); stepIndex++) {
@@ -210,7 +232,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 double dt = spec.dt();
                 totalDt += dt;
                 if (segmentIndex >= prefixSegments) {
-                    applyStep(geometry, step, dt, cycleMx, cycleMy, cycleMz, geometry.t1(), geometry.t2());
+                    applyStep(geometry, step, dt, tSeconds, cycleMx, cycleMy, cycleMz, geometry.t1(), geometry.t2());
                     double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
                     double sx = weightedSum(geometry.wIn(), cycleMx);
                     double sy = weightedSum(geometry.wIn(), cycleMy);
@@ -225,30 +247,35 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                         signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * coherentSignalMagnitude(geometry.wIn(), cycleMx, cycleMy)));
                     }
                 }
-                rfPower += (step.b1x() * step.b1x() + step.b1y() * step.b1y()) * dt;
+                double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
+                rfPower += sumOfSquares(quadNow) * dt;
                 if (stepIndex >= 2) {
-                    double d2x = step.b1x() - 2.0 * previousRf[0][0] + previousRf[1][0];
-                    double d2y = step.b1y() - 2.0 * previousRf[0][1] + previousRf[1][1];
-                    rfSmooth += (d2x * d2x + d2y * d2y) * dt;
+                    double smooth = 0.0;
+                    for (int k = 0; k < quadratureChannels; k++) {
+                        double d2 = quadNow[k] - 2.0 * previousQuad[0][k] + previousQuad[1][k];
+                        smooth += d2 * d2;
+                    }
+                    rfSmooth += smooth * dt;
                 }
                 if (haveGate) {
                     double dg = step.rfGate() - previousGate;
                     gateSwitch += dg * dg * dt;
                 }
                 gateBinary += step.rfGate() * (1.0 - step.rfGate()) * dt;
-                previousRf[1][0] = previousRf[0][0];
-                previousRf[1][1] = previousRf[0][1];
-                previousRf[0][0] = step.b1x();
-                previousRf[0][1] = step.b1y();
+                for (int k = 0; k < quadratureChannels; k++) {
+                    previousQuad[1][k] = previousQuad[0][k];
+                    previousQuad[0][k] = quadNow[k];
+                }
                 previousGate = step.rfGate();
                 haveGate = true;
+                tSeconds += dt;
             }
         }
 
         double signalRef = Math.max(geometry.sMax() * geometry.sMax(), 1.0);
         double powerRef = Math.max(geometry.sMax(), 1.0);
         double rfTimeRef = Math.max(totalDt, 1e-12);
-        double rfPowerRef = OptimisationHardwareLimits.B1_MAX * OptimisationHardwareLimits.B1_MAX * rfTimeRef;
+        double rfPowerRef = Math.max(referenceRfPower(geometry) * rfTimeRef, 1e-30);
         double value = -(
             jIn / signalRef
                 - objective.lamOut() * (jOut / signalRef)
@@ -273,23 +300,20 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         }
     }
 
-    protected static double gradientScaleForControlIndex(int controlIndex) {
-        return switch (controlIndex % 5) {
-            case 0, 1 -> OptimisationHardwareLimits.B1_MAX;
-            case 2 -> OptimisationHardwareLimits.GX_MAX;
-            case 3 -> OptimisationHardwareLimits.GZ_MAX;
-            default -> 1.0;
-        };
-    }
-
     protected static double clamp(double value, double low, double high) {
         return Math.max(low, Math.min(high, value));
     }
 
+    /**
+     * Apply one Bloch step to a flat point array.
+     *
+     * @param tSeconds current simulation time from t=0, needed for off-resonance carrier phase.
+     */
     protected static void applyStep(
         ProblemGeometry geometry,
         PulseStep step,
         double dt,
+        double tSeconds,
         double[] mx,
         double[] my,
         double[] mz,
@@ -298,15 +322,42 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
     ) {
         double e2 = Math.exp(-dt / t2);
         double e1 = Math.exp(-dt / t1);
-        boolean rfOn = step.isRfOn();
-        for (int point = 0; point < geometry.pointCount(); point++) {
-            if (!rfOn) {
-                double omega = geometry.gamma() * (
-                    geometry.dBz()[point]
-                        + step.gx() * geometry.gxm()[point]
-                        + step.gz() * geometry.gzm()[point]
-                );
-                double th = omega * dt;
+        var controls = step.controls();
+        var dynamics = geometry.dynamicFields();
+        int pointCount = geometry.pointCount();
+        for (int point = 0; point < pointCount; point++) {
+            double bx = 0, by = 0;
+            double bz = geometry.staticBz()[point];
+            for (var df : dynamics) {
+                double ex = df.ex()[point];
+                double ey = df.ey()[point];
+                double ez = df.ez()[point];
+                if (df.channelCount() == 1) {
+                    double amp = controls[df.channelOffset()];
+                    bx += amp * ex;
+                    by += amp * ey;
+                    bz += amp * ez;
+                } else {
+                    double ampI = controls[df.channelOffset()];
+                    double ampQ = controls[df.channelOffset() + 1];
+                    if (Math.abs(df.deltaOmega()) > 1e-9) {
+                        double phase = df.deltaOmega() * tSeconds;
+                        double c = Math.cos(phase);
+                        double s = Math.sin(phase);
+                        double iRot = ampI * c - ampQ * s;
+                        double qRot = ampI * s + ampQ * c;
+                        ampI = iRot;
+                        ampQ = qRot;
+                    }
+                    bx += ampI * ex - ampQ * ey;
+                    by += ampI * ey + ampQ * ex;
+                    bz += ampI * ez;
+                }
+            }
+
+            double bPerp2 = bx * bx + by * by;
+            if (!step.isRfOn() && bPerp2 < 1e-30) {
+                double th = geometry.gamma() * bz * dt;
                 double c = Math.cos(th);
                 double s = Math.sin(th);
                 double nmx = (mx[point] * c - my[point] * s) * e2;
@@ -315,11 +366,6 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 my[point] = nmy;
                 mz[point] = 1.0 + (mz[point] - 1.0) * e1;
             } else {
-                double bx = step.b1x() * geometry.b1s()[point];
-                double by = step.b1y() * geometry.b1s()[point];
-                double bz = geometry.dBz()[point]
-                    + step.gx() * geometry.gxm()[point]
-                    + step.gz() * geometry.gzm()[point];
                 double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
                 double nx = bx / bm;
                 double ny = by / bm;
@@ -342,16 +388,41 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         }
     }
 
-    protected static double[][] stepMatrix(ProblemGeometry geometry, int point, PulseStep step, double dt) {
+    protected static double[][] stepMatrix(ProblemGeometry geometry, int point, PulseStep step, double dt, double tSeconds) {
         double e2 = Math.exp(-dt / geometry.t2());
         double e1 = Math.exp(-dt / geometry.t1());
-        if (!step.isRfOn()) {
-            double omega = geometry.gamma() * (
-                geometry.dBz()[point]
-                    + step.gx() * geometry.gxm()[point]
-                    + step.gz() * geometry.gzm()[point]
-            );
-            double th = omega * dt;
+        var controls = step.controls();
+        double bx = 0, by = 0;
+        double bz = geometry.staticBz()[point];
+        for (var df : geometry.dynamicFields()) {
+            double ex = df.ex()[point];
+            double ey = df.ey()[point];
+            double ez = df.ez()[point];
+            if (df.channelCount() == 1) {
+                double amp = controls[df.channelOffset()];
+                bx += amp * ex;
+                by += amp * ey;
+                bz += amp * ez;
+            } else {
+                double ampI = controls[df.channelOffset()];
+                double ampQ = controls[df.channelOffset() + 1];
+                if (Math.abs(df.deltaOmega()) > 1e-9) {
+                    double phase = df.deltaOmega() * tSeconds;
+                    double c = Math.cos(phase);
+                    double s = Math.sin(phase);
+                    double iRot = ampI * c - ampQ * s;
+                    double qRot = ampI * s + ampQ * c;
+                    ampI = iRot;
+                    ampQ = qRot;
+                }
+                bx += ampI * ex - ampQ * ey;
+                by += ampI * ey + ampQ * ex;
+                bz += ampI * ez;
+            }
+        }
+        double bPerp2 = bx * bx + by * by;
+        if (!step.isRfOn() && bPerp2 < 1e-30) {
+            double th = geometry.gamma() * bz * dt;
             double c = Math.cos(th);
             double s = Math.sin(th);
             return new double[][]{
@@ -361,11 +432,6 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 {0.0, 0.0, 0.0, 1.0}
             };
         }
-        double bx = step.b1x() * geometry.b1s()[point];
-        double by = step.b1y() * geometry.b1s()[point];
-        double bz = geometry.dBz()[point]
-            + step.gx() * geometry.gxm()[point]
-            + step.gz() * geometry.gzm()[point];
         double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
         double nx = bx / bm;
         double ny = by / bm;
@@ -389,6 +455,49 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
             {e1 * r20, e1 * r21, e1 * r22, 1.0 - e1},
             {0.0, 0.0, 0.0, 1.0}
         };
+    }
+
+    protected static int countQuadratureChannels(ProblemGeometry geometry) {
+        int count = 0;
+        for (var df : geometry.dynamicFields()) {
+            if (df.isQuadrature()) count += 2;
+        }
+        return count;
+    }
+
+    /**
+     * Flattened concatenation of all QUADRATURE channels' (I, Q) pairs from this step.
+     * Used for RF-power / smoothness penalties.
+     */
+    protected static double[] quadratureComponents(ProblemGeometry geometry, PulseStep step, int quadratureChannels) {
+        double[] out = new double[quadratureChannels];
+        int k = 0;
+        var controls = step.controls();
+        for (var df : geometry.dynamicFields()) {
+            if (!df.isQuadrature()) continue;
+            out[k++] = controls[df.channelOffset()];
+            out[k++] = controls[df.channelOffset() + 1];
+        }
+        return out;
+    }
+
+    protected static double sumOfSquares(double[] values) {
+        double sum = 0.0;
+        for (var v : values) sum += v * v;
+        return sum;
+    }
+
+    /** Reference RF power for penalty normalisation: sum of each QUADRATURE field's max² over I+Q. */
+    protected static double referenceRfPower(ProblemGeometry geometry) {
+        // Fallback to 1 if there is no QUADRATURE field, so the penalty is defined but ineffective.
+        double sum = 0;
+        boolean any = false;
+        for (var df : geometry.dynamicFields()) {
+            if (!df.isQuadrature()) continue;
+            any = true;
+            sum += 1.0;  // Per-field normalisation handled by objective scaling; unit per QUADRATURE pair.
+        }
+        return any ? sum : 1.0;
     }
 
     protected static double[][] multiply(double[][] a, double[][] b) {

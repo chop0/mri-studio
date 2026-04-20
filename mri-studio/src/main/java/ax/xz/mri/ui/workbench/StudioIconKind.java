@@ -14,5 +14,6 @@ public enum StudioIconKind {
     SIMULATION,
     OPTIMISATION_CONFIG,
     BOOKMARK,
-    EIGENFIELD
+    EIGENFIELD,
+    MESSAGES
 }

@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.workbench;
 
 import ax.xz.mri.project.ActiveCapture;
+import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
@@ -11,6 +12,7 @@ import ax.xz.mri.ui.workbench.pane.ExplorerPane;
 import ax.xz.mri.ui.workbench.pane.GeometryPane;
 import ax.xz.mri.ui.workbench.pane.InspectorPane;
 import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
+import ax.xz.mri.ui.workbench.pane.MessagesPane;
 import ax.xz.mri.ui.workbench.pane.PhaseMapRPane;
 import ax.xz.mri.ui.workbench.pane.PhaseMapZPane;
 import ax.xz.mri.ui.workbench.pane.PhaseTracePane;
@@ -167,6 +169,10 @@ public class WorkbenchController {
             var pane = ((SimConfigEditorProvider) editor).editorPane();
             if (pane != null) pane.setOnTitleChanged(refreshTitle);
         }
+        if (editor instanceof EigenfieldEditorProvider eigen) {
+            var pane = eigen.editorPane();
+            if (pane != null) pane.setOnTitleChanged(refreshTitle);
+        }
 
         openTabs.add(tab);
         documentLeaf.addDockable(dockable);
@@ -189,6 +195,12 @@ public class WorkbenchController {
     public void openSimConfigTab(SimulationConfigDocument configDoc) {
         openTab(configDoc.id().value(), configDoc.name(),
             new SimConfigEditorProvider(configDoc, session, this));
+    }
+
+    /** Open an eigenfield as a workspace tab. */
+    public void openEigenfieldTab(EigenfieldDocument eigenfield) {
+        openTab(eigenfield.id().value(), eigenfield.name(),
+            new EigenfieldEditorProvider(eigenfield, session, this));
     }
 
     /** Switch to a different tab, saving/restoring state. */
@@ -678,7 +690,9 @@ public class WorkbenchController {
             // Skip sidebar tools, per-doc editors, and non-BentoFX panes
             if (paneId == PaneId.EXPLORER || paneId == PaneId.INSPECTOR
                 || paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR
-                || paneId == PaneId.POINTS) continue;
+                || paneId == PaneId.EIGENFIELD_EDITOR
+                || paneId == PaneId.POINTS
+                || paneId == PaneId.MESSAGES) continue;
             var focus = new MenuItem("Focus " + paneId.title());
             focus.setOnAction(e -> focusPane(paneId));
             menu.getItems().add(focus);
@@ -723,7 +737,9 @@ public class WorkbenchController {
 
     private void initializePanes() {
         for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.SEQUENCE_EDITOR || paneId == PaneId.SIM_CONFIG_EDITOR) continue;
+            if (paneId == PaneId.SEQUENCE_EDITOR
+                    || paneId == PaneId.SIM_CONFIG_EDITOR
+                    || paneId == PaneId.EIGENFIELD_EDITOR) continue;
             panes.put(paneId, createPane(paneId));
         }
     }
@@ -734,12 +750,27 @@ public class WorkbenchController {
             "Explorer", StudioIcons.create(StudioIconKind.PROJECT), panes.get(PaneId.EXPLORER)));
         leftSidebar.showTool("explorer"); // open by default
 
-        // Right sidebar: Inspector, Points
+        // Right sidebar: Inspector, Messages, Points
         rightSidebar.addTool(new ToolSidebar.Tool("inspector",
             "Inspector", StudioIcons.create(StudioIconKind.IMPORT), panes.get(PaneId.INSPECTOR)));
+        rightSidebar.addTool(new ToolSidebar.Tool("messages",
+            "Messages", StudioIcons.create(StudioIconKind.MESSAGES), panes.get(PaneId.MESSAGES)));
         rightSidebar.addTool(new ToolSidebar.Tool("points",
             "Points", StudioIcons.create(StudioIconKind.CAPTURE), panes.get(PaneId.POINTS)));
         rightSidebar.showTool("inspector"); // open by default
+
+        // When an error lands in the message log, surface the Messages tool so the user sees it.
+        session.messages.messages().addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.viewmodel.MessagesViewModel.Message>) change -> {
+            while (change.next()) {
+                if (!change.wasAdded()) continue;
+                for (var msg : change.getAddedSubList()) {
+                    if (msg.level() == ax.xz.mri.ui.viewmodel.MessagesViewModel.Level.ERROR) {
+                        rightSidebar.showTool("messages");
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     private WorkbenchPane createPane(PaneId paneId) {
@@ -756,7 +787,8 @@ public class WorkbenchController {
             case TRACE_PHASE -> new PhaseTracePane(ctx);
             case TRACE_POLAR -> new PolarTracePane(ctx);
             case TRACE_MAGNITUDE -> new MagnitudeTracePane(ctx);
-            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR ->
+            case MESSAGES -> new MessagesPane(ctx);
+            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR, EIGENFIELD_EDITOR ->
                 throw new IllegalStateException("Editor panes are created per-document");
         };
     }
@@ -801,8 +833,10 @@ public class WorkbenchController {
     }
 
     private void newEigenfieldWizard() {
-        ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(mainStage, session.project).ifPresent(ef ->
-            session.project.selectNode(ef.id()));
+        ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(mainStage, session.project).ifPresent(ef -> {
+            session.project.selectNode(ef.id());
+            openEigenfieldTab(ef);
+        });
     }
 
     private void newSequenceWizard() {
@@ -825,6 +859,8 @@ public class WorkbenchController {
         session.project.setOnCaptureOpened(this::openImportTab);
         // Opening a sim config → create tab
         session.project.setOnSimConfigOpened(this::openSimConfigTab);
+        // Opening an eigenfield → create tab
+        session.project.setOnEigenfieldOpened(this::openEigenfieldTab);
     }
 
     // --- BentoFX layout ---

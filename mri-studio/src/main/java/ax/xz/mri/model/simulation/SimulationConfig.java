@@ -8,13 +8,18 @@ import java.util.List;
  * User-editable simulation environment configuration.
  *
  * <p>Defines the physical parameters needed to run a Bloch simulation:
- * tissue properties, spatial grid, field sources, and isochromats.
- * A {@link BlochDataFactory} converts this into a synthetic
+ * tissue properties, spatial grid, reference frame, field sources, and
+ * isochromats. A {@code BlochDataFactory} converts this into a synthetic
  * {@link ax.xz.mri.model.scenario.BlochData}.
  *
- * <p>Each field source is modelled as a {@link FieldDefinition} with
- * control type, amplitude bounds, baseband frequency, and a reference
- * to an eigenfield document that defines the spatial shape.
+ * <p>The simulation is carried out in a rotating frame at angular frequency
+ * {@code ω_s = γ · referenceB0Tesla}. This reference is an explicit tuning
+ * parameter — it is not derived from any particular field in the list, and
+ * there is no privileged "B0 slot" among the fields.
+ *
+ * <p>Each field source is a {@link FieldDefinition} with a physical shape
+ * (eigenfield) and an amplitude schedule ({@link AmplitudeKind} at
+ * {@code carrierHz}).
  */
 public record SimulationConfig(
     // Tissue / nucleus
@@ -28,6 +33,9 @@ public record SimulationConfig(
     @JsonProperty("fov_r_mm") double fovRMm,
     @JsonProperty("n_z") int nZ,
     @JsonProperty("n_r") int nR,
+
+    // Rotating-frame reference: ω_s = γ · referenceB0Tesla
+    @JsonProperty("reference_b0_tesla") double referenceB0Tesla,
 
     // Field sources
     List<FieldDefinition> fields,
@@ -48,24 +56,32 @@ public record SimulationConfig(
         isochromats = isochromats == null ? List.of() : List.copyOf(isochromats);
     }
 
-    /**
-     * Extract the nominal B0 field strength (Tesla) from the field definitions.
-     * Finds the first BINARY DC field and returns its maxAmplitude.
-     * Returns 0 if no such field exists.
-     */
-    public double b0Tesla() {
-        return fields.stream()
-            .filter(f -> f.controlType() == ControlType.BINARY && f.isDC())
-            .mapToDouble(FieldDefinition::maxAmplitude)
-            .findFirst()
-            .orElse(0.0);
+    /** Simulation-frame angular frequency (rad/s). */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public double omegaSim() {
+        return gamma * referenceB0Tesla;
+    }
+
+    /** Total number of pulse-sequence control scalars per time step. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public int totalChannelCount() {
+        int total = 0;
+        for (var field : fields) total += field.channelCount();
+        return total;
+    }
+
+    public SimulationConfig withReferenceB0Tesla(double newReferenceB0Tesla) {
+        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
+            newReferenceB0Tesla, fields, isochromats);
     }
 
     public SimulationConfig withFields(List<FieldDefinition> newFields) {
-        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR, newFields, isochromats);
+        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
+            referenceB0Tesla, newFields, isochromats);
     }
 
     public SimulationConfig withIsochromats(List<IsoPoint> newIsochromats) {
-        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR, fields, newIsochromats);
+        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
+            referenceB0Tesla, fields, newIsochromats);
     }
 }

@@ -43,7 +43,7 @@ public final class ClipBaker {
             double gx  = ClipEvaluator.evaluateChannel(clips, SignalChannel.GX, t);
             double gz  = ClipEvaluator.evaluateChannel(clips, SignalChannel.GZ, t);
             double gate = ClipEvaluator.evaluateChannel(clips, SignalChannel.RF_GATE, t);
-            steps.add(new PulseStep(b1x, b1y, gx, gz, gate));
+            steps.add(new PulseStep(new double[]{b1x, b1y, gx, gz}, gate));
         }
 
         // Count RF-on and free-precession steps
@@ -157,10 +157,10 @@ public final class ClipBaker {
 
     private static double channelValue(PulseStep step, SignalChannel ch) {
         return switch (ch) {
-            case B1X -> step.b1x();
-            case B1Y -> step.b1y();
-            case GX  -> step.gx();
-            case GZ  -> step.gz();
+            case B1X -> step.control(0);
+            case B1Y -> step.control(1);
+            case GX  -> step.control(2);
+            case GZ  -> step.control(3);
             case RF_GATE -> step.rfGate();
         };
     }

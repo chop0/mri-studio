@@ -1,5 +1,6 @@
 package ax.xz.mri.service.simulation;
 
+import ax.xz.mri.model.field.DynamicFieldMap;
 import ax.xz.mri.model.field.FieldInterpolator;
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.field.FieldPoint;
@@ -18,13 +19,28 @@ import java.util.function.Supplier;
 
 /**
  * Core Bloch equation simulator.
- * Exact port of {@code sim()} and {@code simTo()} from physics.ts, with compiled-pulse and
- * point-local caches so repeated scrubbing reuses previous work.
+ *
+ * <p>Integrates in the rotating frame at {@code ω_s = γ · b0Ref}. Each step
+ * iterates over the dynamic fields in the {@link FieldMap} and accumulates
+ * their per-point eigenfield-scaled contributions into the rotating-frame
+ * B-vector, then applies Rodrigues' rotation plus relaxation. Static
+ * contributions and Bloch–Siegert corrections from fast fields are baked
+ * into {@link FieldPoint#staticBz()} at build time.
  */
 public final class BlochSimulator {
     private static final int COMPILED_CACHE_SIZE = 24;
     private static final int POINT_CONTEXT_CACHE_SIZE = 4096;
-    private static final int TRAJECTORY_CACHE_SIZE = 1024;
+    /**
+     * Upper bound on the number of full trajectories we cache. Each cached
+     * trajectory is {@code (stepCount + 1) × 5 × 8} bytes — at 1 µs steps a
+     * 100 ms CPMG sequence is ~4 MB per trajectory, so keeping this small
+     * matters. Typical usage only needs one entry per visible isochromat
+     * anyway; cache misses fall back to full re-simulation, which is still
+     * cheap because the CompiledPulse kernels are cached independently.
+     */
+    private static final int TRAJECTORY_CACHE_SIZE = 32;
+    /** Don't cache trajectories bigger than this — recomputing them is cheaper than holding them. */
+    private static final int TRAJECTORY_CACHE_STEP_LIMIT = 200_000;
     private static final int CURSOR_CACHE_SIZE = 4096;
     private static final int CURSOR_CHECKPOINT_INTERVAL = 64;
 
@@ -46,19 +62,10 @@ public final class BlochSimulator {
         cursorCache = synchronizedLruCache(CURSOR_CACHE_SIZE);
     }
 
-    /**
-     * Simulate the full trajectory from thermal equilibrium through all segments.
-     *
-     * @return trajectory with one point per pulse step, or null if data is insufficient
-     */
     public static Trajectory simulate(BlochData data, double rMm, double zMm, List<PulseSegment> pulse) {
         return DEFAULT.simulateCached(data, rMm, zMm, pulse);
     }
 
-    /**
-     * Simulate up to {@code tcMicros} and return the magnetisation at that time.
-     * Reuses prior prefix work when the cursor moves across the same position repeatedly.
-     */
     public static MagnetisationState simulateTo(BlochData data, double rMm, double zMm, List<PulseSegment> pulse, double tcMicros) {
         return DEFAULT.simulateToCached(data, rMm, zMm, pulse, tcMicros);
     }
@@ -78,7 +85,10 @@ public final class BlochSimulator {
 
         var context = pointContextFor(data.field(), pulse, rMm, zMm, key);
         var computed = simulateFull(context);
-        cachePut(trajectoryCache, key, computed);
+        // Skip caching very long trajectories to prevent heap blow-up on long CPMG trains.
+        if (computed != null && computed.pointCount() <= TRAJECTORY_CACHE_STEP_LIMIT) {
+            cachePut(trajectoryCache, key, computed);
+        }
         return computed;
     }
 
@@ -118,6 +128,7 @@ public final class BlochSimulator {
         var kernels = new StepKernel[stepCount];
         var stateTimesMicros = new double[stepCount + 1];
         double timeMicros = 0;
+        double timeSeconds = 0;
         int kernelIndex = 0;
         stateTimesMicros[0] = 0;
         for (int segmentIndex = 0; segmentIndex < field.segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
@@ -126,8 +137,9 @@ public final class BlochSimulator {
             double e2 = Math.exp(-dt / field.t2);
             double e1 = Math.exp(-dt / field.t1);
             for (var step : pulse.get(segmentIndex).steps()) {
-                kernels[kernelIndex] = new StepKernel(step, dt, e1, e2);
+                kernels[kernelIndex] = new StepKernel(step, dt, e1, e2, timeSeconds);
                 timeMicros += dt * 1e6;
+                timeSeconds += dt;
                 stateTimesMicros[++kernelIndex] = timeMicros;
             }
         }
@@ -167,9 +179,53 @@ public final class BlochSimulator {
         return new Trajectory(out);
     }
 
-    private static MagnetisationState applyStep(StepKernel kernel, FieldPoint point, FieldMap field, double mx, double my, double mz) {
-        if (!kernel.rfOn()) {
-            double om = field.gamma * (point.dBz() + kernel.gx() * point.gxm() + kernel.gz() * point.gzm());
+    /**
+     * Build the rotating-frame B-vector at this step+point by iterating over
+     * dynamic fields, then apply Rodrigues' rotation + relaxation.
+     */
+    private static MagnetisationState applyStep(StepKernel kernel, FieldPoint point, FieldMap field,
+                                                double mx, double my, double mz) {
+        double bx = 0, by = 0;
+        double bz = point.staticBz();
+
+        var controls = kernel.step().controls();
+        var dynamics = field.dynamicFields;
+        if (dynamics != null) {
+            int n = dynamics.size();
+            for (int i = 0; i < n; i++) {
+                var df = dynamics.get(i);
+                double ex = point.ex()[i];
+                double ey = point.ey()[i];
+                double ez = point.ez()[i];
+                if (df.channelCount == 1) {
+                    double amp = controls[df.channelOffset];
+                    bx += amp * ex;
+                    by += amp * ey;
+                    bz += amp * ez;
+                } else {
+                    double ampI = controls[df.channelOffset];
+                    double ampQ = controls[df.channelOffset + 1];
+                    // If Δω is non-zero, rotate the (I, Q) pair by Δω·t before applying.
+                    if (Math.abs(df.deltaOmega) > 1e-9) {
+                        double phase = df.deltaOmega * kernel.timeSeconds();
+                        double c = Math.cos(phase);
+                        double s = Math.sin(phase);
+                        double iRot = ampI * c - ampQ * s;
+                        double qRot = ampI * s + ampQ * c;
+                        ampI = iRot;
+                        ampQ = qRot;
+                    }
+                    // Quadrature mixing: B⊥ = I·Ẽ − j·Q·Ẽ where Ẽ = Ex + j·Ey.
+                    bx += ampI * ex - ampQ * ey;
+                    by += ampI * ey + ampQ * ex;
+                    bz += ampI * ez;
+                }
+            }
+        }
+
+        double bPerp2 = bx * bx + by * by;
+        if (!kernel.rfOn() && bPerp2 < 1e-30) {
+            double om = field.gamma * bz;
             double th = om * kernel.dt();
             double c = Math.cos(th);
             double s = Math.sin(th);
@@ -177,18 +233,16 @@ public final class BlochSimulator {
             double nmy = (mx * s + my * c) * kernel.e2();
             return new MagnetisationState(nmx, nmy, 1 + (mz - 1) * kernel.e1());
         }
-        double[] rotated = rodrigues(kernel.step(), point, field, kernel.dt(), mx, my, mz, kernel.e2(), kernel.e1());
-        return new MagnetisationState(rotated[0], rotated[1], rotated[2]);
+
+        return rodrigues(bx, by, bz, field.gamma, kernel.dt(), mx, my, mz, kernel.e2(), kernel.e1());
     }
 
-    private static double[] rodrigues(PulseStep step, FieldPoint fl, FieldMap f,
-                                      double dt, double mx, double my, double mz,
-                                      double e2, double e1) {
-        double bx = step.b1x() * fl.b1s();
-        double by = step.b1y() * fl.b1s();
-        double bz = fl.dBz() + step.gx() * fl.gxm() + step.gz() * fl.gzm();
+    private static MagnetisationState rodrigues(double bx, double by, double bz,
+                                                double gamma, double dt,
+                                                double mx, double my, double mz,
+                                                double e2, double e1) {
         double bm = Math.sqrt(bx * bx + by * by + bz * bz + 1e-60);
-        double th = f.gamma * bm * dt;
+        double th = gamma * bm * dt;
         double nx = bx / bm;
         double ny = by / bm;
         double nz = bz / bm;
@@ -199,11 +253,11 @@ public final class BlochSimulator {
         double cx = ny * mz - nz * my;
         double cy = nz * mx - nx * mz;
         double cz = nx * my - ny * mx;
-        return new double[]{
+        return new MagnetisationState(
             (mx * c + cx * s + nx * nd * oc) * e2,
             (my * c + cy * s + ny * nd * oc) * e2,
             1 + (mz * c + cz * s + nz * nd * oc - 1) * e1
-        };
+        );
     }
 
     private static SimulationKey simulationKey(FieldMap field, List<PulseSegment> pulse, double rMm, double zMm) {
@@ -268,17 +322,9 @@ public final class BlochSimulator {
     private record SimulationKey(PulseKey pulseKey, long rBits, long zBits) {
     }
 
-    private record StepKernel(PulseStep step, double dt, double e1, double e2) {
+    private record StepKernel(PulseStep step, double dt, double e1, double e2, double timeSeconds) {
         boolean rfOn() {
             return step.isRfOn();
-        }
-
-        double gx() {
-            return step.gx();
-        }
-
-        double gz() {
-            return step.gz();
         }
     }
 
