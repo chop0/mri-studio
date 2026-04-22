@@ -6,6 +6,7 @@ import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -32,42 +33,41 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
  * Mutable editing state for one clip-based sequence.
  *
- * <h3>What lives here</h3>
+ * <h3>Model</h3>
+ * <p>The editor owns two intertwined lists:
  * <ul>
- *   <li><b>Clips</b> — the edited collection of {@link SignalClip}s, with
- *       multi-clip selection and a designated "primary" clip for the inspector.</li>
- *   <li><b>Viewport</b> — the editor's own zoom/pan range in microseconds.</li>
- *   <li><b>Active config</b> — which {@link SimulationConfig} drives track
- *       layout, channel colouring, and default amplitudes.</li>
- *   <li><b>Derived tracks</b> — an observable, read-only lane list rebuilt from
- *       the active config whenever it changes. Tracks are <em>view</em>, not
- *       state: there is exactly one lane per
- *       {@link FieldDefinition#kind() field channel} slot plus one RF-gate lane,
- *       in config order. Collapse state is tracked per-channel (see
- *       {@link #collapsedChannels}).</li>
- *   <li><b>Undo/redo</b> — every mutation pushes a snapshot before applying the
- *       change; tracks are not part of the snapshot because they are derived.</li>
+ *   <li><b>Tracks</b> — arrangement lanes, user-managed. Each track targets
+ *       exactly one {@link SequenceChannel} from the active config. Multiple
+ *       tracks may target the same output — their clips sum at bake time.</li>
+ *   <li><b>Clips</b> — waveform-bearing pieces placed on a track
+ *       ({@link SignalClip#trackId()}).</li>
  * </ul>
  *
+ * <p>Both lists are persisted with the sequence and participate in undo.
+ * Per-track collapse state is view-level (see {@link #collapsedTrackIds}) and
+ * not undoable.
+ *
  * <h3>Change notification</h3>
- * <p>The {@link #revision} counter is bumped on every mutation and drives canvas
- * redraws. External listeners may also observe the collection properties
- * directly.
+ * <p>The {@link #revision} counter is bumped on every mutation and drives
+ * canvas redraws. External listeners may also observe the collection
+ * properties directly.
  */
 public final class SequenceEditSession {
     private static final int MAX_UNDO = 100;
-    private static final double DEFAULT_DT = 10.0;            // μs
-    private static final double DEFAULT_DURATION = 3000.0;     // μs
-    private static final double SNAP_THRESHOLD_FRACTION = 0.005; // 0.5% of visible span
+    private static final double DEFAULT_DT = 10.0;
+    private static final double DEFAULT_DURATION = 3000.0;
+    private static final double SNAP_THRESHOLD_FRACTION = 0.005;
 
     // ── Core document state ──────────────────────────────────────────────────
     public final ObjectProperty<SequenceDocument> originalDocument = new SimpleObjectProperty<>();
     public final ObservableList<SignalClip> clips = FXCollections.observableArrayList();
+    public final ObservableList<Track> tracks = FXCollections.observableArrayList();
     public final DoubleProperty dt = new SimpleDoubleProperty(DEFAULT_DT);
     public final DoubleProperty totalDuration = new SimpleDoubleProperty(DEFAULT_DURATION);
     public final IntegerProperty revision = new SimpleIntegerProperty(0);
@@ -77,19 +77,17 @@ public final class SequenceEditSession {
     /** Most recently clicked clip — drives the inspector. */
     public final ObjectProperty<String> primarySelectedClipId = new SimpleObjectProperty<>(null);
 
-    // ── Tracks (derived from activeConfig) + collapse state ─────────────────
-    /** Read-only observable view of the current lane list. Rebuilt when {@link #activeConfig} changes. */
-    public final ObservableList<EditorTrack> tracks = FXCollections.observableArrayList();
-    /** Channels currently rendered as thin collapsed bars. View-layer preference; not part of undo. */
-    public final ObservableSet<SequenceChannel> collapsedChannels = FXCollections.observableSet(new LinkedHashSet<>());
+    // ── View-level preferences (not undoable) ───────────────────────────────
+    /** Track ids currently rendered as a thin collapsed bar. */
+    public final ObservableSet<String> collapsedTrackIds = FXCollections.observableSet(new LinkedHashSet<>());
 
-    // ── Viewport (editor's own μs range) ─────────────────────────────────────
+    // ── Viewport (μs) ───────────────────────────────────────────────────────
     public final DoubleProperty viewStart = new SimpleDoubleProperty(0);
     public final DoubleProperty viewEnd = new SimpleDoubleProperty(DEFAULT_DURATION);
 
-    // ── Active simulation config ─────────────────────────────────────────────
+    // ── Active simulation config ────────────────────────────────────────────
     public final ObjectProperty<ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
-    /** Resolved config snapshot. Drives track layout, default amplitudes and baking. Nullable. */
+    /** Resolved config snapshot. Drives channel resolution + default amplitudes. */
     public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
     private ProjectNodeId originalSimConfigId;
 
@@ -110,10 +108,14 @@ public final class SequenceEditSession {
     public ReadOnlyBooleanProperty canRedoProperty() { return canRedo; }
 
     public SequenceEditSession() {
-        // Keep tracks in sync with activeConfig automatically — the edit layer
-        // never needs to manually rebuild them, and we never end up out of sync.
-        activeConfig.addListener((obs, oldCfg, newCfg) -> rebuildDerivedTracks(newCfg));
-        rebuildDerivedTracks(null);
+        // When the active config changes we do NOT stomp the user's track
+        // arrangement — tracks are state. We only prune collapse-state entries
+        // that became invalid (track deleted elsewhere).
+        tracks.addListener((javafx.collections.ListChangeListener<Track>) c -> {
+            var valid = new LinkedHashSet<String>();
+            for (var t : tracks) valid.add(t.id());
+            collapsedTrackIds.removeIf(id -> !valid.contains(id));
+        });
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -124,14 +126,20 @@ public final class SequenceEditSession {
     public void open(SequenceDocument document) {
         originalDocument.set(document);
 
-        ClipSequence clipSeq = document.clipSequence();
         var config = activeConfig.get();
+        ClipSequence clipSeq = document.clipSequence();
         if (clipSeq != null) {
+            // If the persisted sequence has no tracks (old empty docs, brand-new
+            // sequences), seed defaults from the active config so the editor
+            // isn't empty.
+            var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(config) : clipSeq.tracks();
+            tracks.setAll(loadedTracks);
             clips.setAll(clipSeq.clips());
             dt.set(clipSeq.dt());
             totalDuration.set(clipSeq.totalDuration());
         } else {
             var converted = ClipBaker.fromLegacy(document.segments(), document.pulse(), config);
+            tracks.setAll(converted.tracks());
             clips.setAll(converted.clips());
             dt.set(converted.dt());
             totalDuration.set(converted.totalDuration());
@@ -145,14 +153,14 @@ public final class SequenceEditSession {
         redoStack.clear();
         canUndo.set(false);
         canRedo.set(false);
-        rebuildDerivedTracks(config);
         bumpRevision();
     }
 
     /** Build an immutable document from the current editing state, baking clips to steps. */
     public SequenceDocument toDocument() {
         var orig = originalDocument.get();
-        var clipSeq = new ClipSequence(dt.get(), totalDuration.get(), List.copyOf(clips));
+        var clipSeq = new ClipSequence(dt.get(), totalDuration.get(),
+            List.copyOf(tracks), List.copyOf(clips));
         var baked = ClipBaker.bake(clipSeq, activeConfig.get());
         return new SequenceDocument(
             orig.id(), orig.name(),
@@ -167,6 +175,7 @@ public final class SequenceEditSession {
         if (!Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
         if (orig.clipSequence() != null) {
             return !clips.equals(orig.clipSequence().clips())
+                || !tracks.equals(orig.clipSequence().tracks())
                 || dt.get() != orig.clipSequence().dt()
                 || totalDuration.get() != orig.clipSequence().totalDuration();
         }
@@ -185,13 +194,15 @@ public final class SequenceEditSession {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Active config + derived tracks
+    // Active config
     // ══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Replace the live config snapshot driving track layout, channel colouring
-     * and default amplitudes. Tracks are rebuilt automatically; collapse state
-     * for channels that no longer exist is pruned.
+     * Replace the live config snapshot. Tracks are left alone — they are
+     * user-managed state, so changing the config does not blow away
+     * arrangement. Tracks whose output channel no longer exists in the new
+     * config still render; the inspector surfaces them as "orphan" so the user
+     * can re-target or delete.
      */
     public void applyActiveConfig(SimulationConfig config) {
         if (Objects.equals(activeConfig.get(), config)) return;
@@ -199,29 +210,9 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    private void rebuildDerivedTracks(SimulationConfig config) {
-        var next = EditorTrack.forConfig(config);
-        tracks.setAll(next);
-        // Prune collapse entries for channels that no longer exist.
-        var valid = new LinkedHashSet<SequenceChannel>();
-        for (var t : next) valid.add(t.channel());
-        collapsedChannels.removeIf(ch -> !valid.contains(ch));
-    }
-
-    /** Toggle or set the collapse state for a channel. View-layer preference; not undoable. */
-    public void setChannelCollapsed(SequenceChannel channel, boolean collapsed) {
-        if (collapsed) collapsedChannels.add(channel);
-        else collapsedChannels.remove(channel);
-        bumpRevision();
-    }
-
-    public boolean isChannelCollapsed(SequenceChannel channel) {
-        return collapsedChannels.contains(channel);
-    }
-
-    /** Look up the {@link FieldDefinition} backing a channel in the active config, or {@code null}. */
+    /** Look up the {@link FieldDefinition} backing an output channel, or {@code null}. */
     public FieldDefinition fieldForChannel(SequenceChannel channel) {
-        if (channel == null || channel.isRfGate()) return null;
+        if (channel == null) return null;
         var config = activeConfig.get();
         if (config == null) return null;
         for (var f : config.fields()) {
@@ -232,9 +223,8 @@ public final class SequenceEditSession {
         return null;
     }
 
-    /** Resolve the eigenfield document behind a channel, or {@code null} if unavailable. */
+    /** Resolve the eigenfield document behind an output channel, or {@code null}. */
     public EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
-        if (channel == null || channel.isRfGate()) return null;
         var field = fieldForChannel(channel);
         if (field == null || field.eigenfieldId() == null) return null;
         var repo = repositorySupplier.get();
@@ -246,6 +236,102 @@ public final class SequenceEditSession {
     public String unitsForChannel(SequenceChannel channel) {
         var ef = eigenfieldForChannel(channel);
         return ef != null ? ef.units() : "";
+    }
+
+    /** List of all addressable output channels in the active config (empty if no config). */
+    public List<SequenceChannel> availableOutputChannels() {
+        var cfg = activeConfig.get();
+        if (cfg == null) return List.of();
+        var out = new ArrayList<SequenceChannel>();
+        for (var field : cfg.fields()) {
+            int count = field.kind().channelCount();
+            for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.ofField(field.name(), sub));
+        }
+        return List.copyOf(out);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Track management (all push undo)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    public Track findTrack(String trackId) {
+        if (trackId == null) return null;
+        for (var t : tracks) if (t.id().equals(trackId)) return t;
+        return null;
+    }
+
+    private int indexOfTrack(String trackId) {
+        for (int i = 0; i < tracks.size(); i++) if (tracks.get(i).id().equals(trackId)) return i;
+        return -1;
+    }
+
+    /** Add a new track targeting a specific output channel. */
+    public Track addTrack(SequenceChannel outputChannel, String name) {
+        pushUndo();
+        var track = new Track(outputChannel, name != null ? name : defaultTrackNameFor(outputChannel));
+        tracks.add(track);
+        bumpRevision();
+        return track;
+    }
+
+    /** Remove a track and all its clips. */
+    public void removeTrack(String trackId) {
+        int idx = indexOfTrack(trackId);
+        if (idx < 0) return;
+        pushUndo();
+        tracks.remove(idx);
+        clips.removeIf(c -> trackId.equals(c.trackId()));
+        selectedClipIds.removeIf(id -> {
+            var clip = findClip(id);
+            return clip == null;
+        });
+        if (primarySelectedClipId.get() != null && findClip(primarySelectedClipId.get()) == null) {
+            primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
+        }
+        bumpRevision();
+    }
+
+    public void renameTrack(String trackId, String newName) {
+        int idx = indexOfTrack(trackId);
+        if (idx < 0) return;
+        pushUndo();
+        tracks.set(idx, tracks.get(idx).withName(newName == null ? "" : newName));
+        bumpRevision();
+    }
+
+    public void setTrackOutputChannel(String trackId, SequenceChannel newChannel) {
+        int idx = indexOfTrack(trackId);
+        if (idx < 0) return;
+        pushUndo();
+        tracks.set(idx, tracks.get(idx).withOutputChannel(newChannel));
+        bumpRevision();
+    }
+
+    public void reorderTrack(int fromIndex, int toIndex) {
+        if (fromIndex < 0 || toIndex < 0 || fromIndex >= tracks.size() || toIndex >= tracks.size()) return;
+        if (fromIndex == toIndex) return;
+        pushUndo();
+        var moved = tracks.remove(fromIndex);
+        tracks.add(toIndex, moved);
+        bumpRevision();
+    }
+
+    /** Toggle collapsed state on a track (view-level, not undoable). */
+    public void setTrackCollapsed(String trackId, boolean collapsed) {
+        if (collapsed) collapsedTrackIds.add(trackId);
+        else collapsedTrackIds.remove(trackId);
+        bumpRevision();
+    }
+
+    public boolean isTrackCollapsed(String trackId) {
+        return collapsedTrackIds.contains(trackId);
+    }
+
+    /** Best-effort default name for a new track targeting an output channel. */
+    public String defaultTrackNameFor(SequenceChannel channel) {
+        var field = fieldForChannel(channel);
+        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
+        return ClipBaker.defaultTrackName(field, channel.subIndex());
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -294,14 +380,14 @@ public final class SequenceEditSession {
         primarySelectedClipId.set(null);
     }
 
-    /** Select clips overlapping a time×channel region (rubber-band). */
-    public void selectClipsInRegion(double timeStart, double timeEnd, Set<SequenceChannel> channels, boolean addToExisting) {
+    /** Select clips overlapping a time×track region (rubber-band). */
+    public void selectClipsInRegion(double timeStart, double timeEnd, Set<String> trackIds, boolean addToExisting) {
         if (!addToExisting) selectedClipIds.clear();
         double tMin = Math.min(timeStart, timeEnd);
         double tMax = Math.max(timeStart, timeEnd);
         String first = null;
         for (var clip : clips) {
-            if (channels.contains(clip.channel()) && clip.endTime() > tMin && clip.startTime() < tMax) {
+            if (trackIds.contains(clip.trackId()) && clip.endTime() > tMin && clip.startTime() < tMax) {
                 selectedClipIds.add(clip.id());
                 if (first == null) first = clip.id();
             }
@@ -330,9 +416,10 @@ public final class SequenceEditSession {
         return -1;
     }
 
-    public List<SignalClip> clipsOnChannel(SequenceChannel channel) {
+    /** All clips on a specific track, in timeline order. */
+    public List<SignalClip> clipsOnTrack(String trackId) {
         return clips.stream()
-            .filter(c -> c.channel().equals(channel))
+            .filter(c -> c.trackId().equals(trackId))
             .sorted((a, b) -> Double.compare(a.startTime(), b.startTime()))
             .toList();
     }
@@ -422,7 +509,7 @@ public final class SequenceEditSession {
         }
         pushUndo();
         clips.set(idx, new SignalClip(
-            clip.id(), clip.channel(), clip.shape(),
+            clip.id(), clip.trackId(), clip.shape(),
             newStartTime, newDuration, clip.amplitude(),
             newMediaOffset, newMediaDuration
         ));
@@ -456,11 +543,13 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    public void changeClipChannel(String clipId, SequenceChannel newChannel) {
+    /** Move a clip from one track to another (cross-track drag). */
+    public void changeClipTrack(String clipId, String newTrackId) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
+        if (findTrack(newTrackId) == null) return;
         pushUndo();
-        clips.set(idx, clips.get(idx).withChannel(newChannel));
+        clips.set(idx, clips.get(idx).withTrack(newTrackId));
         bumpRevision();
     }
 
@@ -637,23 +726,26 @@ public final class SequenceEditSession {
     // ══════════════════════════════════════════════════════════════════════════
 
     /** Create a clip with a duration equal to 15 % of the visible span. */
-    public SignalClip createDefaultClip(ClipKind kind, SequenceChannel channel, double startTime) {
+    public SignalClip createDefaultClip(ClipKind kind, String trackId, double startTime) {
         double clipDuration = Math.max(dt.get() * 5, (viewEnd.get() - viewStart.get()) * 0.15);
-        return SignalClip.freshCentred(channel, kind, startTime, clipDuration, defaultAmplitudeForChannel(channel));
+        var track = findTrack(trackId);
+        return SignalClip.freshCentred(trackId, kind, startTime, clipDuration,
+            track != null ? defaultAmplitudeForChannel(track.outputChannel()) : 1.0);
     }
 
     /** Create a clip with an explicit duration (used by click-and-drag creation). */
-    public SignalClip createClipCentred(ClipKind kind, SequenceChannel channel, double startTime, double duration) {
-        return SignalClip.freshCentred(channel, kind, startTime, duration, defaultAmplitudeForChannel(channel));
+    public SignalClip createClipCentred(ClipKind kind, String trackId, double startTime, double duration) {
+        var track = findTrack(trackId);
+        return SignalClip.freshCentred(trackId, kind, startTime, duration,
+            track != null ? defaultAmplitudeForChannel(track.outputChannel()) : 1.0);
     }
 
     /**
-     * Sensible starting amplitude for a clip on the given channel — driven by
-     * the active config's {@link FieldDefinition#maxAmplitude()} so a new clip
-     * lands on a visible part of the axis instead of at zero.
+     * Sensible starting amplitude for a clip targeting a given output channel,
+     * driven by the active config's {@link FieldDefinition#maxAmplitude()} so
+     * new clips land on a visible part of the axis.
      */
     public double defaultAmplitudeForChannel(SequenceChannel channel) {
-        if (channel.isRfGate()) return 1.0;
         var field = fieldForChannel(channel);
         if (field == null) return 1.0;
         double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
@@ -689,6 +781,7 @@ public final class SequenceEditSession {
     private EditSnapshot captureSnapshot() {
         return new EditSnapshot(
             List.copyOf(clips),
+            List.copyOf(tracks),
             dt.get(),
             totalDuration.get(),
             Set.copyOf(selectedClipIds),
@@ -699,6 +792,7 @@ public final class SequenceEditSession {
 
     private void applySnapshot(EditSnapshot s) {
         clips.setAll(s.clips);
+        tracks.setAll(s.tracks);
         dt.set(s.dt);
         totalDuration.set(s.totalDuration);
         selectedClipIds.clear();
@@ -717,6 +811,7 @@ public final class SequenceEditSession {
 
     private record EditSnapshot(
         List<SignalClip> clips,
+        List<Track> tracks,
         double dt,
         double totalDuration,
         Set<String> selectedClipIds,
@@ -725,7 +820,12 @@ public final class SequenceEditSession {
     ) {
         EditSnapshot {
             clips = List.copyOf(clips);
+            tracks = List.copyOf(tracks);
             selectedClipIds = Set.copyOf(selectedClipIds);
         }
     }
+
+    // Retain the old ID-based identifier type for callers that pass auto-generated ids.
+    @SuppressWarnings("unused")
+    private static String newId() { return UUID.randomUUID().toString(); }
 }

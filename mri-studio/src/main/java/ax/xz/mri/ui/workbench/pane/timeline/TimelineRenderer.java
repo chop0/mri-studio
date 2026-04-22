@@ -4,8 +4,8 @@ import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.ui.viewmodel.EditorTrack;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.WaveformCache;
 import javafx.scene.canvas.GraphicsContext;
@@ -22,10 +22,6 @@ import javafx.scene.text.TextAlignment;
  * <p>Paints tracks, clips, axes and interaction overlays into a provided
  * {@link GraphicsContext}. All state it needs comes in as parameters — it
  * never mutates anything and never holds a reference to a canvas.
- *
- * <p>Split from the canvas node so the paint logic is testable, shareable
- * (the overview bar uses a subset), and can be replaced without touching
- * mouse-handling code.
  */
 public final class TimelineRenderer {
     private TimelineRenderer() {}
@@ -42,7 +38,6 @@ public final class TimelineRenderer {
     private static final Color BG_ALT = Color.web("#f2f4f8");
     private static final Color LANE_BORDER = Color.web("#dadde3");
     private static final Color LABEL_BG = Color.web("#eef1f5");
-    private static final Color LABEL_BG_GATE = Color.web("#f7eadf");
     private static final Color LABEL_BORDER = Color.web("#c5cad1");
     private static final Color AXIS_LINE = Color.web("#c5cad1");
     private static final Color AXIS_TEXT = Color.web("#5c6571");
@@ -54,6 +49,8 @@ public final class TimelineRenderer {
     private static final Color SELECTION_FRAME = Color.web("#0b5cad");
     private static final Color SELECTION_FILL = Color.color(0.043, 0.36, 0.68, 0.10);
     private static final Color KIND_BADGE_FG = Color.web("#3c434e");
+    private static final Color ORPHAN_LABEL_BG = Color.web("#fce4e4");
+    private static final Color ORPHAN_LABEL_FG = Color.web("#b42318");
 
     private static final Font LABEL_FONT = Font.font("SF Pro Text", FontWeight.BOLD, 10);
     private static final Font AXIS_FONT = Font.font("SF Mono", 9);
@@ -93,13 +90,18 @@ public final class TimelineRenderer {
             var track = tracks.get(i);
             double top = geom.trackTop(i);
             double h = geom.trackHeight(i);
+            var field = session.fieldForChannel(track.outputChannel());
+            boolean orphan = field == null;
 
-            // Row background
+            // Row background — alternating, with a faint tint if orphan.
             g.setFill(i % 2 == 0 ? BG : BG_ALT);
             g.fillRect(pL, top, pW, h);
+            if (orphan) {
+                g.setFill(Color.color(0.76, 0.14, 0.09, 0.04));
+                g.fillRect(pL, top, pW, h);
+            }
 
-            // Label column background + border
-            paintLabel(g, geom, track, top, h);
+            paintLabel(g, geom, track, field, top, h);
 
             // Lane divider
             g.setStroke(LANE_BORDER);
@@ -111,18 +113,16 @@ public final class TimelineRenderer {
                 continue;
             }
 
-            // Zero line (for non-gate rows)
-            if (!track.isGate()) {
-                double mid = geom.trackMid(i);
-                g.setStroke(ZERO_LINE);
-                g.setLineWidth(0.5);
-                g.setLineDashes(3, 3);
-                g.strokeLine(pL, mid, pL + pW, mid);
-                g.setLineDashes();
-            }
+            // Zero line
+            double mid = geom.trackMid(i);
+            g.setStroke(ZERO_LINE);
+            g.setLineWidth(0.5);
+            g.setLineDashes(3, 3);
+            g.strokeLine(pL, mid, pL + pW, mid);
+            g.setLineDashes();
 
-            // Hardware limit lines (only when a field backs this channel)
-            paintHardwareLimits(g, geom, session, track, i);
+            // Hardware limit lines (only when a field backs this output)
+            if (!orphan) paintHardwareLimits(g, geom, session, track, i);
 
             // Clips
             paintTrackClips(g, geom, session, cache, track, i);
@@ -130,11 +130,11 @@ public final class TimelineRenderer {
     }
 
     private static void paintLabel(GraphicsContext g, TimelineGeometry geom,
-                                   EditorTrack track, double top, double h) {
+                                   Track track, Object field, double top, double h) {
         double labelW = geom.labelWidth();
+        boolean orphan = field == null;
 
-        // Label column background
-        g.setFill(track.isGate() ? LABEL_BG_GATE : LABEL_BG);
+        g.setFill(orphan ? ORPHAN_LABEL_BG : LABEL_BG);
         g.fillRect(0, top, labelW - 1, h);
         g.setStroke(LABEL_BORDER);
         g.setLineWidth(0.5);
@@ -143,7 +143,7 @@ public final class TimelineRenderer {
         // Collapse triangle
         boolean collapsed = geom.isCollapsed(track);
         double btnY = top + h / 2 - COLLAPSE_BTN_SIZE / 2;
-        g.setFill(AXIS_TEXT);
+        g.setFill(orphan ? ORPHAN_LABEL_FG : AXIS_TEXT);
         if (collapsed) {
             g.fillPolygon(
                 new double[]{COLLAPSE_BTN_X, COLLAPSE_BTN_X, COLLAPSE_BTN_X + COLLAPSE_BTN_SIZE},
@@ -154,8 +154,12 @@ public final class TimelineRenderer {
                 new double[]{btnY, btnY, btnY + COLLAPSE_BTN_SIZE}, 3);
         }
 
-        // Kind badge (I / Q / R / —)
-        String badge = kindBadge(track);
+        // Kind badge (I / Q / R)
+        String badge = null;
+        if (field instanceof ax.xz.mri.model.simulation.FieldDefinition fd) {
+            if (fd.kind() == AmplitudeKind.QUADRATURE) badge = track.outputChannel().subIndex() == 0 ? "I" : "Q";
+            else if (fd.kind() == AmplitudeKind.REAL) badge = "R";
+        }
         if (badge != null) {
             double badgeX = labelW - 16;
             double badgeY = top + h / 2 - 6;
@@ -169,29 +173,18 @@ public final class TimelineRenderer {
         }
 
         // Label text, right-aligned before the badge.
-        g.setFill(AXIS_TEXT);
+        g.setFill(orphan ? ORPHAN_LABEL_FG : AXIS_TEXT);
         g.setFont(LABEL_FONT);
         g.setTextAlign(TextAlignment.RIGHT);
         double labelRight = (badge != null) ? labelW - 20 : labelW - 6;
-        g.fillText(track.label(), labelRight, top + h / 2 + 3);
+        g.fillText(track.name(), labelRight, top + h / 2 + 3);
         g.setTextAlign(TextAlignment.LEFT);
-    }
-
-    private static String kindBadge(EditorTrack track) {
-        if (track.isGate()) return null;
-        if (track.kind() == AmplitudeKind.QUADRATURE) {
-            // Sub-index 0 = I, 1 = Q
-            return track.channel().subIndex() == 0 ? "I" : "Q";
-        }
-        if (track.kind() == AmplitudeKind.REAL) return "R";
-        return null;
     }
 
     private static void paintHardwareLimits(GraphicsContext g, TimelineGeometry geom,
                                             SequenceEditSession session,
-                                            EditorTrack track, int trackIndex) {
-        if (track.isGate()) return;
-        double hwMax = channelHardwareMax(session, track.channel());
+                                            Track track, int trackIndex) {
+        double hwMax = channelHardwareMax(session, track.outputChannel());
         if (hwMax <= 0) return;
         double displayMax = hwMax * 1.15;
         double yPos = geom.valueToY(trackIndex, hwMax, displayMax);
@@ -209,15 +202,15 @@ public final class TimelineRenderer {
         g.setFill(HW_LABEL);
         g.setFont(AXIS_FONT);
         g.setTextAlign(TextAlignment.LEFT);
-        g.fillText(formatAxisValue(session, track.channel(), hwMax), pL + 4, yPos - 2);
+        g.fillText(formatAxisValue(session, track.outputChannel(), hwMax), pL + 4, yPos - 2);
     }
 
     private static void paintCollapsedLane(GraphicsContext g, TimelineGeometry geom,
-                                           EditorTrack track, SequenceEditSession session,
+                                           Track track, SequenceEditSession session,
                                            double top, double h) {
-        Color base = ChannelPalette.colourFor(session, track.channel());
-        var channelClips = session.clipsOnChannel(track.channel());
-        for (var clip : channelClips) {
+        Color base = ChannelPalette.colourFor(session, track.outputChannel());
+        var trackClips = session.clipsOnTrack(track.id());
+        for (var clip : trackClips) {
             if (clip.endTime() < geom.viewStart() || clip.startTime() > geom.viewEnd()) continue;
             double x1 = geom.timeToX(clip.startTime());
             double x2 = geom.timeToX(clip.endTime());
@@ -229,14 +222,14 @@ public final class TimelineRenderer {
 
     private static void paintTrackClips(GraphicsContext g, TimelineGeometry geom,
                                         SequenceEditSession session, WaveformCache cache,
-                                        EditorTrack track, int trackIndex) {
-        var channelClips = session.clipsOnChannel(track.channel());
+                                        Track track, int trackIndex) {
+        var trackClips = session.clipsOnTrack(track.id());
         double top = geom.trackTop(trackIndex);
         double h = geom.trackHeight(trackIndex);
-        double displayMax = channelDisplayMax(session, track.channel());
-        Color base = ChannelPalette.colourFor(session, track.channel());
+        double displayMax = channelDisplayMax(session, track.outputChannel());
+        Color base = ChannelPalette.colourFor(session, track.outputChannel());
 
-        for (var clip : channelClips) {
+        for (var clip : trackClips) {
             if (clip.endTime() < geom.viewStart() || clip.startTime() > geom.viewEnd()) continue;
             paintClip(g, geom, session, cache, clip, trackIndex, top, h, displayMax, base);
         }
@@ -251,7 +244,6 @@ public final class TimelineRenderer {
         double w = Math.max(1, x2 - x1);
         boolean selected = session.isSelected(clip.id());
 
-        // Rounded body: gradient so it has visible depth
         var gradient = new LinearGradient(
             0, 0, 0, 1, true, null,
             new Stop(0, ChannelPalette.tint(base, selected ? 0.30 : 0.18)),
@@ -260,7 +252,6 @@ public final class TimelineRenderer {
         g.setFill(gradient);
         g.fillRoundRect(x1, top + 2, w, h - 4, CLIP_RADIUS, CLIP_RADIUS);
 
-        // Selection frame OR subtle border
         if (selected) {
             g.setStroke(SELECTION_FRAME);
             g.setLineWidth(1.4);
@@ -270,7 +261,6 @@ public final class TimelineRenderer {
         }
         g.strokeRoundRect(x1, top + 2, w, h - 4, CLIP_RADIUS, CLIP_RADIUS);
 
-        // Waveform (clipped to clip bounds)
         g.save();
         g.beginPath();
         g.rect(x1, top + 2, w, h - 4);
@@ -278,7 +268,6 @@ public final class TimelineRenderer {
         paintClipWaveform(g, geom, cache, clip, trackIndex, x1, x2, displayMax, base);
         g.restore();
 
-        // Label inside the clip
         if (w > 34) {
             g.setFill(ChannelPalette.tint(base, 0.85));
             g.setFont(CLIP_LABEL_FONT);
@@ -286,7 +275,6 @@ public final class TimelineRenderer {
             g.fillText(clip.shape().displayName(), x1 + 5, top + 13);
         }
 
-        // Spline handles
         if (selected && clip.shape() instanceof ClipShape.Spline spline) {
             g.setLineWidth(1.2);
             for (int s = 0; s < spline.points().size(); s++) {
@@ -302,7 +290,6 @@ public final class TimelineRenderer {
             }
         }
 
-        // Trim handles (always on selection)
         if (selected) {
             g.setStroke(SELECTION_FRAME);
             g.setLineWidth(2);
@@ -357,7 +344,7 @@ public final class TimelineRenderer {
                                                ClipDragState.CreateClip c) {
         int ti = -1;
         for (int i = 0; i < geom.tracks().size(); i++) {
-            if (geom.tracks().get(i).channel().equals(c.channel())) { ti = i; break; }
+            if (geom.tracks().get(i).id().equals(c.trackId())) { ti = i; break; }
         }
         if (ti < 0) return;
 
@@ -422,7 +409,6 @@ public final class TimelineRenderer {
         g.setLineWidth(0.5);
         g.strokeLine(pL, axisY, pL + pW, axisY);
 
-        // Pick a "nice" tick step (1×, 2×, 5× × 10^n) near span/8.
         double rawStep = span / 8;
         double magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(1e-9, rawStep))));
         double normalised = rawStep / magnitude;
@@ -460,7 +446,6 @@ public final class TimelineRenderer {
 
     /** Hardware limit for a channel — the peak of the field amplitude range. */
     public static double channelHardwareMax(SequenceEditSession session, SequenceChannel channel) {
-        if (channel.isRfGate()) return 1.0;
         var field = session.fieldForChannel(channel);
         if (field != null) {
             double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
@@ -471,7 +456,6 @@ public final class TimelineRenderer {
 
     /** Format an amplitude as a physical value with SI prefix, for axis labels. */
     public static String formatAxisValue(SequenceEditSession session, SequenceChannel channel, double amplitude) {
-        if (channel.isRfGate()) return String.format("%.1f", amplitude);
         var ef = session.eigenfieldForChannel(channel);
         double physical = ef != null ? amplitude * ef.defaultMagnitude() : amplitude;
         String units = ef != null ? ef.units() : "";

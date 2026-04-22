@@ -4,8 +4,8 @@ import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.project.EigenfieldDocument;
-import ax.xz.mri.ui.viewmodel.EditorTrack;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
@@ -90,6 +90,7 @@ public final class ClipInspectorSection {
         root.getChildren().addAll(
             buildHeader(clip),
             buildSelectionBadge(),
+            buildTrackPicker(clip),
             buildTimingRows(clip),
             buildShapeParams(clip),
             new Separator(),
@@ -101,8 +102,13 @@ public final class ClipInspectorSection {
     }
 
     private Node buildHeader(SignalClip clip) {
-        var channelLabel = new Label(channelLabel(clip.channel()));
-        channelLabel.getStyleClass().add("clip-inspector-channel");
+        // Track name (editable via context menu elsewhere), with an arrow to its shape kind.
+        var trackLabel = new Label();
+        trackLabel.getStyleClass().add("clip-inspector-channel");
+        pullers.add(c -> {
+            var track = session.findTrack(c.trackId());
+            trackLabel.setText(track != null ? track.name() : "\u2014");
+        });
 
         var shapeCombo = new ComboBox<ClipKind>();
         shapeCombo.getItems().addAll(ClipKind.values());
@@ -111,7 +117,6 @@ public final class ClipInspectorSection {
             var selected = shapeCombo.getValue();
             if (selected != null) session.changeClipKind(clipId, selected);
         });
-        // When clip shape changes externally (undo/redo), keep the combo in sync without firing.
         pullers.add(c -> {
             if (c != null && shapeCombo.getValue() != c.shape().kind()) {
                 var old = shapeCombo.getOnAction();
@@ -124,9 +129,46 @@ public final class ClipInspectorSection {
         var arrow = new Label("\u2192");
         arrow.getStyleClass().add("clip-inspector-arrow");
 
-        var row = new HBox(8, channelLabel, arrow, shapeCombo);
+        var row = new HBox(8, trackLabel, arrow, shapeCombo);
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    private Node buildTrackPicker(SignalClip clip) {
+        var tracks = session.tracks;
+        var combo = new ComboBox<Track>();
+        combo.setPrefWidth(200);
+        combo.getItems().setAll(tracks);
+        combo.setCellFactory(lv -> trackCell());
+        combo.setButtonCell(trackCell());
+        combo.setValue(session.findTrack(clip.trackId()));
+        combo.setOnAction(e -> {
+            var t = combo.getValue();
+            if (t != null) session.changeClipTrack(clipId, t.id());
+        });
+        // Keep combo in sync when the session's track list or the clip's track id changes.
+        Runnable sync = () -> {
+            var current = session.findClip(clipId);
+            if (current == null) return;
+            combo.getItems().setAll(session.tracks);
+            var old = combo.getOnAction();
+            combo.setOnAction(null);
+            combo.setValue(session.findTrack(current.trackId()));
+            combo.setOnAction(old);
+        };
+        session.tracks.addListener((javafx.collections.ListChangeListener<Track>) c -> sync.run());
+        pullers.add(c -> sync.run());
+
+        return row("Track", combo);
+    }
+
+    private javafx.scene.control.ListCell<Track> trackCell() {
+        return new javafx.scene.control.ListCell<>() {
+            @Override protected void updateItem(Track item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? "" : item.name());
+            }
+        };
     }
 
     private Node buildSelectionBadge() {
@@ -167,7 +209,8 @@ public final class ClipInspectorSection {
         grid.getChildren().add(row("Duration", dur));
 
         // Amplitude — with physical-peak readout driven by eigenfield metadata
-        var ef = session.eigenfieldForChannel(clip.channel());
+        var track = session.findTrack(clip.trackId());
+        var ef = track != null ? session.eigenfieldForChannel(track.outputChannel()) : null;
         String units = ef != null ? ef.units() : "";
         var amp = nf().range(-1e6, 1e6).step(0.1).scientific().unit(units.isEmpty() ? "" : units);
         amp.setValue(clip.amplitude());
@@ -400,11 +443,12 @@ public final class ClipInspectorSection {
         return l;
     }
 
+    @SuppressWarnings("unused")
     private String channelLabel(SequenceChannel channel) {
-        if (channel.isRfGate()) return "RF Gate";
+        if (channel == null) return "\u2014";
         var field = session.fieldForChannel(channel);
         if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
-        return EditorTrack.labelFor(field, channel.subIndex());
+        return ax.xz.mri.model.sequence.ClipBaker.defaultTrackName(field, channel.subIndex());
     }
 
     private String formatPeak(SignalClip clip, EigenfieldDocument ef) {

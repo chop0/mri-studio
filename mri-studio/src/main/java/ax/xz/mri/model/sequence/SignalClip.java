@@ -5,11 +5,13 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.UUID;
 
 /**
- * An immutable signal clip placed on one channel of a pulse sequence.
+ * An immutable signal clip placed on a {@link Track} of a pulse sequence.
  *
- * <p>Each clip defines a waveform shape over a time interval on a specific
- * channel; clips on the same channel with overlapping time ranges combine
- * additively at evaluation time.
+ * <p>Each clip defines a waveform shape over a time interval; the track it
+ * belongs to determines which simulator output channel the shape contributes
+ * to. Multiple tracks may route to the same output, and multiple clips on the
+ * same track (or on different tracks sharing an output) combine additively at
+ * evaluation time.
  *
  * <h3>Premiere-style trimming</h3>
  * <p>The waveform is defined over the clip's full <em>media extent</em>
@@ -29,7 +31,7 @@ import java.util.UUID;
  */
 public record SignalClip(
     String id,
-    SequenceChannel channel,
+    @JsonProperty("track_id") String trackId,
     ClipShape shape,
     @JsonProperty("start_time") double startTime,
     double duration,
@@ -39,6 +41,7 @@ public record SignalClip(
 ) {
     public SignalClip {
         if (id == null) id = UUID.randomUUID().toString();
+        if (trackId == null) throw new IllegalArgumentException("SignalClip.trackId must be non-null");
         if (mediaDuration <= 0) mediaDuration = duration;
     }
 
@@ -78,12 +81,12 @@ public record SignalClip(
      * (four times the duration, shifted so the visible part sits in the middle).
      * The shape's own default parameters are used.
      */
-    public static SignalClip freshCentred(SequenceChannel channel, ClipKind kind,
+    public static SignalClip freshCentred(String trackId, ClipKind kind,
                                           double startTime, double duration, double amplitude) {
         double mediaDuration = duration * MEDIA_EXTENT_FACTOR;
         double mediaOffset = duration * MEDIA_OFFSET_FACTOR;
         return new SignalClip(
-            null, channel, kind.defaultFor(mediaDuration),
+            null, trackId, kind.defaultFor(mediaDuration),
             startTime, duration, amplitude,
             mediaOffset, mediaDuration
         );
@@ -101,7 +104,7 @@ public record SignalClip(
     public SignalClip centred() {
         double newMediaDuration = duration * MEDIA_EXTENT_FACTOR;
         double newMediaOffset = duration * MEDIA_OFFSET_FACTOR;
-        return new SignalClip(id, channel, shape,
+        return new SignalClip(id, trackId, shape,
             startTime, duration, amplitude,
             newMediaOffset, newMediaDuration);
     }
@@ -111,11 +114,6 @@ public record SignalClip(
      * preserve the original shape identity; shape-specific parameters are
      * re-fitted via {@link ClipShape#onSplit(double, double, boolean)} so each
      * half keeps its original behaviour inside its new window.
-     *
-     * @return left and right halves. Neither is added to any sequence — that's
-     *         the caller's job.
-     * @throws IllegalArgumentException if {@code splitTime} is outside the
-     *         clip's visible range
      */
     public Split split(double splitTime) {
         if (splitTime <= startTime || splitTime >= endTime())
@@ -126,12 +124,12 @@ public record SignalClip(
         double splitU = leftDuration / duration;
 
         var left = new SignalClip(
-            UUID.randomUUID().toString(), channel, shape.onSplit(duration, splitU, true),
+            UUID.randomUUID().toString(), trackId, shape.onSplit(duration, splitU, true),
             startTime, leftDuration, amplitude,
             0, leftDuration
         );
         var right = new SignalClip(
-            UUID.randomUUID().toString(), channel, shape.onSplit(duration, splitU, false),
+            UUID.randomUUID().toString(), trackId, shape.onSplit(duration, splitU, false),
             splitTime, rightDuration, amplitude,
             0, rightDuration
         );
@@ -144,35 +142,35 @@ public record SignalClip(
     // ── with* mutators ───────────────────────────────────────────────────────
 
     public SignalClip withStartTime(double newStartTime) {
-        return new SignalClip(id, channel, shape, newStartTime, duration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, newStartTime, duration, amplitude, mediaOffset, mediaDuration);
     }
 
     public SignalClip withDuration(double newDuration) {
-        return new SignalClip(id, channel, shape, startTime, newDuration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, newDuration, amplitude, mediaOffset, mediaDuration);
     }
 
     public SignalClip withAmplitude(double newAmplitude) {
-        return new SignalClip(id, channel, shape, startTime, duration, newAmplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, duration, newAmplitude, mediaOffset, mediaDuration);
     }
 
     public SignalClip withMediaOffset(double newMediaOffset) {
-        return new SignalClip(id, channel, shape, startTime, duration, amplitude, newMediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, newMediaOffset, mediaDuration);
     }
 
     public SignalClip withMediaDuration(double newMediaDuration) {
-        return new SignalClip(id, channel, shape, startTime, duration, amplitude, mediaOffset, newMediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, mediaOffset, newMediaDuration);
     }
 
     public SignalClip withShape(ClipShape newShape) {
-        return new SignalClip(id, channel, newShape, startTime, duration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, newShape, startTime, duration, amplitude, mediaOffset, mediaDuration);
     }
 
-    public SignalClip withChannel(SequenceChannel newChannel) {
-        return new SignalClip(id, newChannel, shape, startTime, duration, amplitude, mediaOffset, mediaDuration);
+    public SignalClip withTrack(String newTrackId) {
+        return new SignalClip(id, newTrackId, shape, startTime, duration, amplitude, mediaOffset, mediaDuration);
     }
 
     public SignalClip withNewId() {
-        return new SignalClip(UUID.randomUUID().toString(), channel, shape,
+        return new SignalClip(UUID.randomUUID().toString(), trackId, shape,
             startTime, duration, amplitude, mediaOffset, mediaDuration);
     }
 }

@@ -4,7 +4,7 @@ import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
-import ax.xz.mri.ui.viewmodel.EditorTrack;
+import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
@@ -12,6 +12,7 @@ import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Menu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.TextInputDialog;
 import javafx.scene.input.ContextMenuEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
@@ -28,10 +29,6 @@ import java.util.function.Supplier;
  * into session mutations, runs hit tests, and builds the context menu.
  * {@link TimelineRenderer} reads the drag state to paint overlays (rubber
  * band, create-clip preview, snap guide).
- *
- * <p>Clean separation of concerns: this class never paints; the renderer
- * never mutates. The canvas is a thin shell that wires mouse events to this
- * class and schedules redraws via the supplied {@code onRedraw} hook.
  */
 public final class TimelineInteraction {
 
@@ -74,15 +71,14 @@ public final class TimelineInteraction {
         var geom = geometrySupplier.get();
         double mx = e.getX(), my = e.getY();
 
-        // Click in the label column: toggle collapse, or enter reorder mode
+        // Label column click: toggle collapse on the hit track.
         if (mx < geom.labelWidth()) {
             int ti = geom.trackAtY(my);
             if (ti >= 0) {
                 var track = geom.tracks().get(ti);
-                if (inCollapseButton(geom, track, ti, mx)) {
-                    session.setChannelCollapsed(track.channel(), !geom.isCollapsed(track));
+                if (inCollapseButton(mx)) {
+                    session.setTrackCollapsed(track.id(), !geom.isCollapsed(track));
                 }
-                // Reordering is gone — tracks are derived from config order.
             }
             return;
         }
@@ -97,7 +93,7 @@ public final class TimelineInteraction {
             int ti = geom.trackAtY(my);
             if (ti >= 0 && !geom.isCollapsed(geom.tracks().get(ti))) {
                 drag = new ClipDragState.CreateClip(
-                    activeCreationKind, geom.tracks().get(ti).channel(),
+                    activeCreationKind, geom.tracks().get(ti).id(),
                     geom.xToTime(mx), mx);
                 onCursor.accept(Cursor.CROSSHAIR);
                 onRedraw.run();
@@ -111,7 +107,6 @@ public final class TimelineInteraction {
             return;
         }
 
-        // Rubber band selection on empty space
         if (!e.isShiftDown() && !e.isShortcutDown()) session.clearSelection();
         drag = new ClipDragState.RubberBand(mx, my, mx, my);
         onCursor.accept(Cursor.CROSSHAIR);
@@ -131,7 +126,7 @@ public final class TimelineInteraction {
             case ClipDragState.SplinePoint sp -> onSplinePoint(geom, sp, mx, my);
             case ClipDragState.PanView p -> onPan(geom, p, mx);
             case ClipDragState.CreateClip c ->
-                drag = new ClipDragState.CreateClip(c.kind(), c.channel(), c.startTimeMicros(), mx);
+                drag = new ClipDragState.CreateClip(c.kind(), c.trackId(), c.startTimeMicros(), mx);
             case ClipDragState.RubberBand rb ->
                 drag = new ClipDragState.RubberBand(rb.startX(), rb.startY(), mx, my);
             case ClipDragState.Idle ignored -> { /* nothing */ }
@@ -188,7 +183,6 @@ public final class TimelineInteraction {
         var clip = session.findClip(hit.clipId);
         if (clip == null) return;
 
-        // Selection updates
         if (e.isShortcutDown())        session.toggleSelection(hit.clipId);
         else if (e.isShiftDown())      session.addToSelection(hit.clipId);
         else if (!session.isSelected(hit.clipId)) session.selectOnly(hit.clipId);
@@ -252,11 +246,11 @@ public final class TimelineInteraction {
             session.moveClip(m.primaryClipId(), newStart);
         }
 
-        // Cross-track: when dragging into a different track, change channel.
+        // Cross-track: dragging into a different lane re-routes the clip.
         int ti = geom.trackAtY(my);
         if (ti >= 0 && ti != m.originTrackIndex()) {
-            var newChannel = geom.tracks().get(ti).channel();
-            session.changeClipChannel(m.primaryClipId(), newChannel);
+            var newTrack = geom.tracks().get(ti);
+            session.changeClipTrack(m.primaryClipId(), newTrack.id());
             drag = new ClipDragState.Move(m.primaryClipId(), m.anchorOffsetMicros(),
                 ti, m.multi(), m.multiAnchorTimeMicros());
         }
@@ -287,7 +281,8 @@ public final class TimelineInteraction {
     private void onAmplitude(TimelineGeometry geom, ClipDragState.Amplitude a, double my) {
         double deltaY = a.anchorY() - my;
         double h = geom.trackHeight(a.trackIndex());
-        double displayMax = TimelineRenderer.channelHardwareMax(session, geom.tracks().get(a.trackIndex()).channel());
+        var track = geom.tracks().get(a.trackIndex());
+        double displayMax = TimelineRenderer.channelHardwareMax(session, track.outputChannel());
         double deltaAmp = (deltaY / (h * 0.42)) * displayMax;
         session.setClipAmplitude(a.clipId(), a.originalAmplitude() + deltaAmp);
     }
@@ -299,7 +294,8 @@ public final class TimelineInteraction {
         if (ti < 0) ti = 0;
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
         t = Math.max(0, Math.min(1, t));
-        double displayMax = TimelineRenderer.channelDisplayMax(session, clip.channel());
+        var outputChannel = geom.tracks().get(ti).outputChannel();
+        double displayMax = TimelineRenderer.channelDisplayMax(session, outputChannel);
         double v = clip.amplitude() != 0 ? geom.yToValue(ti, my, displayMax) / clip.amplitude() : 0;
         session.updateSplinePoint(sp.clipId(), sp.pointIndex(), new ClipShape.Spline.Point(t, v));
     }
@@ -324,7 +320,7 @@ public final class TimelineInteraction {
         }
         double duration = end - start;
         if (duration >= session.dt.get()) {
-            session.addClip(session.createClipCentred(c.kind(), c.channel(), start, duration));
+            session.addClip(session.createClipCentred(c.kind(), c.trackId(), start, duration));
         }
     }
 
@@ -333,14 +329,14 @@ public final class TimelineInteraction {
         double tEnd = geom.xToTime(Math.max(rb.startX(), rb.endX()));
         double yMin = Math.min(rb.startY(), rb.endY());
         double yMax = Math.max(rb.startY(), rb.endY());
-        var channels = new LinkedHashSet<SequenceChannel>();
+        var trackIds = new LinkedHashSet<String>();
         for (int i = 0; i < geom.tracks().size(); i++) {
             double top = geom.trackTop(i);
             double h = geom.trackHeight(i);
-            if (top + h > yMin && top < yMax) channels.add(geom.tracks().get(i).channel());
+            if (top + h > yMin && top < yMax) trackIds.add(geom.tracks().get(i).id());
         }
         boolean addToExisting = e.isShiftDown() || e.isShortcutDown();
-        session.selectClipsInRegion(tStart, tEnd, channels, addToExisting);
+        session.selectClipsInRegion(tStart, tEnd, trackIds, addToExisting);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -359,17 +355,16 @@ public final class TimelineInteraction {
 
         double top = geom.trackTop(ti);
         double h = geom.trackHeight(ti);
-        double displayMax = TimelineRenderer.channelDisplayMax(session, track.channel());
+        double displayMax = TimelineRenderer.channelDisplayMax(session, track.outputChannel());
 
-        var channelClips = session.clipsOnChannel(track.channel());
-        for (int i = channelClips.size() - 1; i >= 0; i--) {
-            var clip = channelClips.get(i);
+        var trackClips = session.clipsOnTrack(track.id());
+        for (int i = trackClips.size() - 1; i >= 0; i--) {
+            var clip = trackClips.get(i);
             double x1 = geom.timeToX(clip.startTime());
             double x2 = geom.timeToX(clip.endTime());
             if (mx < x1 - EDGE_HIT_WIDTH || mx > x2 + EDGE_HIT_WIDTH) continue;
             if (my < top || my > top + h) continue;
 
-            // Spline points (only when selected)
             if (session.isSelected(clip.id()) && clip.shape() instanceof ClipShape.Spline spline) {
                 for (int sp = 0; sp < spline.points().size(); sp++) {
                     var pt = spline.points().get(sp);
@@ -387,7 +382,7 @@ public final class TimelineInteraction {
         return null;
     }
 
-    private boolean inCollapseButton(TimelineGeometry geom, EditorTrack track, int trackIndex, double mx) {
+    private boolean inCollapseButton(double mx) {
         return mx >= COLLAPSE_HIT_X && mx <= COLLAPSE_HIT_X + COLLAPSE_HIT_W;
     }
 
@@ -418,89 +413,165 @@ public final class TimelineInteraction {
             int ti = geom.trackAtY(my);
             if (ti >= 0) {
                 var track = geom.tracks().get(ti);
-                var toggle = new MenuItem(geom.isCollapsed(track) ? "Expand Track" : "Collapse Track");
-                toggle.setOnAction(ev -> session.setChannelCollapsed(track.channel(), !geom.isCollapsed(track)));
-                menu.getItems().add(toggle);
-
-                var collapseAll = new MenuItem("Collapse All");
-                collapseAll.setOnAction(ev -> {
-                    for (var t : geom.tracks()) session.setChannelCollapsed(t.channel(), true);
-                });
-                var expandAll = new MenuItem("Expand All");
-                expandAll.setOnAction(ev -> {
-                    for (var t : geom.tracks()) session.setChannelCollapsed(t.channel(), false);
-                });
-                menu.getItems().addAll(new SeparatorMenuItem(), collapseAll, expandAll);
+                populateTrackMenu(menu, track, geom);
             }
             return menu;
         }
 
         var hit = hitTest(geom, mx, my);
         if (hit != null) {
-            if (!session.isSelected(hit.clipId)) session.selectOnly(hit.clipId);
-            var clip = session.findClip(hit.clipId);
-            if (clip == null) return menu;
-
-            var delete = new MenuItem("Delete");
-            delete.setOnAction(ev -> session.deleteSelectedClips());
-            var duplicate = new MenuItem("Duplicate");
-            duplicate.setOnAction(ev -> session.duplicateSelectedClips());
-            var split = new MenuItem("Split Clip Here");
-            split.setOnAction(ev -> session.splitClip(hit.clipId, geom.xToTime(mx)));
-            var recentre = new MenuItem("Re-centre Media");
-            recentre.setOnAction(ev -> session.recentreClip(hit.clipId));
-
-            var shapes = new Menu("Change Shape");
-            for (var kind : ClipKind.values()) {
-                var item = new MenuItem(kind.displayName());
-                item.setDisable(kind == clip.shape().kind());
-                item.setOnAction(ev -> session.changeClipKind(hit.clipId, kind));
-                shapes.getItems().add(item);
-            }
-
-            menu.getItems().addAll(delete, duplicate, split, recentre, new SeparatorMenuItem(), shapes);
-
-            if (clip.shape() instanceof ClipShape.Spline) {
-                menu.getItems().add(new SeparatorMenuItem());
-                var addPoint = new MenuItem("Add Spline Point Here");
-                addPoint.setOnAction(ev -> addSplinePointAt(clip, geom, mx, my));
-                menu.getItems().add(addPoint);
-                if (hit.zone == HitZone.SPLINE_POINT && hit.splinePointIndex >= 0) {
-                    var removePoint = new MenuItem("Remove This Point");
-                    removePoint.setOnAction(ev -> session.removeSplinePoint(hit.clipId, hit.splinePointIndex));
-                    menu.getItems().add(removePoint);
-                }
-            }
+            populateClipMenu(menu, geom, mx, my, hit);
             return menu;
         }
 
-        // Right-clicked on empty space within a track
+        // Right-clicked on empty space within a lane.
         int ti = geom.trackAtY(my);
         if (ti >= 0 && !geom.isCollapsed(geom.tracks().get(ti))) {
-            double time = geom.xToTime(mx);
-            var ch = geom.tracks().get(ti).channel();
-            var addMenu = new Menu("Add Clip");
-            for (var kind : ClipKind.values()) {
-                var item = new MenuItem(kind.displayName());
-                item.setOnAction(ev -> session.addClip(session.createDefaultClip(kind, ch, time)));
-                addMenu.getItems().add(item);
-            }
-            menu.getItems().add(addMenu);
+            populateEmptyLaneMenu(menu, geom.tracks().get(ti), geom.xToTime(mx));
         }
+
         var zoomFit = new MenuItem("Zoom to Fit");
         zoomFit.setOnAction(ev -> session.fitView());
         menu.getItems().add(zoomFit);
+
+        // Append a global "Add Track…" submenu for when right-clicking in a
+        // blank area with no hits.
+        if (menu.getItems().size() <= 1) {
+            menu.getItems().addAll(new SeparatorMenuItem(), buildAddTrackMenu("Add New Track"));
+        }
         return menu;
+    }
+
+    private void populateTrackMenu(ContextMenu menu, Track track, TimelineGeometry geom) {
+        var toggle = new MenuItem(geom.isCollapsed(track) ? "Expand Track" : "Collapse Track");
+        toggle.setOnAction(ev -> session.setTrackCollapsed(track.id(), !geom.isCollapsed(track)));
+
+        var rename = new MenuItem("Rename Track\u2026");
+        rename.setOnAction(ev -> promptRenameTrack(track));
+
+        var collapseAll = new MenuItem("Collapse All");
+        collapseAll.setOnAction(ev -> { for (var t : geom.tracks()) session.setTrackCollapsed(t.id(), true); });
+        var expandAll = new MenuItem("Expand All");
+        expandAll.setOnAction(ev -> { for (var t : geom.tracks()) session.setTrackCollapsed(t.id(), false); });
+
+        var routeMenu = buildRouteTrackMenu(track);
+        var addTrackMenu = buildAddTrackMenu("Add Track");
+
+        var duplicate = new MenuItem("Duplicate Track");
+        duplicate.setOnAction(ev -> {
+            var copy = session.addTrack(track.outputChannel(), track.name() + " copy");
+            // Copy the original's clips onto the new track.
+            for (var c : session.clipsOnTrack(track.id())) {
+                session.addClip(c.withNewId().withTrack(copy.id()));
+            }
+        });
+
+        var remove = new MenuItem("Remove Track");
+        remove.setOnAction(ev -> session.removeTrack(track.id()));
+
+        menu.getItems().addAll(
+            toggle, rename,
+            new SeparatorMenuItem(),
+            routeMenu, addTrackMenu, duplicate,
+            new SeparatorMenuItem(),
+            collapseAll, expandAll,
+            new SeparatorMenuItem(),
+            remove
+        );
+    }
+
+    private Menu buildRouteTrackMenu(Track track) {
+        var menu = new Menu("Route to Output");
+        for (var channel : session.availableOutputChannels()) {
+            var name = session.defaultTrackNameFor(channel);
+            var item = new MenuItem(name);
+            item.setDisable(channel.equals(track.outputChannel()));
+            item.setOnAction(ev -> session.setTrackOutputChannel(track.id(), channel));
+            menu.getItems().add(item);
+        }
+        if (menu.getItems().isEmpty()) menu.setDisable(true);
+        return menu;
+    }
+
+    private Menu buildAddTrackMenu(String label) {
+        var menu = new Menu(label);
+        for (var channel : session.availableOutputChannels()) {
+            var name = session.defaultTrackNameFor(channel);
+            var item = new MenuItem(name);
+            item.setOnAction(ev -> session.addTrack(channel, name));
+            menu.getItems().add(item);
+        }
+        if (menu.getItems().isEmpty()) menu.setDisable(true);
+        return menu;
+    }
+
+    private void populateClipMenu(ContextMenu menu, TimelineGeometry geom, double mx, double my, ClipHit hit) {
+        if (!session.isSelected(hit.clipId)) session.selectOnly(hit.clipId);
+        var clip = session.findClip(hit.clipId);
+        if (clip == null) return;
+
+        var delete = new MenuItem("Delete");
+        delete.setOnAction(ev -> session.deleteSelectedClips());
+        var duplicate = new MenuItem("Duplicate");
+        duplicate.setOnAction(ev -> session.duplicateSelectedClips());
+        var split = new MenuItem("Split Clip Here");
+        split.setOnAction(ev -> session.splitClip(hit.clipId, geom.xToTime(mx)));
+        var recentre = new MenuItem("Re-centre Media");
+        recentre.setOnAction(ev -> session.recentreClip(hit.clipId));
+
+        var shapes = new Menu("Change Shape");
+        for (var kind : ClipKind.values()) {
+            var item = new MenuItem(kind.displayName());
+            item.setDisable(kind == clip.shape().kind());
+            item.setOnAction(ev -> session.changeClipKind(hit.clipId, kind));
+            shapes.getItems().add(item);
+        }
+
+        menu.getItems().addAll(delete, duplicate, split, recentre, new SeparatorMenuItem(), shapes);
+
+        if (clip.shape() instanceof ClipShape.Spline) {
+            menu.getItems().add(new SeparatorMenuItem());
+            var addPoint = new MenuItem("Add Spline Point Here");
+            addPoint.setOnAction(ev -> addSplinePointAt(clip, geom, mx, my));
+            menu.getItems().add(addPoint);
+            if (hit.zone == HitZone.SPLINE_POINT && hit.splinePointIndex >= 0) {
+                var removePoint = new MenuItem("Remove This Point");
+                removePoint.setOnAction(ev -> session.removeSplinePoint(hit.clipId, hit.splinePointIndex));
+                menu.getItems().add(removePoint);
+            }
+        }
+    }
+
+    private void populateEmptyLaneMenu(ContextMenu menu, Track track, double time) {
+        var addMenu = new Menu("Add Clip");
+        for (var kind : ClipKind.values()) {
+            var item = new MenuItem(kind.displayName());
+            item.setOnAction(ev -> session.addClip(session.createDefaultClip(kind, track.id(), time)));
+            addMenu.getItems().add(item);
+        }
+        menu.getItems().add(addMenu);
     }
 
     private void addSplinePointAt(SignalClip clip, TimelineGeometry geom, double mx, double my) {
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
         t = Math.max(0, Math.min(1, t));
         int ti = geom.trackAtY(my);
-        double displayMax = TimelineRenderer.channelDisplayMax(session, clip.channel());
+        SequenceChannel outputChannel = ti >= 0 ? geom.tracks().get(ti).outputChannel() : null;
+        double displayMax = outputChannel != null
+            ? TimelineRenderer.channelDisplayMax(session, outputChannel)
+            : 1.0;
         double v = ti >= 0 && clip.amplitude() != 0
             ? geom.yToValue(ti, my, displayMax) / clip.amplitude()
             : 0.5;
         session.addSplinePoint(clip.id(), new ClipShape.Spline.Point(t, v));
+    }
+
+    private void promptRenameTrack(Track track) {
+        var dialog = new TextInputDialog(track.name());
+        dialog.setTitle("Rename Track");
+        dialog.setHeaderText("Rename track");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(s -> !s.isBlank())
+            .ifPresent(name -> session.renameTrack(track.id(), name));
     }
 }

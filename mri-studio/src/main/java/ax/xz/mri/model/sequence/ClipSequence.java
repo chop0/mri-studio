@@ -3,8 +3,16 @@ package ax.xz.mri.model.sequence;
 import java.util.List;
 
 /**
- * A clip-based sequence representation: a collection of signal clips
- * placed on channels over a total duration with a uniform time step.
+ * A clip-based sequence representation.
+ *
+ * <p>A sequence is the combination of:
+ * <ul>
+ *   <li><b>Tracks</b> — arrangement lanes; each targets one {@link SequenceChannel}
+ *       output defined by the simulation config. Multiple tracks may target
+ *       the same output; their clips sum at evaluation time.</li>
+ *   <li><b>Clips</b> — waveform-bearing pieces placed on a track (referenced
+ *       by {@link SignalClip#trackId()}).</li>
+ * </ul>
  *
  * <p>This is the authoritative editing model. On save, it is baked down
  * to {@link Segment}/{@link PulseSegment} arrays for simulator compatibility.
@@ -12,9 +20,11 @@ import java.util.List;
 public record ClipSequence(
     double dt,
     double totalDuration,
+    List<Track> tracks,
     List<SignalClip> clips
 ) {
     public ClipSequence {
+        tracks = tracks == null ? List.of() : List.copyOf(tracks);
         clips = clips == null ? List.of() : List.copyOf(clips);
     }
 

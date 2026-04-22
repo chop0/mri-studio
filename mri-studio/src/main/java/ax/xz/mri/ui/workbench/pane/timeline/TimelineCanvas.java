@@ -1,8 +1,8 @@
 package ax.xz.mri.ui.workbench.pane.timeline;
 
 import ax.xz.mri.model.sequence.ClipKind;
+import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.ui.framework.ResizableCanvas;
-import ax.xz.mri.ui.viewmodel.EditorTrack;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.ui.workbench.pane.WaveformCache;
@@ -60,9 +60,9 @@ public final class TimelineCanvas extends ResizableCanvas {
         session.viewStart.addListener((obs, o, n) -> markDirty());
         session.viewEnd.addListener((obs, o, n) -> markDirty());
         session.selectedClipIds.addListener((javafx.collections.SetChangeListener<String>) c -> markDirty());
-        session.tracks.addListener((javafx.collections.ListChangeListener<EditorTrack>) c -> markDirty());
-        session.collapsedChannels.addListener(
-            (javafx.collections.SetChangeListener<ax.xz.mri.model.sequence.SequenceChannel>) c -> markDirty());
+        session.tracks.addListener((javafx.collections.ListChangeListener<Track>) c -> markDirty());
+        session.collapsedTrackIds.addListener(
+            (javafx.collections.SetChangeListener<String>) c -> markDirty());
 
         // Mouse wiring — one line per event, all logic lives in interaction.
         setOnMousePressed(interaction::onPress);
@@ -101,7 +101,7 @@ public final class TimelineCanvas extends ResizableCanvas {
 
     private TimelineGeometry geometry() {
         return new TimelineGeometry(
-            session.tracks, session.collapsedChannels,
+            session.tracks, session.collapsedTrackIds,
             session.viewStart.get(), session.viewEnd.get(),
             getWidth(), getHeight(),
             LABEL_WIDTH, RIGHT_PAD, BOTTOM_PAD, COLLAPSED_HEIGHT

@@ -495,20 +495,28 @@ public final class ProjectSessionViewModel {
     /**
      * Create an empty sequence bound to a simulation config.
      *
-     * <p>The sequence starts with one zero-channel segment of 100 steps; the
-     * editor grows the step width as clips are placed. The binding to
-     * {@code configId} is persisted on the document so the sequence editor
-     * wires up its tracks as soon as the tab opens.
+     * <p>The sequence is seeded with one {@link ax.xz.mri.model.sequence.Track}
+     * per output channel declared by the config (so the editor opens with a
+     * familiar one-lane-per-output view). Users can add more tracks pointing
+     * at any output afterwards.
      */
     public ax.xz.mri.project.SequenceDocument createEmptySequence(String name, ProjectNodeId configId) {
         var repo = repository.get();
-        var steps = new java.util.ArrayList<ax.xz.mri.model.sequence.PulseStep>();
-        for (int i = 0; i < 100; i++) steps.add(new ax.xz.mri.model.sequence.PulseStep(new double[0], 0));
+        var configDoc = (ax.xz.mri.project.SimulationConfigDocument) repo.node(configId);
+        var config = configDoc != null ? configDoc.config() : null;
+
+        double dtMicros = 10.0;
+        double totalDurationMicros = 1000.0;
+        var tracks = ax.xz.mri.model.sequence.ClipBaker.defaultTracksFor(config);
+        var clipSeq = new ax.xz.mri.model.sequence.ClipSequence(
+            dtMicros, totalDurationMicros, tracks, List.of());
+        var baked = ax.xz.mri.model.sequence.ClipBaker.bake(clipSeq, config);
+
         var doc = new ax.xz.mri.project.SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,
-            List.of(new ax.xz.mri.model.sequence.Segment(1e-5, 0, 100)),
-            List.of(new ax.xz.mri.model.sequence.PulseSegment(steps)),
-            null,
+            baked.segments(),
+            baked.pulseSegments(),
+            clipSeq,
             configId
         );
         repo.addSequence(doc);

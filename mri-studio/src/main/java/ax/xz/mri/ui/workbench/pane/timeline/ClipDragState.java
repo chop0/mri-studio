@@ -1,7 +1,6 @@
 package ax.xz.mri.ui.workbench.pane.timeline;
 
 import ax.xz.mri.model.sequence.ClipKind;
-import ax.xz.mri.model.sequence.SequenceChannel;
 
 /**
  * A drag gesture in progress on the timeline canvas.
@@ -11,9 +10,6 @@ import ax.xz.mri.model.sequence.SequenceChannel;
  * enforces that new drag states get handled everywhere, and each state
  * carries exactly the fields it needs instead of sharing a pile of
  * loosely-named doubles.
- *
- * <p>Instances are immutable; handlers replace the current state with a new
- * record to record deltas during a drag.
  */
 public sealed interface ClipDragState {
 
@@ -50,7 +46,7 @@ public sealed interface ClipDragState {
 
     /** Click-drag on an empty track with a creation tool selected: rubber-band a new clip. */
     record CreateClip(ClipKind kind,
-                      SequenceChannel channel,
+                      String trackId,
                       double startTimeMicros,
                       double currentX) implements ClipDragState {}
 

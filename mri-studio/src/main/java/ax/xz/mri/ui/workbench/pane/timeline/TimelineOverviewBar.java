@@ -123,10 +123,13 @@ public final class TimelineOverviewBar extends ResizableCanvas {
         var bounds = barBounds();
         double domain = Math.max(1, session.totalDuration.get());
 
-        // Spans: clip extents, coloured per channel
+        // Spans: clip extents, coloured per track's output channel
         var spans = new ArrayList<AxisScrubBar.Span>();
         for (var clip : session.clips) {
-            Color colour = ChannelPalette.colourFor(session, clip.channel());
+            var track = session.findTrack(clip.trackId());
+            Color colour = track != null
+                ? ChannelPalette.colourFor(session, track.outputChannel())
+                : Color.web("#5c6571");
             spans.add(new AxisScrubBar.Span(clip.startTime(), clip.endTime(), colour, 0.14));
         }
 
@@ -167,10 +170,11 @@ public final class TimelineOverviewBar extends ResizableCanvas {
             cachedPixelCount = pixelCount;
             cachedChannelSamples = new double[slots.size()][pixelCount];
             var clips = session.clips;
+            var tracks = session.tracks;
             for (int ch = 0; ch < slots.size(); ch++) {
                 for (int px = 0; px < pixelCount; px++) {
                     double t = (px / (double) pixelCount) * domain;
-                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(clips, slots.get(ch), t);
+                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(clips, tracks, slots.get(ch), t);
                 }
             }
         }

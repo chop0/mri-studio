@@ -3,10 +3,9 @@ package ax.xz.mri.model.sequence;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
- * A channel in a clip sequence — either a field-channel slot (identified by
- * the {@link ax.xz.mri.model.simulation.FieldDefinition}'s {@code name} plus
- * an in-field sub-index), or the special RF-gate sentinel that carries the
- * on/off hint consumed by the simulator's fast-path selector.
+ * An output signal slot in a simulation config — identified by the
+ * {@link ax.xz.mri.model.simulation.FieldDefinition}'s {@code name} plus an
+ * in-field sub-index.
  *
  * <p>Sub-index semantics mirror {@link ax.xz.mri.model.simulation.AmplitudeKind}:
  * <ul>
@@ -17,27 +16,23 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  *       the config).</li>
  * </ul>
  *
- * <p>{@link #RF_GATE} is a reserved sentinel with empty {@code fieldName} and
- * {@code sub == -1}. It is the only channel not backed by a FieldDefinition.
+ * <p>Channels are always backed by a field in the config; there are no
+ * sentinels or special cases. The RF-gate flag is computed at bake time from
+ * the running magnitudes of the QUADRATURE fields — it is not a separate
+ * channel users edit.
  */
 public record SequenceChannel(
     @JsonProperty("field") String fieldName,
     @JsonProperty("sub") int subIndex
 ) {
-    /** Reserved RF on/off gate, not associated with any FieldDefinition. */
-    public static final SequenceChannel RF_GATE = new SequenceChannel("", -1);
-
     public SequenceChannel {
-        if (fieldName == null) fieldName = "";
+        if (fieldName == null || fieldName.isEmpty())
+            throw new IllegalArgumentException("SequenceChannel.fieldName must be non-empty");
+        if (subIndex < 0)
+            throw new IllegalArgumentException("SequenceChannel.subIndex must be non-negative");
     }
 
     public static SequenceChannel ofField(String fieldName, int subIndex) {
-        if (fieldName == null || fieldName.isEmpty())
-            throw new IllegalArgumentException("Field channel requires a non-empty field name");
-        if (subIndex < 0)
-            throw new IllegalArgumentException("Sub-index must be non-negative for a field channel");
         return new SequenceChannel(fieldName, subIndex);
     }
-
-    public boolean isRfGate() { return fieldName.isEmpty() && subIndex < 0; }
 }
