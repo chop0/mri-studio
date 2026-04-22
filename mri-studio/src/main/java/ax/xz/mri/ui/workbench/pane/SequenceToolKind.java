@@ -1,50 +1,54 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.sequence.ClipShape;
+import ax.xz.mri.model.sequence.ClipKind;
 
-/** Tool kinds for the sequence editor palette. */
+/**
+ * Tool identities for the sequence editor palette.
+ *
+ * <p>Each tool either creates a clip of a specific {@link ClipKind} (click-drag
+ * on an empty track to place one) or performs an immediate action on the
+ * current selection.
+ */
 public enum SequenceToolKind {
-    // --- Pointer tool (default, selects/moves clips) ---
-    SELECT("Select", "Select, move and resize clips", false, null),
+    // ── Pointer tool (default, selects/moves clips) ─────────────────────────
+    SELECT("Select", "Select, move and resize clips", null),
 
-    // --- Clip creation tools (click-drag on track to place) ---
-    CONSTANT("Constant", "Place a flat-amplitude clip", true, ClipShape.CONSTANT),
-    SINC("Sinc", "Place a sinc pulse clip with adjustable lobes", true, ClipShape.SINC),
-    TRAPEZOID("Trapezoid", "Place a trapezoid gradient clip", true, ClipShape.TRAPEZOID),
-    GAUSSIAN("Gaussian", "Place a Gaussian RF envelope clip", true, ClipShape.GAUSSIAN),
-    SPLINE("Spline", "Place a spline clip with draggable control points", true, ClipShape.SPLINE),
-    TRIANGLE("Triangle", "Place a triangle ramp clip", true, ClipShape.TRIANGLE),
-    SINE("Sine", "Place a sine wave clip with configurable frequency", true, ClipShape.SINE),
+    // ── Clip creation tools ─────────────────────────────────────────────────
+    CONSTANT("Constant",   "Place a flat-amplitude clip",                            ClipKind.CONSTANT),
+    SINC("Sinc",           "Place a sinc pulse clip with adjustable lobes",          ClipKind.SINC),
+    TRAPEZOID("Trapezoid", "Place a trapezoid gradient clip",                        ClipKind.TRAPEZOID),
+    GAUSSIAN("Gaussian",   "Place a Gaussian RF envelope clip",                      ClipKind.GAUSSIAN),
+    SPLINE("Spline",       "Place a spline clip with draggable control points",     ClipKind.SPLINE),
+    TRIANGLE("Triangle",   "Place a triangle ramp clip",                             ClipKind.TRIANGLE),
+    SINE("Sine",           "Place a sine wave clip with configurable frequency",    ClipKind.SINE),
 
-    // --- Clip actions (click, immediate) ---
-    DELETE_CLIP("Delete Clip", "Remove the selected clip", false, null),
-    DUPLICATE_CLIP("Duplicate Clip", "Copy the selected clip", false, null),
+    // ── Immediate actions (on selection) ────────────────────────────────────
+    DELETE_CLIP("Delete Clip",       "Remove the selected clip", null),
+    DUPLICATE_CLIP("Duplicate Clip", "Copy the selected clip",   null),
 
-    // --- Composite blocks (click, insert pattern) --- Phase 3+
-    SPOILER("Spoiler Gradient", "Insert a dephasing gradient block", false, null),
-    REFOCUS("Refocusing Block", "Insert a 180\u00b0 RF refocusing block", false, null),
-    SLICE_SELECT("Slice-Select Excitation", "Coordinated RF + slice gradient", false, null),
-    READOUT("Readout Window", "Frequency-encode gradient window", false, null),
+    // ── Composite blocks (phase 3+, currently disabled) ─────────────────────
+    SPOILER("Spoiler Gradient",       "Insert a dephasing gradient block",       null),
+    REFOCUS("Refocusing Block",       "Insert a 180\u00b0 RF refocusing block",  null),
+    SLICE_SELECT("Slice-Select Excitation", "Coordinated RF + slice gradient",    null),
+    READOUT("Readout Window",         "Frequency-encode gradient window",        null),
 
-    // --- Overlay toggles ---
-    CONSTRAINTS("Constraints", "Toggle hardware limit overlay", false, null);
+    // ── Overlay toggles ─────────────────────────────────────────────────────
+    CONSTRAINTS("Constraints", "Toggle hardware limit overlay", null);
 
     private final String displayName;
     private final String description;
-    private final boolean creationTool;
-    private final ClipShape clipShape;
+    private final ClipKind clipKind;
 
-    SequenceToolKind(String displayName, String description, boolean creationTool, ClipShape clipShape) {
+    SequenceToolKind(String displayName, String description, ClipKind clipKind) {
         this.displayName = displayName;
         this.description = description;
-        this.creationTool = creationTool;
-        this.clipShape = clipShape;
+        this.clipKind = clipKind;
     }
 
     public String displayName() { return displayName; }
     public String description() { return description; }
-    /** Whether this is a clip creation tool (click-drag on track to place). */
-    public boolean isCreationTool() { return creationTool; }
-    /** The clip shape this tool creates, or null for non-creation tools. */
-    public ClipShape clipShape() { return clipShape; }
+    /** Whether this is a clip creation tool. */
+    public boolean isCreationTool() { return clipKind != null; }
+    /** The clip kind this tool creates, or {@code null} for pointer/action tools. */
+    public ClipKind clipKind() { return clipKind; }
 }

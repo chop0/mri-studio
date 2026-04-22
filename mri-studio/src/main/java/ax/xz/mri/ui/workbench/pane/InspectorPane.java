@@ -1,10 +1,7 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.sequence.ClipShape;
-import ax.xz.mri.model.sequence.SequenceChannel;
-import ax.xz.mri.model.sequence.SignalClip;
-import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.project.CaptureDocument;
+import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ImportLinkDocument;
 import ax.xz.mri.project.ImportedCaptureDocument;
 import ax.xz.mri.project.ImportedOptimisationRunDocument;
@@ -18,6 +15,7 @@ import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.project.RunBookmarkDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SequenceSnapshotDocument;
+import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.project.SimulationDocument;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.CommandId;
@@ -26,34 +24,46 @@ import ax.xz.mri.ui.workbench.ProjectDisplayNames;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import ax.xz.mri.ui.workbench.StudioIcons;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.config.NumberField;
+import ax.xz.mri.ui.workbench.pane.inspector.ClipInspectorSection;
 import javafx.beans.InvalidationListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Slider;
-import javafx.scene.control.Spinner;
-import javafx.scene.control.SpinnerValueFactory;
-import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
-import javafx.scene.layout.GridPane;
-
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Context-sensitive right sidebar for metadata, run scrubbing, and object actions. */
+/**
+ * Context-sensitive right sidebar. Shows:
+ * <ul>
+ *   <li>Clip + sequence-editor properties when a {@link SequenceEditSession}
+ *       is active. The {@link ClipInspectorSection} survives revision bumps,
+ *       so editing values in a spinner doesn't rebuild the UI and won't steal
+ *       focus.</li>
+ *   <li>Project-node metadata when a node is selected in the explorer.</li>
+ * </ul>
+ */
 public final class InspectorPane extends WorkbenchPane {
     private final VBox content = new VBox(10);
 
     /** Listeners attached to session properties during the last refresh; detached on next refresh. */
     private final List<ListenerBinding<?>> activeBindings = new ArrayList<>();
+
+    /** The currently-alive clip section, if any. Null means no clip is selected. */
+    private ClipInspectorSection activeClipSection;
+    /** The edit session we're currently wired to (for detaching listeners on switch). */
+    private SequenceEditSession wiredSession;
 
     public InspectorPane(PaneContext paneContext) {
         super(paneContext);
@@ -64,51 +74,43 @@ public final class InspectorPane extends WorkbenchPane {
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         setPaneContent(scroll);
 
-        paneContext.session().project.inspector.inspectedNodeId.addListener((obs, oldValue, newValue) -> refresh());
-        paneContext.session().project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> refresh());
+        paneContext.session().project.inspector.inspectedNodeId.addListener((obs, oldValue, newValue) -> rebuild());
+        paneContext.session().project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> rebuild());
 
-        // Listen for sequence editing session changes (clip selection, edits)
-        paneContext.session().activeEditSession.addListener((obs, oldSession, newSession) -> {
-            if (oldSession != null) {
-                // Listeners will be cleaned up via activeBindings on next refresh
-            }
-            refresh();
-        });
+        paneContext.session().activeEditSession.addListener((obs, oldSession, newSession) -> rebuild());
 
-        refresh();
+        rebuild();
     }
 
-    private boolean suppressRefresh;
+    // ══════════════════════════════════════════════════════════════════════════
+    // Rebuild (driven by selection / edit-session switch)
+    // ══════════════════════════════════════════════════════════════════════════
 
-    private void refresh() {
-        if (suppressRefresh) return;
-        // Detach listeners from the previous refresh cycle to prevent leaks.
+    private void rebuild() {
         for (var binding : activeBindings) binding.detach();
         activeBindings.clear();
+        activeClipSection = null;
 
         content.getChildren().clear();
 
-        // If in sequence editing mode, show sequence properties + optional clip properties
         var editSession = paneContext.session().activeEditSession.get();
         if (editSession != null) {
-            InvalidationListener clipListener = obs -> refresh();
-            editSession.primarySelectedClipId.addListener(clipListener);
-            activeBindings.add(new ListenerBinding<>(editSession.primarySelectedClipId, clipListener));
-            editSession.revision.addListener(clipListener);
-            activeBindings.add(new ListenerBinding<>(editSession.revision, clipListener));
+            wireEditSession(editSession);
+            content.getChildren().addAll(sequenceSection(editSession), new Separator());
 
-            // Sequence-level properties
-            populateSequenceEditorProperties(editSession);
-
-            // Clip properties (if a clip is selected)
             var primaryClip = editSession.primarySelectedClip();
             if (primaryClip != null) {
-                content.getChildren().add(new Separator());
-                populateClipProperties(editSession, primaryClip);
+                activeClipSection = new ClipInspectorSection(editSession, primaryClip);
+                content.getChildren().add(activeClipSection.view());
+            } else {
+                var empty = new Label("No clip selected.");
+                empty.getStyleClass().add("cfg-row-hint");
+                content.getChildren().add(empty);
             }
             return;
         }
 
+        // Project-node inspection (explorer selection)
         var repo = paneContext.session().project.repository.get();
         ProjectNodeId nodeId = paneContext.session().project.inspector.inspectedNodeId.get();
         ProjectNode node = nodeId == null ? null : repo.node(nodeId);
@@ -123,10 +125,14 @@ public final class InspectorPane extends WorkbenchPane {
         switch (node) {
             case ImportLinkDocument link -> populateImport(link);
             case ImportedScenarioDocument scenario -> populateImportedScenario(repo, scenario);
-            case ImportedOptimisationRunDocument run -> populateRun(repo, run.name(), run.id(), run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
-            case OptimisationRunDocument run -> populateRun(repo, run.name(), run.id(), run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
-            case ImportedCaptureDocument capture -> populateCapture(repo, capture.name(), capture.sourceScenarioName(), capture.iterationKey(), capture.sequenceSnapshotId(), true);
-            case CaptureDocument capture -> populateCapture(repo, capture.name(), null, capture.iterationKey(), capture.sequenceSnapshotId(), false);
+            case ImportedOptimisationRunDocument run -> populateRun(repo, run.name(), run.id(),
+                run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
+            case OptimisationRunDocument run -> populateRun(repo, run.name(), run.id(),
+                run.firstCaptureId(), run.latestCaptureId(), run.bestCaptureId());
+            case ImportedCaptureDocument capture -> populateCapture(repo, capture.name(),
+                capture.sourceScenarioName(), capture.iterationKey(), capture.sequenceSnapshotId(), true);
+            case CaptureDocument capture -> populateCapture(repo, capture.name(), null,
+                capture.iterationKey(), capture.sequenceSnapshotId(), false);
             case SequenceSnapshotDocument snapshot -> populateSnapshot(snapshot);
             case SequenceDocument sequence -> populateSequence(sequence);
             case RunBookmarkDocument bookmark -> populateBookmark(bookmark);
@@ -134,23 +140,8 @@ public final class InspectorPane extends WorkbenchPane {
                 content.getChildren().add(infoLine("Type", "Optimisation Configuration"));
                 content.getChildren().add(infoLine("Name", config.name()));
             }
-            case ax.xz.mri.project.SimulationConfigDocument simConfig -> {
-                content.getChildren().add(infoLine("Type", "Simulation Config"));
-                content.getChildren().add(infoLine("Name", simConfig.name()));
-                var cfg = simConfig.config();
-                if (cfg != null) {
-                    content.getChildren().add(infoLine("B₀ ref", String.format("%.4f T", cfg.referenceB0Tesla())));
-                    content.getChildren().add(infoLine("T₁", String.format("%.0f ms", cfg.t1Ms())));
-                    content.getChildren().add(infoLine("T₂", String.format("%.0f ms", cfg.t2Ms())));
-                    content.getChildren().add(infoLine("Fields", String.valueOf(cfg.fields().size())));
-                }
-                content.getChildren().add(new Separator());
-                content.getChildren().add(actionRow(
-                    button("Open Editor", () -> paneContext.session().project.openNode(simConfig.id())),
-                    button("Delete", () -> paneContext.session().project.deleteSimConfig(simConfig.id()))
-                ));
-            }
-            case ax.xz.mri.project.EigenfieldDocument eigenfield -> {
+            case SimulationConfigDocument simConfig -> populateSimConfig(simConfig);
+            case EigenfieldDocument eigenfield -> {
                 content.getChildren().add(infoLine("Type", "Eigenfield"));
                 content.getChildren().add(infoLine("Name", eigenfield.name()));
                 content.getChildren().add(infoLine("Description",
@@ -163,6 +154,144 @@ public final class InspectorPane extends WorkbenchPane {
             default -> content.getChildren().add(infoLine("Kind", node.kind().name()));
         }
     }
+
+    private void wireEditSession(SequenceEditSession editSession) {
+        this.wiredSession = editSession;
+
+        // Primary clip changed → full rebuild (different clip means different fields).
+        InvalidationListener primaryListener = obs -> rebuild();
+        editSession.primarySelectedClipId.addListener(primaryListener);
+        activeBindings.add(new ListenerBinding<>(editSession.primarySelectedClipId, primaryListener));
+
+        // Revision bumps → refresh current clip's values in place (no rebuild).
+        InvalidationListener revisionListener = obs -> {
+            if (activeClipSection == null) return;
+            var clip = editSession.findClip(activeClipSection.clipId());
+            if (clip == null) {
+                rebuild();
+            } else if (activeClipSection.clipId().equals(editSession.primarySelectedClipId.get())) {
+                activeClipSection.refresh();
+            }
+        };
+        editSession.revision.addListener(revisionListener);
+        activeBindings.add(new ListenerBinding<>(editSession.revision, revisionListener));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Sequence-level properties (always shown when editing)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private Node sequenceSection(SequenceEditSession editSession) {
+        var box = new VBox(8);
+
+        var title = new Label("Sequence");
+        title.getStyleClass().add("clip-inspector-section");
+        box.getChildren().add(title);
+
+        // Total duration
+        var duration = new NumberField().range(10, 1_000_000_000).step(100).decimals(0).unit("μs");
+        duration.setValue(editSession.totalDuration.get());
+        duration.valueProperty().addListener((obs, o, n) -> {
+            if (n != null) editSession.setTotalDuration(n.doubleValue());
+        });
+        editSession.totalDuration.addListener((obs, o, n) -> duration.setValueQuiet(n.doubleValue()));
+        box.getChildren().add(row("Duration", duration));
+
+        // Snap grid
+        var snap = new NumberField().range(0, 1_000_000).step(10).decimals(0).unit("μs");
+        snap.setValue(editSession.snapGridSize.get());
+        snap.valueProperty().addListener((obs, o, n) -> {
+            if (n != null) editSession.snapGridSize.set(n.doubleValue());
+        });
+        editSession.snapGridSize.addListener((obs, o, n) -> snap.setValueQuiet(n.doubleValue()));
+        box.getChildren().add(row("Snap grid", snap));
+
+        // Snap toggle
+        var snapToggle = new CheckBox("Snap to clip edges + grid");
+        snapToggle.setSelected(editSession.snapEnabled.get());
+        snapToggle.selectedProperty().bindBidirectional(editSession.snapEnabled);
+        box.getChildren().add(snapToggle);
+
+        box.getChildren().add(new Separator());
+
+        // Simulation config selector + run controls
+        var simTitle = new Label("Simulation");
+        simTitle.getStyleClass().add("clip-inspector-section");
+        box.getChildren().add(simTitle);
+
+        var repo = paneContext.session().project.repository.get();
+        var configs = repo.simConfigIds().stream()
+            .map(id -> (SimulationConfigDocument) repo.node(id))
+            .filter(java.util.Objects::nonNull)
+            .toList();
+
+        if (configs.isEmpty()) {
+            var empty = new Label("No simulation configs. Create one via File menu.");
+            empty.getStyleClass().add("cfg-row-hint");
+            box.getChildren().add(empty);
+        } else {
+            var combo = new ComboBox<String>();
+            combo.setPrefWidth(200);
+            for (var cfg : configs) combo.getItems().add(cfg.name());
+
+            // Pure view binding: the combo reflects editSession.activeSimConfigId.
+            // When the edit session's config changes (from wizard, undo/redo, tab switch)
+            // the combo tracks it; when the user picks from the combo, we push to the session.
+            java.util.function.Consumer<ProjectNodeId> syncComboFromSession = id -> {
+                String target = null;
+                if (id != null) {
+                    for (var cfg : configs) if (cfg.id().equals(id)) { target = cfg.name(); break; }
+                }
+                if (!java.util.Objects.equals(combo.getValue(), target)) {
+                    var old = combo.getOnAction();
+                    combo.setOnAction(null);
+                    combo.setValue(target);
+                    combo.setOnAction(old);
+                }
+            };
+            syncComboFromSession.accept(editSession.activeSimConfigId.get());
+            InvalidationListener cfgListener = obs -> syncComboFromSession.accept(editSession.activeSimConfigId.get());
+            editSession.activeSimConfigId.addListener(cfgListener);
+            activeBindings.add(new ListenerBinding<>(editSession.activeSimConfigId, cfgListener));
+
+            combo.setOnAction(e -> {
+                var selected = combo.getValue();
+                if (selected == null) return;
+                for (var cfg : configs) {
+                    if (cfg.name().equals(selected)) {
+                        editSession.setActiveSimConfig(cfg.id());
+                        break;
+                    }
+                }
+            });
+
+            var simSession = findSimSessionForEditor(editSession);
+            var runBtn = new Button("\u25B6 Run");
+            runBtn.setOnAction(e -> { if (simSession != null) simSession.simulate(); });
+            var autoToggle = new CheckBox("Auto-simulate");
+            if (simSession != null) autoToggle.selectedProperty().bindBidirectional(simSession.autoSimulate);
+
+            box.getChildren().addAll(
+                row("Config", combo),
+                new HBox(8, runBtn, autoToggle) {{
+                    setAlignment(Pos.CENTER_LEFT);
+                }}
+            );
+        }
+
+        return box;
+    }
+
+    private ax.xz.mri.ui.viewmodel.SequenceSimulationSession findSimSessionForEditor(SequenceEditSession editSession) {
+        return paneContext.controller().allSimSessions().stream()
+            .filter(s -> s.editSession == editSession)
+            .findFirst()
+            .orElse(null);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Project-node inspection (unchanged behaviour, just consolidated here)
+    // ══════════════════════════════════════════════════════════════════════════
 
     private void populateImport(ImportLinkDocument link) {
         content.getChildren().add(infoLine("Source", link.sourcePath()));
@@ -191,8 +320,8 @@ public final class InspectorPane extends WorkbenchPane {
         }
     }
 
-    private void populateRun(ProjectRepository repository, String name, ProjectNodeId runId, ProjectNodeId firstCaptureId,
-                             ProjectNodeId latestCaptureId, ProjectNodeId bestCaptureId) {
+    private void populateRun(ProjectRepository repository, String name, ProjectNodeId runId,
+                             ProjectNodeId firstCaptureId, ProjectNodeId latestCaptureId, ProjectNodeId bestCaptureId) {
         var navigation = paneContext.session().project.runNavigation;
         var captureIds = repository.captureIdsForRun(runId);
         content.getChildren().add(infoLine("Optimisation", name));
@@ -201,10 +330,8 @@ public final class InspectorPane extends WorkbenchPane {
 
         var slider = new Slider(0, Math.max(0, captureIds.size() - 1), Math.max(0, navigation.activeCaptureIndex.get()));
         slider.setShowTickMarks(true);
-        slider.setShowTickLabels(false);
         slider.setSnapToTicks(true);
         slider.setMajorTickUnit(1);
-        slider.setMinorTickCount(0);
         slider.setBlockIncrement(1);
         slider.setFocusTraversable(true);
         slider.valueProperty().addListener((obs, oldValue, newValue) -> {
@@ -215,12 +342,9 @@ public final class InspectorPane extends WorkbenchPane {
             }
         });
 
-        // Bind slider to the run navigation index — track this listener for cleanup.
         InvalidationListener indexListener = obs -> {
             double desired = Math.max(0, Math.min(navigation.activeCaptureIndex.get(), captureIds.size() - 1));
-            if (Math.abs(slider.getValue() - desired) > 1e-9) {
-                slider.setValue(desired);
-            }
+            if (Math.abs(slider.getValue() - desired) > 1e-9) slider.setValue(desired);
         };
         navigation.activeCaptureIndex.addListener(indexListener);
         activeBindings.add(new ListenerBinding<>(navigation.activeCaptureIndex, indexListener));
@@ -235,7 +359,7 @@ public final class InspectorPane extends WorkbenchPane {
             var capture = repository.resolveCapture(captureIds.get(index));
             iterationLabel.setText(capture == null || capture.iterationKey() == null ? "\u2014" : capture.iterationKey());
         };
-        iterLabelListener.invalidated(null); // initial value
+        iterLabelListener.invalidated(null);
         navigation.activeCaptureIndex.addListener(iterLabelListener);
         activeBindings.add(new ListenerBinding<>(navigation.activeCaptureIndex, iterLabelListener));
 
@@ -272,8 +396,8 @@ public final class InspectorPane extends WorkbenchPane {
         ));
     }
 
-    private void populateCapture(ProjectRepository repository, String name, String scenarioName, String iterationKey,
-                                 ProjectNodeId snapshotId, boolean imported) {
+    private void populateCapture(ProjectRepository repository, String name, String scenarioName,
+                                 String iterationKey, ProjectNodeId snapshotId, boolean imported) {
         content.getChildren().add(infoLine("Capture", name));
         if (scenarioName != null) content.getChildren().add(infoLine("Scenario", scenarioName));
         if (iterationKey != null) content.getChildren().add(infoLine("Iteration", iterationKey));
@@ -310,381 +434,21 @@ public final class InspectorPane extends WorkbenchPane {
         ));
     }
 
-    /** Sequence-level properties: duration, snap grid, sim config selector. */
-    private void populateSequenceEditorProperties(SequenceEditSession editSession) {
-        content.getChildren().add(section("Sequence"));
-
-        var grid = new GridPane();
-        grid.setHgap(8);
-        grid.setVgap(4);
-        int row = 0;
-
-        // Duration
-        row = addInspectorField(grid, row, "Duration (μs)", editSession.totalDuration.get(),
-            10, 100000, 100,
-            v -> { suppressRefresh = true; try { editSession.setTotalDuration(v); } finally { suppressRefresh = false; } });
-
-        // Snap grid size
-        row = addInspectorField(grid, row, "Snap Grid (μs)", editSession.snapGridSize.get(),
-            0, 1000, 10,
-            v -> { suppressRefresh = true; try { editSession.snapGridSize.set(v); } finally { suppressRefresh = false; } });
-
-        content.getChildren().add(grid);
-
-        // Simulation config selector
-        content.getChildren().add(new Separator());
-        content.getChildren().add(section("Simulation"));
-
-        var repo = paneContext.session().project.repository.get();
-        var configs = repo.simConfigIds().stream()
-            .map(id -> (ax.xz.mri.project.SimulationConfigDocument) repo.node(id))
-            .filter(java.util.Objects::nonNull)
-            .toList();
-
-        if (configs.isEmpty()) {
-            content.getChildren().add(new Label("No simulation configs. Create one via File menu."));
-        } else {
-            var configCombo = new ComboBox<String>();
-            configCombo.setStyle("-fx-font-size: 10;");
-            configCombo.setPrefWidth(180);
-            for (var cfg : configs) configCombo.getItems().add(cfg.name());
-
-            // Find the active sim session for this editor
-            var simSession = findSimSessionForEditor(editSession);
-            if (simSession != null && simSession.activeConfigDoc.get() != null) {
-                configCombo.setValue(simSession.activeConfigDoc.get().name());
-            } else if (!configs.isEmpty()) {
-                configCombo.setValue(configs.getFirst().name());
-            }
-
-            configCombo.setOnAction(e -> {
-                var selected = configCombo.getValue();
-                if (selected == null || editSession == null) return;
-                for (var cfg : configs) {
-                    if (cfg.name().equals(selected)) {
-                        // Go through editSession so it's tracked by undo and marks dirty
-                        editSession.setActiveSimConfig(cfg.id());
-                        break;
-                    }
-                }
-            });
-
-            var simRunBtn = new Button("\u25b6 Run");
-            simRunBtn.setStyle("-fx-font-size: 10;");
-            simRunBtn.setOnAction(e -> { if (simSession != null) simSession.simulate(); });
-
-            var autoToggle = new javafx.scene.control.CheckBox("Auto");
-            autoToggle.setStyle("-fx-font-size: 10;");
-            if (simSession != null) autoToggle.selectedProperty().bindBidirectional(simSession.autoSimulate);
-
-            content.getChildren().addAll(
-                new HBox(6, new Label("Config:"), configCombo),
-                new HBox(6, simRunBtn, autoToggle)
-            );
+    private void populateSimConfig(SimulationConfigDocument simConfig) {
+        content.getChildren().add(infoLine("Type", "Simulation Config"));
+        content.getChildren().add(infoLine("Name", simConfig.name()));
+        var cfg = simConfig.config();
+        if (cfg != null) {
+            content.getChildren().add(infoLine("B₀ ref", String.format("%.4f T", cfg.referenceB0Tesla())));
+            content.getChildren().add(infoLine("T₁", String.format("%.0f ms", cfg.t1Ms())));
+            content.getChildren().add(infoLine("T₂", String.format("%.0f ms", cfg.t2Ms())));
+            content.getChildren().add(infoLine("Fields", String.valueOf(cfg.fields().size())));
         }
-    }
-
-    /** Find the sim session for a given edit session (via the active workspace tab). */
-    private ax.xz.mri.ui.viewmodel.SequenceSimulationSession findSimSessionForEditor(SequenceEditSession editSession) {
-        return paneContext.controller().allSimSessions().stream()
-            .filter(s -> s.editSession == editSession)
-            .findFirst()
-            .orElse(null);
-    }
-
-    private void populateClipProperties(SequenceEditSession editSession, SignalClip clip) {
-        int selCount = editSession.selectedClipIds.size();
-
-        // Header — derive label from the active config (fields) or RF-gate sentinel.
-        var channelLabel = new Label(channelLabel(editSession, clip.channel()));
-        channelLabel.setStyle("-fx-font-weight: bold; -fx-font-size: 12;");
-        var shapeCombo = new ComboBox<ClipShape>();
-        shapeCombo.getItems().addAll(ClipShape.values());
-        shapeCombo.setValue(clip.shape());
-        shapeCombo.setStyle("-fx-font-size: 11;");
-        shapeCombo.setOnAction(e -> {
-            var selected = shapeCombo.getValue();
-            if (selected != null) {
-                suppressRefresh = true;
-                try { editSession.setClipShape(clip.id(), selected); }
-                finally { suppressRefresh = false; }
-            }
-        });
-        content.getChildren().addAll(
-            new HBox(8, channelLabel, new Label("→"), shapeCombo),
-            new Separator()
-        );
-
-        if (selCount > 1) {
-            content.getChildren().add(new Label(selCount + " clips selected"));
-            content.getChildren().add(new Separator());
-        }
-
-        // Properties grid
-        var grid = new GridPane();
-        grid.setHgap(8);
-        grid.setVgap(4);
-        int row = 0;
-
-        row = addInspectorField(grid, row, "Start (μs)", clip.startTime(), 0, editSession.totalDuration.get(), 1,
-            v -> { suppressRefresh = true; try { editSession.moveClip(clip.id(), v); } finally { suppressRefresh = false; } });
-        row = addInspectorField(grid, row, "Duration (μs)", clip.duration(), editSession.dt.get(), editSession.totalDuration.get(), 1,
-            v -> { suppressRefresh = true; try { editSession.resizeClip(clip.id(), v); } finally { suppressRefresh = false; } });
-        row = addSiField(grid, row, "Amplitude", clip.amplitude(), editSession, clip.channel(),
-            v -> { suppressRefresh = true; try { editSession.setClipAmplitude(clip.id(), v); } finally { suppressRefresh = false; } });
-
-        // Shape-specific params
-        switch (clip.shape()) {
-            case SINC -> {
-                row = addInspectorField(grid, row, "Bandwidth (Hz)", clip.param("bandwidthHz", 4000), 100, 100000, 100,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "bandwidthHz", v); } finally { suppressRefresh = false; } });
-                row = addInspectorField(grid, row, "Center Offset (μs)", clip.param("centerOffset", 0), -10000, 10000, 1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "centerOffset", v); } finally { suppressRefresh = false; } });
-                row = addInspectorField(grid, row, "Window Factor", clip.param("windowFactor", 1), 0.1, 5, 0.1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "windowFactor", v); } finally { suppressRefresh = false; } });
-            }
-            case TRAPEZOID -> {
-                row = addInspectorField(grid, row, "Rise Time (μs)", clip.param("riseTime", clip.duration() * 0.15), 0, clip.duration(), 1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "riseTime", v); } finally { suppressRefresh = false; } });
-                row = addInspectorField(grid, row, "Flat Time (μs)", clip.param("flatTime", clip.duration() * 0.5), 0, clip.duration(), 1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "flatTime", v); } finally { suppressRefresh = false; } });
-            }
-            case GAUSSIAN -> {
-                row = addInspectorField(grid, row, "Sigma (μs)", clip.param("sigma", clip.duration() * 0.2), 1, clip.duration(), 1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "sigma", v); } finally { suppressRefresh = false; } });
-            }
-            case TRIANGLE -> {
-                row = addInspectorField(grid, row, "Peak Position", clip.param("peakPosition", 0.5), 0, 1, 0.05,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "peakPosition", v); } finally { suppressRefresh = false; } });
-            }
-            case SINE -> {
-                row = addInspectorField(grid, row, "Frequency (Hz)", clip.param("frequencyHz", 1000), 0.1, 10_000_000, 100,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "frequencyHz", v); } finally { suppressRefresh = false; } });
-                row = addInspectorField(grid, row, "Phase (rad)", clip.param("phase", 0), -2 * Math.PI, 2 * Math.PI, 0.1,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "phase", v); } finally { suppressRefresh = false; } });
-                row = addInspectorField(grid, row, "Cycles", clip.param("cycles", 0), 0, 10000, 0.25,
-                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "cycles", v); } finally { suppressRefresh = false; } });
-            }
-            case SPLINE -> {
-                content.getChildren().add(new Label(clip.splinePoints().size() + " control points"));
-            }
-            default -> {}
-        }
-
-        content.getChildren().add(grid);
-
-        // Action buttons
         content.getChildren().add(new Separator());
         content.getChildren().add(actionRow(
-            button("Delete", editSession::deleteSelectedClips),
-            button("Duplicate", editSession::duplicateSelectedClips)
+            button("Open Editor", () -> paneContext.session().project.openNode(simConfig.id())),
+            button("Delete", () -> paneContext.session().project.deleteSimConfig(simConfig.id()))
         ));
-    }
-
-    private int addInspectorField(GridPane grid, int row, String label, double value,
-                                   double min, double max, double step,
-                                   java.util.function.DoubleConsumer onUpdate) {
-        var lbl = new Label(label);
-        lbl.setStyle("-fx-font-size: 10px;");
-        lbl.setMinWidth(90);
-
-        var factory = new SpinnerValueFactory.DoubleSpinnerValueFactory(min, max, value, step);
-        var spinner = new Spinner<Double>(factory);
-        spinner.setEditable(true);
-        spinner.setPrefWidth(110);
-        spinner.setStyle("-fx-font-size: 10px;");
-
-        spinner.valueProperty().addListener((obs, oldVal, newVal) -> {
-            if (newVal != null && !suppressRefresh) {
-                onUpdate.accept(newVal);
-            }
-        });
-
-        grid.add(lbl, 0, row);
-        grid.add(spinner, 1, row);
-        return row + 1;
-    }
-
-    /**
-     * Add a field that displays and accepts SI-prefixed values (e.g. "15 μT", "20 mT/m").
-     * The internal value is always in base SI units (T, T/m, dimensionless).
-     * The channel's unit already includes an SI prefix (μT, mT/m), so the converter
-     * uses a fixed display scale and unit string.
-     */
-    /** Compose a user-friendly label for a SequenceChannel. */
-    private static String channelLabel(SequenceEditSession editSession, SequenceChannel channel) {
-        if (channel.isRfGate()) return "RF Gate";
-        var field = editSession != null ? editSession.fieldForChannel(channel) : null;
-        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
-        return ax.xz.mri.ui.viewmodel.EditorTrack.labelFor(field.name(), field.kind(), channel.subIndex());
-    }
-
-    private int addSiField(GridPane grid, int row, String label, double value,
-                            SequenceEditSession editSession, SequenceChannel channel,
-                            java.util.function.DoubleConsumer onUpdate) {
-        var lbl = new Label(label);
-        lbl.setStyle("-fx-font-size: 10px;");
-        lbl.setMinWidth(90);
-
-        var ef = editSession != null ? editSession.eigenfieldForChannel(channel) : null;
-        String units = ef != null ? ef.units() : "";
-        double defaultMagnitude = ef != null ? ef.defaultMagnitude() : 1.0;
-        var converter = SiPrefixConverter.forPhysical(units, defaultMagnitude);
-
-        var textField = new TextField(converter.format(value));
-        textField.setPrefWidth(110);
-        textField.setStyle("-fx-font-size: 10px;");
-
-        // Commit on Enter
-        textField.setOnAction(e -> {
-            double parsed = converter.parse(textField.getText());
-            if (!Double.isNaN(parsed) && !suppressRefresh) {
-                onUpdate.accept(parsed);
-                // Reformat to canonical display (e.g. "15u" → "15 μT")
-                textField.setText(converter.format(parsed));
-            }
-        });
-        // Commit and reformat on focus loss
-        textField.focusedProperty().addListener((obs, wasFocused, isFocused) -> {
-            if (!isFocused) {
-                double parsed = converter.parse(textField.getText());
-                if (!Double.isNaN(parsed) && !suppressRefresh) {
-                    onUpdate.accept(parsed);
-                }
-                // Always reformat on blur so "15u" becomes "15 μT"
-                textField.setText(converter.format(parsed));
-            }
-        });
-
-        grid.add(lbl, 0, row);
-        grid.add(textField, 1, row);
-        return row + 1;
-    }
-
-    /**
-     * Formats and parses amplitude values with SI-prefixed units.
-     *
-     * <p>Each channel has a <em>display unit</em> (e.g. "μT" for B₁) and a
-     * <em>display scale</em> (e.g. 1e-6 for μ). The raw value in base SI (Tesla)
-     * is divided by the display scale for display, and multiplied back on parse.
-     * Users can type bare numbers (interpreted in display units) or use SI prefix
-     * letters: {@code 15u} = 15×10⁻⁶, {@code 20m} = 20×10⁻³, etc. On blur the
-     * field reformats to the canonical display (e.g. "15u" → "15 μT").
-     */
-    /**
-     * Formats and parses an amplitude scalar as a physical value.
-     *
-     * <p>Given an eigenfield with units {@code U} and default magnitude
-     * {@code K}, a stored amplitude {@code a} is displayed as {@code a · K}
-     * with an auto-selected SI prefix + {@code U}. Parsing inverts that:
-     * "15 mT" with {@code K = 1, U = "T"} decodes to amplitude 0.015.
-     */
-    private static final class SiPrefixConverter {
-        private final String baseUnits;          // e.g. "T" (no SI prefix)
-        private final double defaultMagnitude;   // eigenfield defaultMagnitude
-
-        private SiPrefixConverter(String baseUnits, double defaultMagnitude) {
-            this.baseUnits = baseUnits;
-            this.defaultMagnitude = defaultMagnitude;
-        }
-
-        /** Dimensionless converter — no prefix, no suffix. */
-        static SiPrefixConverter dimensionless() {
-            return new SiPrefixConverter("", 1);
-        }
-
-        /**
-         * Build a converter that renders amplitudes as physical peak values
-         * using the given base units and eigenfield calibration.
-         */
-        static SiPrefixConverter forPhysical(String units, double defaultMagnitude) {
-            if (units == null || units.isEmpty()) return dimensionless();
-            return new SiPrefixConverter(units, defaultMagnitude <= 0 ? 1 : defaultMagnitude);
-        }
-
-        /** Format an amplitude as its physical peak value with auto SI prefix. */
-        String format(double amplitude) {
-            if (Double.isNaN(amplitude)) return "";
-            if (baseUnits.isEmpty()) return formatNumber(amplitude);
-            double physical = amplitude * defaultMagnitude;
-            double abs = Math.abs(physical);
-            if (abs == 0) return "0 " + baseUnits;
-            String prefix; double scale;
-            if      (abs >= 1e9)  { prefix = "G"; scale = 1e9; }
-            else if (abs >= 1e6)  { prefix = "M"; scale = 1e6; }
-            else if (abs >= 1e3)  { prefix = "k"; scale = 1e3; }
-            else if (abs >= 1)    { prefix = "";  scale = 1;   }
-            else if (abs >= 1e-3) { prefix = "m"; scale = 1e-3; }
-            else if (abs >= 1e-6) { prefix = "\u03BC"; scale = 1e-6; }
-            else if (abs >= 1e-9) { prefix = "n"; scale = 1e-9; }
-            else                  { prefix = "p"; scale = 1e-12; }
-            return formatNumber(physical / scale) + " " + prefix + baseUnits;
-        }
-
-        /**
-         * Parse a user-entered string (e.g. "15 mT", "15u", "15e-6") back to a
-         * raw amplitude. The physical value is divided by
-         * {@code defaultMagnitude} to give the stored amplitude. A bare number
-         * is interpreted as already being in base units.
-         */
-        double parse(String text) {
-            if (text == null || text.isBlank()) return Double.NaN;
-            text = text.strip();
-            if (baseUnits.isEmpty()) {
-                try { return Double.parseDouble(text); }
-                catch (NumberFormatException e) { return Double.NaN; }
-            }
-
-            // Strip the base-unit suffix if present (e.g. "15 mT" → "15 m").
-            if (text.endsWith(baseUnits)) {
-                text = text.substring(0, text.length() - baseUnits.length()).strip();
-            }
-
-            double physical;
-            if (!text.isEmpty()) {
-                char last = text.charAt(text.length() - 1);
-                Double prefixScale = prefixScale(last);
-                if (prefixScale != null) {
-                    String numPart = text.substring(0, text.length() - 1).strip();
-                    try { physical = Double.parseDouble(numPart) * prefixScale; }
-                    catch (NumberFormatException e) { return Double.NaN; }
-                } else {
-                    try { physical = Double.parseDouble(text); }
-                    catch (NumberFormatException e) { return Double.NaN; }
-                }
-            } else {
-                return Double.NaN;
-            }
-            return defaultMagnitude == 0 ? physical : physical / defaultMagnitude;
-        }
-
-        private static String formatNumber(double v) {
-            if (v == 0) return "0";
-            double abs = Math.abs(v);
-            String num;
-            if (abs >= 100) num = String.format("%.1f", v);
-            else if (abs >= 10) num = String.format("%.2f", v);
-            else if (abs >= 1) num = String.format("%.3f", v);
-            else num = String.format("%.4f", v);
-            if (num.contains(".")) {
-                num = num.replaceAll("0+$", "").replaceAll("\\.$", "");
-            }
-            return num;
-        }
-
-        private static Double prefixScale(char c) {
-            return switch (c) {
-                case 'f' -> 1e-15;
-                case 'p' -> 1e-12;
-                case 'n' -> 1e-9;
-                case 'u', 'μ' -> 1e-6;
-                case 'm' -> 1e-3;
-                case 'k' -> 1e3;
-                case 'M' -> 1e6;
-                case 'G' -> 1e9;
-                default -> null;
-            };
-        }
     }
 
     private void populateBookmark(RunBookmarkDocument bookmark) {
@@ -695,6 +459,10 @@ public final class InspectorPane extends WorkbenchPane {
         ));
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // UI helpers (shared with project-node inspection)
+    // ══════════════════════════════════════════════════════════════════════════
+
     private Node header(ProjectNode node) {
         var icon = switch (node.kind()) {
             case ProjectNodeKind.IMPORT_LINK -> StudioIcons.create(StudioIconKind.IMPORT);
@@ -703,8 +471,10 @@ public final class InspectorPane extends WorkbenchPane {
                     ? StudioIconKind.RUN
                     : StudioIconKind.SCENARIO
             );
-            case ProjectNodeKind.IMPORTED_OPTIMISATION_RUN, ProjectNodeKind.OPTIMISATION_RUN -> StudioIcons.create(StudioIconKind.RUN);
-            case ProjectNodeKind.IMPORTED_CAPTURE, ProjectNodeKind.CAPTURE -> StudioIcons.create(StudioIconKind.CAPTURE);
+            case ProjectNodeKind.IMPORTED_OPTIMISATION_RUN, ProjectNodeKind.OPTIMISATION_RUN ->
+                StudioIcons.create(StudioIconKind.RUN);
+            case ProjectNodeKind.IMPORTED_CAPTURE, ProjectNodeKind.CAPTURE ->
+                StudioIcons.create(StudioIconKind.CAPTURE);
             case ProjectNodeKind.SEQUENCE_SNAPSHOT -> StudioIcons.create(StudioIconKind.SNAPSHOT);
             case ProjectNodeKind.SEQUENCE -> StudioIcons.create(StudioIconKind.SEQUENCE);
             case ProjectNodeKind.SIMULATION -> StudioIcons.create(StudioIconKind.SIMULATION);
@@ -752,6 +522,16 @@ public final class InspectorPane extends WorkbenchPane {
         return row;
     }
 
+    private Node row(String label, Node field) {
+        var lbl = new Label(label);
+        lbl.getStyleClass().add("clip-inspector-label");
+        lbl.setMinWidth(90);
+        lbl.setPrefWidth(90);
+        var row = new HBox(6, lbl, field);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
     private Button button(String text, Runnable action) {
         var button = new Button(text);
         button.setOnAction(event -> action.run());
@@ -772,8 +552,6 @@ public final class InspectorPane extends WorkbenchPane {
 
     /** Tracks a listener attached to an observable so it can be cleanly detached later. */
     private record ListenerBinding<T extends javafx.beans.Observable>(T observable, InvalidationListener listener) {
-        void detach() {
-            observable.removeListener(listener);
-        }
+        void detach() { observable.removeListener(listener); }
     }
 }

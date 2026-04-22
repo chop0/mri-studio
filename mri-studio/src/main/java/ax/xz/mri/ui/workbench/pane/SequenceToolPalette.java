@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.sequence.ClipShape;
+import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -17,18 +17,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Horizontal icon-only tool bar for the sequence editor (along the top).
- * Compact layout suitable for a thin editor pane at the bottom of the window.
+ * Compact icon-only tool bar for the sequence editor.
+ *
+ * <p>Exposes {@link #activeTool} as an observable property — the root pane
+ * listens and pushes the associated {@link ClipKind} into the canvas's
+ * creation-tool slot. Active-state styling is purely CSS (via the
+ * {@code .seq-tool-active} class); no inline styles.
  */
 public final class SequenceToolPalette extends HBox {
-    private static final String STYLE_TOOL_BUTTON = "seq-tool-button";
-    private static final String STYLE_TOOL_ACTIVE = "seq-tool-active";
-
     public final ObjectProperty<SequenceToolKind> activeTool = new SimpleObjectProperty<>(null);
 
     private static final Set<SequenceToolKind> DISABLED_TOOLS = Set.of(
-        SequenceToolKind.SPOILER, SequenceToolKind.REFOCUS,
-        SequenceToolKind.SLICE_SELECT, SequenceToolKind.READOUT,
+        SequenceToolKind.SPOILER,
+        SequenceToolKind.REFOCUS,
+        SequenceToolKind.SLICE_SELECT,
+        SequenceToolKind.READOUT,
         SequenceToolKind.CONSTRAINTS
     );
 
@@ -41,59 +44,54 @@ public final class SequenceToolPalette extends HBox {
         setSpacing(2);
         getStyleClass().add("seq-tool-palette");
 
-        // Select tool
-        addCreationTool(SequenceToolKind.SELECT);
-        getChildren().add(vsep());
+        // Pointer
+        addToggleTool(SequenceToolKind.SELECT);
+        getChildren().add(verticalSeparator());
 
-        // Clip creation tools
-        addCreationTool(SequenceToolKind.CONSTANT);
-        addCreationTool(SequenceToolKind.SINC);
-        addCreationTool(SequenceToolKind.TRAPEZOID);
-        addCreationTool(SequenceToolKind.GAUSSIAN);
-        addCreationTool(SequenceToolKind.SPLINE);
-        addCreationTool(SequenceToolKind.TRIANGLE);
-        addCreationTool(SequenceToolKind.SINE);
-        getChildren().add(vsep());
+        // Clip creators — iterate in palette order
+        addToggleTool(SequenceToolKind.CONSTANT);
+        addToggleTool(SequenceToolKind.SINC);
+        addToggleTool(SequenceToolKind.TRAPEZOID);
+        addToggleTool(SequenceToolKind.GAUSSIAN);
+        addToggleTool(SequenceToolKind.SPLINE);
+        addToggleTool(SequenceToolKind.TRIANGLE);
+        addToggleTool(SequenceToolKind.SINE);
+        getChildren().add(verticalSeparator());
 
-        // Clip actions
+        // Immediate-action tools
         addActionTool(SequenceToolKind.DELETE_CLIP, editSession::deleteSelectedClips);
         addActionTool(SequenceToolKind.DUPLICATE_CLIP, editSession::duplicateSelectedClips);
 
-        // Highlight active tool
+        // CSS-driven active-state styling
         activeTool.addListener((obs, oldTool, newTool) -> {
-            if (oldTool != null && buttons.containsKey(oldTool)) {
-                var btn = buttons.get(oldTool);
-                btn.getStyleClass().remove(STYLE_TOOL_ACTIVE);
-                btn.setStyle("");
+            if (oldTool != null) {
+                var b = buttons.get(oldTool);
+                if (b != null) b.getStyleClass().remove("seq-tool-active");
             }
-            if (newTool != null && buttons.containsKey(newTool)) {
-                var btn = buttons.get(newTool);
-                btn.getStyleClass().add(STYLE_TOOL_ACTIVE);
-                btn.setStyle("-fx-background-color: #cde4f7; -fx-border-color: #90c0e8; -fx-border-radius: 3; -fx-background-radius: 3;");
+            if (newTool != null) {
+                var b = buttons.get(newTool);
+                if (b != null && !b.getStyleClass().contains("seq-tool-active")) {
+                    b.getStyleClass().add("seq-tool-active");
+                }
             }
             if (onActiveToolChanged != null) onActiveToolChanged.run();
         });
 
-        // Default to select tool
         activeTool.set(SequenceToolKind.SELECT);
     }
 
     public void setOnActiveToolChanged(Runnable callback) { this.onActiveToolChanged = callback; }
 
-    public ClipShape activeClipShape() {
+    /** The {@link ClipKind} of the current tool, or {@code null} for non-creation tools. */
+    public ClipKind activeClipKind() {
         var tool = activeTool.get();
-        return tool != null ? tool.clipShape() : null;
+        return tool != null ? tool.clipKind() : null;
     }
 
-    private void addCreationTool(SequenceToolKind kind) {
+    private void addToggleTool(SequenceToolKind kind) {
         var button = createButton(kind);
-        button.setOnAction(event -> {
-            if (activeTool.get() == kind) {
-                activeTool.set(SequenceToolKind.SELECT);
-            } else {
-                activeTool.set(kind);
-            }
-        });
+        button.setOnAction(event ->
+            activeTool.set(activeTool.get() == kind ? SequenceToolKind.SELECT : kind));
         buttons.put(kind, button);
         getChildren().add(button);
     }
@@ -106,22 +104,22 @@ public final class SequenceToolPalette extends HBox {
     }
 
     private Button createButton(SequenceToolKind kind) {
-        var icon = SequenceEditorIcons.create(kind);
         var button = new Button();
-        button.setGraphic(icon);
-        button.getStyleClass().add(STYLE_TOOL_BUTTON);
+        button.setGraphic(SequenceEditorIcons.create(kind));
+        button.getStyleClass().add("seq-tool-button");
         button.setTooltip(new Tooltip(kind.displayName() + "\n" + kind.description()));
         button.setPrefSize(28, 28);
         button.setMinSize(28, 28);
         button.setMaxSize(28, 28);
         button.setFocusTraversable(false);
-        boolean disabled = DISABLED_TOOLS.contains(kind);
-        button.setDisable(disabled);
-        if (disabled) button.setOpacity(0.35);
+        if (DISABLED_TOOLS.contains(kind)) {
+            button.setDisable(true);
+            button.getStyleClass().add("seq-tool-disabled");
+        }
         return button;
     }
 
-    private Separator vsep() {
+    private Separator verticalSeparator() {
         var sep = new Separator(Orientation.VERTICAL);
         sep.setPadding(new Insets(0, 2, 0, 2));
         return sep;

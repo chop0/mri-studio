@@ -137,10 +137,9 @@ public final class ClipBaker {
                     double clipStart = channelTime + runStart * segDt;
                     double clipDuration = (stepIdx - runStart) * segDt;
                     clips.add(new SignalClip(
-                        null, slot, ClipShape.CONSTANT,
+                        null, slot, new ClipShape.Constant(),
                         clipStart, clipDuration, value,
-                        0, clipDuration,
-                        null, null
+                        0, clipDuration
                     ));
                 }
                 channelTime += stepList.size() * segDt;

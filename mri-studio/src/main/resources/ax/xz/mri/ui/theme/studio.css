@@ -775,3 +775,165 @@
     -fx-font-size: 11px;
     -fx-text-fill: -studio-accent;
 }
+
+/* ============================================================================
+ * Sequence Editor (DAW)
+ * ============================================================================ */
+
+.sequence-editor {
+    -fx-background-color: -studio-bg-subtle;
+}
+
+/* ----- Toolbar -------------------------------------------------------------- */
+
+.seq-toolbar {
+    -fx-background-color: linear-gradient(to bottom, #f2f4f7, #e1e5eb);
+    -fx-border-color: transparent transparent -studio-border transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.seq-toolbar-button {
+    -fx-background-color: linear-gradient(to bottom, #ffffff, #eef1f5);
+    -fx-border-color: -studio-border;
+    -fx-border-width: 1;
+    -fx-background-radius: 3;
+    -fx-border-radius: 3;
+    -fx-text-fill: -studio-text;
+    -fx-font-size: 11px;
+    -fx-padding: 2 10 2 10;
+    -fx-min-height: 22;
+    -fx-pref-height: 22;
+    -fx-cursor: hand;
+}
+.seq-toolbar-button:hover    { -fx-background-color: linear-gradient(to bottom, #ffffff, #dbe4f0); -fx-border-color: -studio-border-strong; }
+.seq-toolbar-button:pressed  { -fx-background-color: -studio-accent-subtle; -fx-border-color: -studio-accent; }
+.seq-toolbar-button:disabled { -fx-opacity: 0.4; }
+
+.seq-toolbar-button.primary {
+    -fx-background-color: linear-gradient(to bottom, #2a7acc, #094f94);
+    -fx-border-color: #063d73;
+    -fx-text-fill: -studio-text-inverse;
+    -fx-font-weight: 600;
+}
+.seq-toolbar-button.primary:hover   { -fx-background-color: linear-gradient(to bottom, #3486d4, #0b5cad); }
+.seq-toolbar-button.primary:pressed { -fx-background-color: linear-gradient(to bottom, #094f94, #06427a); }
+
+/* ----- Tool palette --------------------------------------------------------- */
+
+.seq-tool-palette {
+    -fx-background-color: transparent;
+}
+
+.seq-tool-button {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 3;
+    -fx-border-radius: 3;
+    -fx-padding: 2;
+    -fx-cursor: hand;
+}
+.seq-tool-button:hover {
+    -fx-background-color: -studio-surface-hover;
+    -fx-border-color: -studio-border-subtle;
+}
+.seq-tool-active {
+    -fx-background-color: -studio-accent-tint;
+    -fx-border-color: -studio-accent;
+    -fx-border-width: 1;
+}
+.seq-tool-disabled { -fx-opacity: 0.35; }
+
+/* ----- Overview + canvas holders ------------------------------------------- */
+
+.seq-overview-holder {
+    -fx-background-color: #f2f4f8;
+    -fx-border-color: transparent transparent -studio-border transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.seq-canvas-holder {
+    -fx-background-color: #fbfcfd;
+}
+
+.timeline-canvas  { -fx-cursor: default; }
+.timeline-overview { -fx-cursor: default; }
+
+/* ----- Status strip --------------------------------------------------------- */
+
+.seq-status-strip {
+    -fx-background-color: linear-gradient(to bottom, #eef1f5, #dde2ea);
+    -fx-border-color: -studio-border transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-min-height: 22;
+    -fx-pref-height: 22;
+}
+
+.seq-status-selection {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-secondary;
+    -fx-font-weight: 600;
+}
+
+.seq-status-label {
+    -fx-font-size: 9px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text-muted;
+    -fx-padding: 0 2 0 0;
+}
+
+.seq-status-value {
+    -fx-font-size: 10px;
+    -fx-font-weight: 600;
+    -fx-text-fill: -studio-text;
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
+
+/* ----- Clip inspector section (right sidebar) ------------------------------ */
+
+.clip-inspector-channel {
+    -fx-font-weight: 700;
+    -fx-font-size: 12px;
+    -fx-text-fill: -studio-text;
+}
+.clip-inspector-arrow {
+    -fx-font-size: 12px;
+    -fx-text-fill: -studio-text-muted;
+}
+.clip-inspector-section {
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-accent;
+    -fx-padding: 4 0 2 0;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.clip-inspector-label {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-secondary;
+}
+.clip-inspector-meta {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-warning;
+    -fx-font-weight: 600;
+}
+.clip-inspector-hint {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
+
+.inspector-title {
+    -fx-font-weight: 600;
+    -fx-font-size: 12px;
+    -fx-text-fill: -studio-text;
+}
+.inspector-key {
+    -fx-font-size: 10px;
+    -fx-font-weight: 600;
+    -fx-text-fill: -studio-text-tertiary;
+}
+.inspector-section-title {
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-accent;
+}

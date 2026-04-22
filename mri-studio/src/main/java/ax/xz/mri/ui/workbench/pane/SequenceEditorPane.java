@@ -2,16 +2,23 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.timeline.TimelineCanvas;
+import ax.xz.mri.ui.workbench.pane.timeline.TimelineOverviewBar;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.StringBinding;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Tooltip;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
+import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -19,107 +26,251 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 /**
- * Clip-based sequence editor pane with horizontal tool bar, overview scrubber,
- * and multi-track canvas. Designed to be thin (bottom of window).
+ * Root pane for the clip-based sequence editor ("DAW").
+ *
+ * <h3>Layout</h3>
+ * <pre>
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │ Toolbar (tools │ undo/redo │ zoom │ save)                │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │ Overview bar (clip spans + mini waveforms + window)      │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │                                                          │
+ *   │ Timeline canvas (tracks + clips)                         │
+ *   │                                                          │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │ Status strip (selection │ span │ dt │ cursor │ total)    │
+ *   └──────────────────────────────────────────────────────────┘
+ * </pre>
+ *
+ * <p>Everything here is pure composition: the pane owns the three view
+ * components ({@link TimelineOverviewBar}, {@link TimelineCanvas},
+ * {@link SequenceToolPalette}) and wires them to a single
+ * {@link SequenceEditSession}. No rendering logic, no event handling beyond
+ * keyboard shortcuts.
  */
 public final class SequenceEditorPane extends WorkbenchPane {
+
     private final SequenceEditSession editSession = new SequenceEditSession();
     public SequenceEditSession editSession() { return editSession; }
-    private final SequenceOverviewBar overviewBar;
-    private final ClipTrackCanvas trackCanvas;
+
     private final SequenceToolPalette toolPalette;
+    private final TimelineOverviewBar overviewBar;
+    private final TimelineCanvas trackCanvas;
+
+    private SequenceSimulationSession simSession;
     private Runnable onTitleChanged;
     private String sequenceName = "";
-
-    // Simulation session (wired after construction)
-    private ax.xz.mri.ui.viewmodel.SequenceSimulationSession simSession;
 
     public SequenceEditorPane(PaneContext paneContext) {
         super(paneContext);
         setPaneTitle("Sequence Editor");
 
-        toolPalette = new SequenceToolPalette(editSession);
-        overviewBar = new SequenceOverviewBar(editSession, paneContext.session().viewport);
-        trackCanvas = new ClipTrackCanvas(editSession);
+        // ── Collaborators ───────────────────────────────────────────────────
+        toolPalette  = new SequenceToolPalette(editSession);
+        overviewBar  = new TimelineOverviewBar(editSession, paneContext.session().viewport);
+        trackCanvas  = new TimelineCanvas(editSession);
         trackCanvas.setViewport(paneContext.session().viewport);
 
         toolPalette.setOnActiveToolChanged(() ->
-            trackCanvas.setActiveCreationShape(toolPalette.activeClipShape())
+            trackCanvas.setActiveCreationKind(toolPalette.activeClipKind())
         );
 
-        // Give the edit session access to the project repository so it can resolve
-        // eigenfield metadata (e.g. display units) on demand.
         editSession.setRepositorySupplier(() -> paneContext.session().project.repository.get());
-
         editSession.revision.addListener((obs, o, n) -> notifyTitleChanged());
 
-        // --- Buttons ---
-        var undoButton = new Button("\u21a9");
-        undoButton.setTooltip(new Tooltip("Undo (\u2318Z)"));
-        undoButton.disableProperty().bind(editSession.canUndoProperty().not());
-        undoButton.setOnAction(event -> editSession.undo());
-        undoButton.setFocusTraversable(false);
+        // ── Layout ──────────────────────────────────────────────────────────
+        var root = new BorderPane();
+        root.getStyleClass().add("sequence-editor");
+        root.setTop(buildToolbar());
+        root.setCenter(buildCentre());
+        root.setBottom(buildStatusStrip(paneContext));
+        setPaneContent(root);
 
-        var redoButton = new Button("\u21aa");
-        redoButton.setTooltip(new Tooltip("Redo (\u2318\u21e7Z)"));
-        redoButton.disableProperty().bind(editSession.canRedoProperty().not());
-        redoButton.setOnAction(event -> editSession.redo());
-        redoButton.setFocusTraversable(false);
+        // ── Keyboard shortcuts ──────────────────────────────────────────────
+        wireKeyboardShortcuts(root);
+    }
 
-        var saveButton = new Button("\ud83d\udcbe");
-        saveButton.setTooltip(new Tooltip("Save (\u2318S)"));
-        saveButton.setOnAction(event -> saveSequence());
-        saveButton.setFocusTraversable(false);
+    // ══════════════════════════════════════════════════════════════════════════
+    // Toolbar (tools, undo/redo, zoom, save)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private HBox buildToolbar() {
+        var undoBtn = new Button("\u21A9");
+        undoBtn.setTooltip(new Tooltip("Undo (\u2318Z)"));
+        undoBtn.disableProperty().bind(editSession.canUndoProperty().not());
+        undoBtn.setOnAction(e -> editSession.undo());
+        undoBtn.setFocusTraversable(false);
+        undoBtn.getStyleClass().add("seq-toolbar-button");
+
+        var redoBtn = new Button("\u21AA");
+        redoBtn.setTooltip(new Tooltip("Redo (\u2318\u21E7Z)"));
+        redoBtn.disableProperty().bind(editSession.canRedoProperty().not());
+        redoBtn.setOnAction(e -> editSession.redo());
+        redoBtn.setFocusTraversable(false);
+        redoBtn.getStyleClass().add("seq-toolbar-button");
+
+        var zoomOutBtn = new Button("\u2212");
+        zoomOutBtn.setTooltip(new Tooltip("Zoom out"));
+        zoomOutBtn.setOnAction(e -> {
+            double centre = (editSession.viewStart.get() + editSession.viewEnd.get()) / 2;
+            editSession.zoomViewAround(centre, 1.25);
+        });
+        zoomOutBtn.setFocusTraversable(false);
+        zoomOutBtn.getStyleClass().add("seq-toolbar-button");
+
+        var zoomInBtn = new Button("+");
+        zoomInBtn.setTooltip(new Tooltip("Zoom in"));
+        zoomInBtn.setOnAction(e -> {
+            double centre = (editSession.viewStart.get() + editSession.viewEnd.get()) / 2;
+            editSession.zoomViewAround(centre, 0.8);
+        });
+        zoomInBtn.setFocusTraversable(false);
+        zoomInBtn.getStyleClass().add("seq-toolbar-button");
+
+        var fitBtn = new Button("Fit");
+        fitBtn.setTooltip(new Tooltip("Zoom to fit"));
+        fitBtn.setOnAction(e -> editSession.fitView());
+        fitBtn.setFocusTraversable(false);
+        fitBtn.getStyleClass().add("seq-toolbar-button");
+
+        var saveBtn = new Button("Save");
+        saveBtn.setTooltip(new Tooltip("Save (\u2318S)"));
+        saveBtn.setOnAction(e -> saveSequence());
+        saveBtn.setFocusTraversable(false);
+        saveBtn.getStyleClass().addAll("seq-toolbar-button", "primary");
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        // --- Toolbar: tools + undo/redo/save ---
-        var toolbar = new HBox(3);
-        toolbar.setAlignment(Pos.CENTER_LEFT);
-        toolbar.setPadding(new Insets(2, 6, 2, 6));
-        toolbar.getChildren().addAll(
+        var toolbar = new HBox(4,
             toolPalette,
-            new Separator(javafx.geometry.Orientation.VERTICAL),
-            undoButton, redoButton, saveButton
+            verticalSeparator(),
+            undoBtn, redoBtn,
+            verticalSeparator(),
+            zoomOutBtn, zoomInBtn, fitBtn,
+            spacer,
+            saveBtn
         );
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+        toolbar.setPadding(new Insets(3, 6, 3, 4));
+        toolbar.getStyleClass().add("seq-toolbar");
+        return toolbar;
+    }
 
-        // --- Overview scrubber ---
+    private Separator verticalSeparator() {
+        var sep = new Separator(javafx.geometry.Orientation.VERTICAL);
+        sep.setPadding(new Insets(2, 4, 2, 4));
+        return sep;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Centre (overview + track canvas)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private VBox buildCentre() {
         var overviewHolder = new StackPane(overviewBar);
-        overviewHolder.setPrefHeight(28);
-        overviewHolder.setMinHeight(28);
-        overviewHolder.setMaxHeight(28);
+        overviewHolder.setMinHeight(40);
+        overviewHolder.setPrefHeight(40);
+        overviewHolder.setMaxHeight(40);
+        overviewHolder.getStyleClass().add("seq-overview-holder");
 
-        // --- Track canvas ---
-        var trackHolder = new StackPane(trackCanvas);
-        VBox.setVgrow(trackHolder, Priority.ALWAYS);
+        var canvasHolder = new StackPane(trackCanvas);
+        canvasHolder.getStyleClass().add("seq-canvas-holder");
+        VBox.setVgrow(canvasHolder, Priority.ALWAYS);
 
-        var root = new VBox(toolbar, overviewHolder, trackHolder);
-        setPaneContent(root);
+        return new VBox(overviewHolder, canvasHolder);
+    }
 
-        // --- Keyboard shortcuts ---
+    // ══════════════════════════════════════════════════════════════════════════
+    // Status strip (selection + timing readouts)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private HBox buildStatusStrip(PaneContext paneContext) {
+        var selection = new Label();
+        selection.getStyleClass().add("seq-status-selection");
+        Runnable updateSel = () -> {
+            int n = editSession.selectedClipIds.size();
+            selection.setText(n == 0 ? "No selection" : (n == 1 ? "1 clip selected" : n + " clips selected"));
+        };
+        updateSel.run();
+        editSession.selectedClipIds.addListener((javafx.collections.SetChangeListener<String>) c -> updateSel.run());
+
+        var spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        var strip = new HBox(10,
+            selection,
+            spacer,
+            statItem("span",   viewSpanBinding()),
+            statItem("dt",     dtBinding()),
+            statItem("cursor", cursorBinding(paneContext)),
+            statItem("total",  totalDurationBinding())
+        );
+        strip.setAlignment(Pos.CENTER_LEFT);
+        strip.setPadding(new Insets(3, 10, 3, 10));
+        strip.getStyleClass().add("seq-status-strip");
+        return strip;
+    }
+
+    private HBox statItem(String label, StringBinding value) {
+        var lbl = new Label(label.toUpperCase());
+        lbl.getStyleClass().add("seq-status-label");
+        var val = new Label();
+        val.getStyleClass().add("seq-status-value");
+        val.textProperty().bind(value);
+        var row = new HBox(4, lbl, val);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private StringBinding viewSpanBinding() {
+        return Bindings.createStringBinding(
+            () -> formatTime(editSession.viewEnd.get() - editSession.viewStart.get()),
+            editSession.viewStart, editSession.viewEnd);
+    }
+
+    private StringBinding dtBinding() {
+        return Bindings.createStringBinding(() -> formatTime(editSession.dt.get()), editSession.dt);
+    }
+
+    private StringBinding totalDurationBinding() {
+        return Bindings.createStringBinding(
+            () -> formatTime(editSession.totalDuration.get()), editSession.totalDuration);
+    }
+
+    private StringBinding cursorBinding(PaneContext paneContext) {
+        var viewport = paneContext.session().viewport;
+        return Bindings.createStringBinding(() -> formatTime(viewport.tC.get()), viewport.tC);
+    }
+
+    private static String formatTime(double micros) {
+        double abs = Math.abs(micros);
+        if (abs >= 1_000_000) return String.format("%.2f s", micros * 1e-6);
+        if (abs >= 1_000)     return String.format("%.2f ms", micros * 1e-3);
+        return String.format("%.0f \u03BCs", micros);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Keyboard shortcuts
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void wireKeyboardShortcuts(BorderPane root) {
         root.setOnKeyPressed(event -> {
             if (new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                saveSequence();
-                event.consume();
+                saveSequence(); event.consume();
             } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(event)) {
-                editSession.redo();
-                event.consume();
+                editSession.redo(); event.consume();
             } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                editSession.undo();
-                event.consume();
+                editSession.undo(); event.consume();
             } else if (event.getCode() == KeyCode.DELETE || event.getCode() == KeyCode.BACK_SPACE) {
-                editSession.deleteSelectedClips();
-                event.consume();
+                editSession.deleteSelectedClips(); event.consume();
             } else if (new KeyCodeCombination(KeyCode.D, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                editSession.duplicateSelectedClips();
-                event.consume();
+                editSession.duplicateSelectedClips(); event.consume();
             } else if (new KeyCodeCombination(KeyCode.A, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                editSession.selectedClipIds.clear();
-                for (var clip : editSession.clips) editSession.selectedClipIds.add(clip.id());
-                if (!editSession.clips.isEmpty())
-                    editSession.primarySelectedClipId.set(editSession.clips.getFirst().id());
-                event.consume();
+                editSession.selectAll(); event.consume();
+            } else if (new KeyCodeCombination(KeyCode.F, KeyCombination.SHORTCUT_DOWN).match(event)) {
+                editSession.fitView(); event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE) {
                 toolPalette.activeTool.set(SequenceToolKind.SELECT);
                 editSession.clearSelection();
@@ -130,18 +281,16 @@ public final class SequenceEditorPane extends WorkbenchPane {
         trackCanvas.setOnMouseClicked(e -> root.requestFocus());
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // External API (matches the old pane)
+    // ══════════════════════════════════════════════════════════════════════════
+
     /** Wire the simulation session (called by WorkbenchController after open). */
-    public void wireSimSession(ax.xz.mri.ui.viewmodel.SequenceSimulationSession session) {
+    public void wireSimSession(SequenceSimulationSession session) {
         this.simSession = session;
-        // Stale indicator on timeline title
         session.stale.addListener((obs, o, n) -> {
             if (paneContext.controller() != null) paneContext.controller().markTimelineStale(n);
         });
-        // Push the active config into the edit session so:
-        //  1. tracks rebuild to match the field layout,
-        //  2. track Y-axis scale uses FieldDefinition.maxAmplitude,
-        //  3. default clip amplitudes are computed from the active config,
-        //  4. inspector displays eigenfield-declared units.
         editSession.applyActiveConfig(session.activeConfig.get());
         session.activeConfig.addListener((obs, o, n) -> editSession.applyActiveConfig(n));
     }
@@ -168,13 +317,12 @@ public final class SequenceEditorPane extends WorkbenchPane {
     public void savePublic() { saveSequence(); }
 
     private void saveSequence() {
-        var updated = editSession.toDocument(); // includes activeSimConfigId
+        var updated = editSession.toDocument();
         var currentConfigId = updated.activeSimConfigId();
         var repo = paneContext.session().project.repository.get();
         repo.removeSequence(updated.id());
         repo.addSequence(updated);
         editSession.open(updated);
-        // Restore the config association after open() resets state
         if (currentConfigId != null) editSession.setOriginalSimConfigId(currentConfigId);
         paneContext.session().activeEditSession.set(editSession);
         paneContext.session().project.explorer.refresh();

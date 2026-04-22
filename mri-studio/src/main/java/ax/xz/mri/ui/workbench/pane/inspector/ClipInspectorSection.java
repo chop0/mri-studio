@@ -1,0 +1,437 @@
+package ax.xz.mri.ui.workbench.pane.inspector;
+
+import ax.xz.mri.model.sequence.ClipKind;
+import ax.xz.mri.model.sequence.ClipShape;
+import ax.xz.mri.model.sequence.SequenceChannel;
+import ax.xz.mri.model.sequence.SignalClip;
+import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.ui.viewmodel.EditorTrack;
+import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.workbench.pane.config.NumberField;
+import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Label;
+import javafx.scene.control.Separator;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
+
+/**
+ * Clip-editing panel for the {@link ax.xz.mri.ui.workbench.pane.InspectorPane}.
+ *
+ * <p>A single instance owns one clip's UI and survives across
+ * {@link SequenceEditSession#revision revision bumps} — instead of rebuilding
+ * the UI on every keystroke (the old {@code suppressRefresh} pattern) it
+ * pushes fresh values into the existing fields via
+ * {@link NumberField#setValueQuiet(double)}, preserving input focus and
+ * caret position. The UI only rebuilds when the user selects a different
+ * clip or changes the shape type.
+ *
+ * <h3>Layout</h3>
+ * <ul>
+ *   <li>Channel + shape header (combo)</li>
+ *   <li>Timing block — start, duration, amplitude</li>
+ *   <li>Shape-specific parameters — one {@link NumberField} per typed param</li>
+ *   <li>Action row — Delete, Duplicate</li>
+ * </ul>
+ */
+public final class ClipInspectorSection {
+
+    private final SequenceEditSession session;
+    private final String clipId;
+    private final VBox root = new VBox(8);
+    private final List<Consumer<SignalClip>> pullers = new ArrayList<>();
+    private ClipKind builtForKind; // the shape kind last used to build the param UI
+
+    public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip) {
+        this.session = session;
+        this.clipId = initialClip.id();
+        this.builtForKind = initialClip.shape().kind();
+        build(initialClip);
+    }
+
+    public Node view() { return root; }
+
+    /** Identity of the clip this section is bound to. */
+    public String clipId() { return clipId; }
+
+    /**
+     * Push the latest values from the session into the existing fields. If the
+     * shape kind has changed, rebuild the param section so the typed fields
+     * match the new shape variant.
+     */
+    public void refresh() {
+        var clip = session.findClip(clipId);
+        if (clip == null) return;
+        if (clip.shape().kind() != builtForKind) {
+            builtForKind = clip.shape().kind();
+            build(clip);
+            return;
+        }
+        for (var p : pullers) p.accept(clip);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // UI construction
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void build(SignalClip clip) {
+        root.getChildren().clear();
+        pullers.clear();
+
+        root.getChildren().addAll(
+            buildHeader(clip),
+            buildSelectionBadge(),
+            buildTimingRows(clip),
+            buildShapeParams(clip),
+            new Separator(),
+            buildActionRow()
+        );
+
+        // Initial values
+        refresh();
+    }
+
+    private Node buildHeader(SignalClip clip) {
+        var channelLabel = new Label(channelLabel(clip.channel()));
+        channelLabel.getStyleClass().add("clip-inspector-channel");
+
+        var shapeCombo = new ComboBox<ClipKind>();
+        shapeCombo.getItems().addAll(ClipKind.values());
+        shapeCombo.setValue(clip.shape().kind());
+        shapeCombo.setOnAction(e -> {
+            var selected = shapeCombo.getValue();
+            if (selected != null) session.changeClipKind(clipId, selected);
+        });
+        // When clip shape changes externally (undo/redo), keep the combo in sync without firing.
+        pullers.add(c -> {
+            if (c != null && shapeCombo.getValue() != c.shape().kind()) {
+                var old = shapeCombo.getOnAction();
+                shapeCombo.setOnAction(null);
+                shapeCombo.setValue(c.shape().kind());
+                shapeCombo.setOnAction(old);
+            }
+        });
+
+        var arrow = new Label("\u2192");
+        arrow.getStyleClass().add("clip-inspector-arrow");
+
+        var row = new HBox(8, channelLabel, arrow, shapeCombo);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Node buildSelectionBadge() {
+        var label = new Label();
+        label.getStyleClass().add("clip-inspector-meta");
+        Runnable update = () -> {
+            int count = session.selectedClipIds.size();
+            label.setText(count > 1 ? count + " clips selected" : "");
+            label.setVisible(count > 1);
+            label.setManaged(count > 1);
+        };
+        update.run();
+        session.selectedClipIds.addListener((javafx.collections.SetChangeListener<String>) c -> update.run());
+        return label;
+    }
+
+    // ── Timing rows (start, duration, amplitude) ────────────────────────────
+
+    private Node buildTimingRows(SignalClip clip) {
+        var grid = new VBox(4);
+
+        // Start time
+        var start = nf().range(0, session.totalDuration.get()).step(1).decimals(1).unit("μs");
+        start.setValue(clip.startTime());
+        start.valueProperty().addListener((obs, o, n) -> {
+            if (n != null) session.moveClip(clipId, n.doubleValue());
+        });
+        pullers.add(c -> start.setValueQuiet(c.startTime()));
+        grid.getChildren().add(row("Start", start));
+
+        // Duration
+        var dur = nf().range(session.dt.get(), session.totalDuration.get()).step(1).decimals(1).unit("μs");
+        dur.setValue(clip.duration());
+        dur.valueProperty().addListener((obs, o, n) -> {
+            if (n != null) session.resizeClip(clipId, n.doubleValue());
+        });
+        pullers.add(c -> dur.setValueQuiet(c.duration()));
+        grid.getChildren().add(row("Duration", dur));
+
+        // Amplitude — with physical-peak readout driven by eigenfield metadata
+        var ef = session.eigenfieldForChannel(clip.channel());
+        String units = ef != null ? ef.units() : "";
+        var amp = nf().range(-1e6, 1e6).step(0.1).scientific().unit(units.isEmpty() ? "" : units);
+        amp.setValue(clip.amplitude());
+        amp.valueProperty().addListener((obs, o, n) -> {
+            if (n != null) session.setClipAmplitude(clipId, n.doubleValue());
+        });
+        pullers.add(c -> amp.setValueQuiet(c.amplitude()));
+
+        var peakLabel = new Label();
+        peakLabel.getStyleClass().add("clip-inspector-hint");
+        pullers.add(c -> peakLabel.setText(formatPeak(c, ef)));
+
+        var row = new HBox(6, labelCol("Amplitude"), amp, peakLabel);
+        row.setAlignment(Pos.CENTER_LEFT);
+        grid.getChildren().add(row);
+
+        return grid;
+    }
+
+    // ── Shape-specific params ───────────────────────────────────────────────
+
+    private Node buildShapeParams(SignalClip clip) {
+        var box = new VBox(4);
+        var title = new Label("Shape parameters");
+        title.getStyleClass().add("clip-inspector-section");
+        box.getChildren().add(title);
+
+        switch (clip.shape()) {
+            case ClipShape.Constant ignored ->
+                box.getChildren().add(new Label("— no parameters"));
+
+            case ClipShape.Sinc sinc -> {
+                addSinc(box, sinc);
+            }
+            case ClipShape.Trapezoid trap -> {
+                addTrapezoid(box, clip.duration(), trap);
+            }
+            case ClipShape.Gaussian gauss -> {
+                addGaussian(box, clip.duration(), gauss);
+            }
+            case ClipShape.Triangle tri -> {
+                addTriangle(box, tri);
+            }
+            case ClipShape.Sine sine -> {
+                addSine(box, sine);
+            }
+            case ClipShape.Spline spline -> {
+                var lbl = new Label();
+                pullers.add(c -> {
+                    if (c.shape() instanceof ClipShape.Spline s)
+                        lbl.setText(s.points().size() + " control points");
+                });
+                box.getChildren().add(lbl);
+            }
+        }
+        return box;
+    }
+
+    private void addSinc(VBox box, ClipShape.Sinc initial) {
+        var bw = nf().range(10, 1_000_000).step(100).decimals(1).unit("Hz");
+        bw.setValue(initial.bandwidthHz());
+        bw.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
+            session.setClipShape(clipId,
+                new ClipShape.Sinc(n.doubleValue(), s.centerOffset(), s.windowFactor()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) bw.setValueQuiet(s.bandwidthHz()); });
+        box.getChildren().add(row("Bandwidth", bw));
+
+        var offset = nf().range(-1e6, 1e6).step(1).decimals(1).unit("μs");
+        offset.setValue(initial.centerOffset());
+        offset.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
+            session.setClipShape(clipId,
+                new ClipShape.Sinc(s.bandwidthHz(), n.doubleValue(), s.windowFactor()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) offset.setValueQuiet(s.centerOffset()); });
+        box.getChildren().add(row("Center offset", offset));
+
+        var window = nf().range(0.1, 5).step(0.1).decimals(2);
+        window.setValue(initial.windowFactor());
+        window.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
+            session.setClipShape(clipId,
+                new ClipShape.Sinc(s.bandwidthHz(), s.centerOffset(), n.doubleValue()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) window.setValueQuiet(s.windowFactor()); });
+        box.getChildren().add(row("Window factor", window));
+    }
+
+    private void addTrapezoid(VBox box, double duration, ClipShape.Trapezoid initial) {
+        var rise = nf().range(0, duration).step(1).decimals(1).unit("μs");
+        rise.setValue(initial.riseTime());
+        rise.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Trapezoid t)) return;
+            session.setClipShape(clipId, new ClipShape.Trapezoid(n.doubleValue(), t.flatTime()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Trapezoid t) rise.setValueQuiet(t.riseTime()); });
+        box.getChildren().add(row("Rise time", rise));
+
+        var flat = nf().range(0, duration).step(1).decimals(1).unit("μs");
+        flat.setValue(initial.flatTime());
+        flat.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Trapezoid t)) return;
+            session.setClipShape(clipId, new ClipShape.Trapezoid(t.riseTime(), n.doubleValue()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Trapezoid t) flat.setValueQuiet(t.flatTime()); });
+        box.getChildren().add(row("Flat time", flat));
+    }
+
+    private void addGaussian(VBox box, double duration, ClipShape.Gaussian initial) {
+        var sigma = nf().range(0.1, duration * 2).step(1).decimals(1).unit("μs");
+        sigma.setValue(initial.sigma());
+        sigma.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            session.setClipShape(clipId, new ClipShape.Gaussian(n.doubleValue()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Gaussian g) sigma.setValueQuiet(g.sigma()); });
+        box.getChildren().add(row("Sigma", sigma));
+    }
+
+    private void addTriangle(VBox box, ClipShape.Triangle initial) {
+        var peak = nf().range(0, 1).step(0.05).decimals(3);
+        peak.setValue(initial.peakPosition());
+        peak.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            session.setClipShape(clipId, new ClipShape.Triangle(n.doubleValue()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Triangle t) peak.setValueQuiet(t.peakPosition()); });
+        box.getChildren().add(row("Peak position", peak));
+    }
+
+    private void addSine(VBox box, ClipShape.Sine initial) {
+        // Mode toggle — cycles vs. frequency
+        var mode = new SegmentedControl<SineMode>()
+            .options(List.of(SineMode.FREQUENCY, SineMode.CYCLES),
+                m -> m == SineMode.FREQUENCY ? "Frequency" : "Cycles");
+        mode.setValue(initial.cycles() > 0 ? SineMode.CYCLES : SineMode.FREQUENCY);
+        box.getChildren().add(row("Mode", mode));
+
+        var freq = nf().range(0.1, 10_000_000).step(100).scientific().unit("Hz");
+        freq.setValue(initial.frequencyHz());
+        freq.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
+            session.setClipShape(clipId, new ClipShape.Sine(n.doubleValue(), s.phase(), s.cycles()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) freq.setValueQuiet(s.frequencyHz()); });
+        box.getChildren().add(row("Frequency", freq));
+
+        var cycles = nf().range(0, 10_000).step(0.25).decimals(3);
+        cycles.setValue(initial.cycles());
+        cycles.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
+            session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), s.phase(), n.doubleValue()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) cycles.setValueQuiet(s.cycles()); });
+        box.getChildren().add(row("Cycles", cycles));
+
+        var phase = nf().range(-2 * Math.PI, 2 * Math.PI).step(0.1).decimals(3).unit("rad");
+        phase.setValue(initial.phase());
+        phase.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
+            session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), n.doubleValue(), s.cycles()));
+        });
+        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) phase.setValueQuiet(s.phase()); });
+        box.getChildren().add(row("Phase", phase));
+
+        // Mode toggle: switch between 0-cycles-driven (frequency) or positive cycles.
+        mode.valueProperty().addListener((obs, o, n) -> {
+            var clip = session.findClip(clipId);
+            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
+            if (n == SineMode.FREQUENCY && s.cycles() > 0) {
+                session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), s.phase(), 0));
+            } else if (n == SineMode.CYCLES && s.cycles() <= 0) {
+                session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), s.phase(), 1));
+            }
+        });
+    }
+
+    private enum SineMode { FREQUENCY, CYCLES }
+
+    // ── Action row ──────────────────────────────────────────────────────────
+
+    private Node buildActionRow() {
+        var del = new Button("Delete");
+        del.setOnAction(e -> session.deleteSelectedClips());
+        var dup = new Button("Duplicate");
+        dup.setOnAction(e -> session.duplicateSelectedClips());
+        var row = new HBox(6, del, dup);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // UI helpers
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private NumberField nf() {
+        return new NumberField().prefColumnCount(7);
+    }
+
+    private Node row(String label, Node field) {
+        var row = new HBox(6, labelCol(label), field);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(field, Priority.ALWAYS);
+        return row;
+    }
+
+    private Label labelCol(String text) {
+        var l = new Label(text);
+        l.getStyleClass().add("clip-inspector-label");
+        l.setMinWidth(90);
+        l.setPrefWidth(90);
+        return l;
+    }
+
+    private String channelLabel(SequenceChannel channel) {
+        if (channel.isRfGate()) return "RF Gate";
+        var field = session.fieldForChannel(channel);
+        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
+        return EditorTrack.labelFor(field, channel.subIndex());
+    }
+
+    private String formatPeak(SignalClip clip, EigenfieldDocument ef) {
+        if (ef == null) return "";
+        double physical = clip.amplitude() * ef.defaultMagnitude();
+        return "\u2248 " + formatSI(physical, ef.units());
+    }
+
+    private static String formatSI(double value, String units) {
+        if (units == null || units.isEmpty()) return String.format("%.3g", value);
+        double abs = Math.abs(value);
+        if (abs == 0) return "0 " + units;
+        if (abs >= 1e9)  return String.format("%.2f G%s", value / 1e9, units);
+        if (abs >= 1e6)  return String.format("%.2f M%s", value / 1e6, units);
+        if (abs >= 1e3)  return String.format("%.2f k%s", value / 1e3, units);
+        if (abs >= 1)    return String.format("%.2f %s",  value,       units);
+        if (abs >= 1e-3) return String.format("%.2f m%s", value * 1e3, units);
+        if (abs >= 1e-6) return String.format("%.2f \u03BC%s", value * 1e6, units);
+        if (abs >= 1e-9) return String.format("%.2f n%s", value * 1e9, units);
+        return String.format("%.3g %s", value, units);
+    }
+
+    /** Spacer for horizontal flex. */
+    @SuppressWarnings("unused")
+    private static Region spacer() {
+        var r = new Region();
+        HBox.setHgrow(r, Priority.ALWAYS);
+        return r;
+    }
+}

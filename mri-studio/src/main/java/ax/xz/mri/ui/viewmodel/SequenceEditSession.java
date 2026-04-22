@@ -1,13 +1,16 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.sequence.ClipBaker;
+import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
-import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.FieldDefinition;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.project.SequenceDocument;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -27,57 +30,77 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
- * Mutable editing state for one clip-based sequence, with full undo/redo
- * and multi-clip selection.
+ * Mutable editing state for one clip-based sequence.
  *
- * <p>All mutations go through named methods that automatically push an undo snapshot
- * before applying the change. The {@link #revision} counter is bumped on every edit
- * and drives canvas redraws.
+ * <h3>What lives here</h3>
+ * <ul>
+ *   <li><b>Clips</b> — the edited collection of {@link SignalClip}s, with
+ *       multi-clip selection and a designated "primary" clip for the inspector.</li>
+ *   <li><b>Viewport</b> — the editor's own zoom/pan range in microseconds.</li>
+ *   <li><b>Active config</b> — which {@link SimulationConfig} drives track
+ *       layout, channel colouring, and default amplitudes.</li>
+ *   <li><b>Derived tracks</b> — an observable, read-only lane list rebuilt from
+ *       the active config whenever it changes. Tracks are <em>view</em>, not
+ *       state: there is exactly one lane per
+ *       {@link FieldDefinition#kind() field channel} slot plus one RF-gate lane,
+ *       in config order. Collapse state is tracked per-channel (see
+ *       {@link #collapsedChannels}).</li>
+ *   <li><b>Undo/redo</b> — every mutation pushes a snapshot before applying the
+ *       change; tracks are not part of the snapshot because they are derived.</li>
+ * </ul>
+ *
+ * <h3>Change notification</h3>
+ * <p>The {@link #revision} counter is bumped on every mutation and drives canvas
+ * redraws. External listeners may also observe the collection properties
+ * directly.
  */
 public final class SequenceEditSession {
     private static final int MAX_UNDO = 100;
-    private static final double DEFAULT_DT = 10.0;          // μs
-    private static final double DEFAULT_DURATION = 3000.0;   // μs (3 ms)
+    private static final double DEFAULT_DT = 10.0;            // μs
+    private static final double DEFAULT_DURATION = 3000.0;     // μs
     private static final double SNAP_THRESHOLD_FRACTION = 0.005; // 0.5% of visible span
 
-    // --- Core state ---
+    // ── Core document state ──────────────────────────────────────────────────
     public final ObjectProperty<SequenceDocument> originalDocument = new SimpleObjectProperty<>();
     public final ObservableList<SignalClip> clips = FXCollections.observableArrayList();
     public final DoubleProperty dt = new SimpleDoubleProperty(DEFAULT_DT);
     public final DoubleProperty totalDuration = new SimpleDoubleProperty(DEFAULT_DURATION);
     public final IntegerProperty revision = new SimpleIntegerProperty(0);
 
-    // --- Selection (multi-select) ---
+    // ── Selection ────────────────────────────────────────────────────────────
     public final ObservableSet<String> selectedClipIds = FXCollections.observableSet(new LinkedHashSet<>());
-    /** The most recently clicked clip — drives inspector display. */
+    /** Most recently clicked clip — drives the inspector. */
     public final ObjectProperty<String> primarySelectedClipId = new SimpleObjectProperty<>(null);
 
-    // --- Tracks ---
+    // ── Tracks (derived from activeConfig) + collapse state ─────────────────
+    /** Read-only observable view of the current lane list. Rebuilt when {@link #activeConfig} changes. */
     public final ObservableList<EditorTrack> tracks = FXCollections.observableArrayList();
+    /** Channels currently rendered as thin collapsed bars. View-layer preference; not part of undo. */
+    public final ObservableSet<SequenceChannel> collapsedChannels = FXCollections.observableSet(new LinkedHashSet<>());
 
-    // --- Viewport (editor's own zoom/pan, in μs) ---
+    // ── Viewport (editor's own μs range) ─────────────────────────────────────
     public final DoubleProperty viewStart = new SimpleDoubleProperty(0);
     public final DoubleProperty viewEnd = new SimpleDoubleProperty(DEFAULT_DURATION);
 
-    // --- Simulation config association (which config is active for this sequence) ---
-    public final ObjectProperty<ax.xz.mri.project.ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
-    /** Resolved config snapshot; drives default amplitudes and baking. Nullable. */
+    // ── Active simulation config ─────────────────────────────────────────────
+    public final ObjectProperty<ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
+    /** Resolved config snapshot. Drives track layout, default amplitudes and baking. Nullable. */
     public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
-    private ax.xz.mri.project.ProjectNodeId originalSimConfigId;
+    private ProjectNodeId originalSimConfigId;
 
-    /** Project repository supplier — used to resolve eigenfield metadata (e.g. units). */
-    private java.util.function.Supplier<ax.xz.mri.project.ProjectRepository> repositorySupplier = () -> null;
+    /** Repository supplier — used to resolve eigenfield metadata (units, defaultMagnitude). */
+    private Supplier<ProjectRepository> repositorySupplier = () -> null;
 
-    // --- Snapping ---
+    // ── Snapping ─────────────────────────────────────────────────────────────
     public final BooleanProperty snapEnabled = new SimpleBooleanProperty(true);
     public final DoubleProperty snapGridSize = new SimpleDoubleProperty(0);
 
-    // --- Undo/Redo ---
+    // ── Undo/Redo ────────────────────────────────────────────────────────────
     private final BooleanProperty canUndo = new SimpleBooleanProperty(false);
     private final BooleanProperty canRedo = new SimpleBooleanProperty(false);
     private final Deque<EditSnapshot> undoStack = new ArrayDeque<>();
@@ -86,7 +109,16 @@ public final class SequenceEditSession {
     public ReadOnlyBooleanProperty canUndoProperty() { return canUndo; }
     public ReadOnlyBooleanProperty canRedoProperty() { return canRedo; }
 
-    // ==================== Document loading ====================
+    public SequenceEditSession() {
+        // Keep tracks in sync with activeConfig automatically — the edit layer
+        // never needs to manually rebuild them, and we never end up out of sync.
+        activeConfig.addListener((obs, oldCfg, newCfg) -> rebuildDerivedTracks(newCfg));
+        rebuildDerivedTracks(null);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Document loading / saving
+    // ══════════════════════════════════════════════════════════════════════════
 
     /** Load a sequence document for editing. Clears undo history. */
     public void open(SequenceDocument document) {
@@ -107,13 +139,13 @@ public final class SequenceEditSession {
 
         selectedClipIds.clear();
         primarySelectedClipId.set(null);
-        tracks.setAll(EditorTrack.defaultTracks(config));
         viewStart.set(0);
         viewEnd.set(totalDuration.get());
         undoStack.clear();
         redoStack.clear();
         canUndo.set(false);
         canRedo.set(false);
+        rebuildDerivedTracks(config);
         bumpRevision();
     }
 
@@ -132,7 +164,7 @@ public final class SequenceEditSession {
     public boolean isDirty() {
         var orig = originalDocument.get();
         if (orig == null) return false;
-        if (!java.util.Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
+        if (!Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
         if (orig.clipSequence() != null) {
             return !clips.equals(orig.clipSequence().clips())
                 || dt.get() != orig.clipSequence().dt()
@@ -141,70 +173,92 @@ public final class SequenceEditSession {
         return true;
     }
 
-    /** Set the initial sim config association (called after loading, establishes the "saved" baseline). */
-    public void setOriginalSimConfigId(ax.xz.mri.project.ProjectNodeId configId) {
+    /** Establish the "last-saved" config baseline after a load. */
+    public void setOriginalSimConfigId(ProjectNodeId configId) {
         this.originalSimConfigId = configId;
         this.activeSimConfigId.set(configId);
     }
 
-    /** Provide a repository supplier so the session can resolve eigenfield metadata. */
-    public void setRepositorySupplier(java.util.function.Supplier<ax.xz.mri.project.ProjectRepository> supplier) {
+    /** Provide a repository supplier so we can resolve eigenfield metadata on demand. */
+    public void setRepositorySupplier(Supplier<ProjectRepository> supplier) {
         this.repositorySupplier = supplier != null ? supplier : () -> null;
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // Active config + derived tracks
+    // ══════════════════════════════════════════════════════════════════════════
+
     /**
-     * Resolve the display units declared by the eigenfield behind a channel.
-     * Returns an empty string for RF-gate / missing config / missing repo.
+     * Replace the live config snapshot driving track layout, channel colouring
+     * and default amplitudes. Tracks are rebuilt automatically; collapse state
+     * for channels that no longer exist is pruned.
      */
-    public String unitsForChannel(SequenceChannel channel) {
-        var ef = eigenfieldForChannel(channel);
-        return ef != null ? ef.units() : "";
+    public void applyActiveConfig(SimulationConfig config) {
+        if (Objects.equals(activeConfig.get(), config)) return;
+        activeConfig.set(config);
+        bumpRevision();
     }
 
-    /** Resolve the {@link ax.xz.mri.project.EigenfieldDocument} behind a channel, or null. */
-    public ax.xz.mri.project.EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
+    private void rebuildDerivedTracks(SimulationConfig config) {
+        var next = EditorTrack.forConfig(config);
+        tracks.setAll(next);
+        // Prune collapse entries for channels that no longer exist.
+        var valid = new LinkedHashSet<SequenceChannel>();
+        for (var t : next) valid.add(t.channel());
+        collapsedChannels.removeIf(ch -> !valid.contains(ch));
+    }
+
+    /** Toggle or set the collapse state for a channel. View-layer preference; not undoable. */
+    public void setChannelCollapsed(SequenceChannel channel, boolean collapsed) {
+        if (collapsed) collapsedChannels.add(channel);
+        else collapsedChannels.remove(channel);
+        bumpRevision();
+    }
+
+    public boolean isChannelCollapsed(SequenceChannel channel) {
+        return collapsedChannels.contains(channel);
+    }
+
+    /** Look up the {@link FieldDefinition} backing a channel in the active config, or {@code null}. */
+    public FieldDefinition fieldForChannel(SequenceChannel channel) {
+        if (channel == null || channel.isRfGate()) return null;
+        var config = activeConfig.get();
+        if (config == null) return null;
+        for (var f : config.fields()) {
+            if (f.name().equals(channel.fieldName()) && channel.subIndex() < f.kind().channelCount()) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    /** Resolve the eigenfield document behind a channel, or {@code null} if unavailable. */
+    public EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
         if (channel == null || channel.isRfGate()) return null;
         var field = fieldForChannel(channel);
         if (field == null || field.eigenfieldId() == null) return null;
         var repo = repositorySupplier.get();
         if (repo == null) return null;
-        return repo.node(field.eigenfieldId()) instanceof ax.xz.mri.project.EigenfieldDocument ef ? ef : null;
+        return repo.node(field.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
     }
 
-    /**
-     * Replace the live config snapshot driving defaults + track layout. Called
-     * from outside (e.g. when the user edits field amplitudes). Rebuilds track
-     * labels so the editor stays in sync with field renames.
-     */
-    public void applyActiveConfig(SimulationConfig config) {
-        if (java.util.Objects.equals(activeConfig.get(), config)) return;
-        activeConfig.set(config);
-        // Refresh track labels / lineup (preserve collapse state where the channel
-        // still exists, otherwise default).
-        var oldTracks = new ArrayList<>(tracks);
-        var newTracks = EditorTrack.defaultTracks(config);
-        for (int i = 0; i < newTracks.size(); i++) {
-            var nt = newTracks.get(i);
-            for (var ot : oldTracks) {
-                if (ot.channel().equals(nt.channel())) {
-                    newTracks.set(i, nt.withCollapsed(ot.collapsed()));
-                    break;
-                }
-            }
-        }
-        tracks.setAll(newTracks);
-        bumpRevision();
+    /** Display units declared by the eigenfield behind a channel, or empty string. */
+    public String unitsForChannel(SequenceChannel channel) {
+        var ef = eigenfieldForChannel(channel);
+        return ef != null ? ef.units() : "";
     }
 
-    // ==================== Selection ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Selection
+    // ══════════════════════════════════════════════════════════════════════════
 
-    public boolean isSelected(String clipId) {
-        return selectedClipIds.contains(clipId);
-    }
+    public boolean isSelected(String clipId) { return selectedClipIds.contains(clipId); }
 
     public List<SignalClip> selectedClips() {
         return clips.stream().filter(c -> selectedClipIds.contains(c.id())).toList();
     }
+
+    public SignalClip primarySelectedClip() { return findClip(primarySelectedClipId.get()); }
 
     public void selectOnly(String clipId) {
         selectedClipIds.clear();
@@ -217,10 +271,9 @@ public final class SequenceEditSession {
     }
 
     public void addToSelection(String clipId) {
-        if (clipId != null) {
-            selectedClipIds.add(clipId);
-            primarySelectedClipId.set(clipId);
-        }
+        if (clipId == null) return;
+        selectedClipIds.add(clipId);
+        primarySelectedClipId.set(clipId);
     }
 
     public void toggleSelection(String clipId) {
@@ -241,7 +294,7 @@ public final class SequenceEditSession {
         primarySelectedClipId.set(null);
     }
 
-    /** Select all clips overlapping a time×channel region (for rubber-band). */
+    /** Select clips overlapping a time×channel region (rubber-band). */
     public void selectClipsInRegion(double timeStart, double timeEnd, Set<SequenceChannel> channels, boolean addToExisting) {
         if (!addToExisting) selectedClipIds.clear();
         double tMin = Math.min(timeStart, timeEnd);
@@ -256,25 +309,25 @@ public final class SequenceEditSession {
         if (first != null) primarySelectedClipId.set(first);
     }
 
-    // ==================== Clip queries ====================
+    public void selectAll() {
+        selectedClipIds.clear();
+        for (var clip : clips) selectedClipIds.add(clip.id());
+        if (!clips.isEmpty()) primarySelectedClipId.set(clips.getFirst().id());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Clip queries
+    // ══════════════════════════════════════════════════════════════════════════
 
     public SignalClip findClip(String clipId) {
         if (clipId == null) return null;
-        for (var clip : clips) {
-            if (clip.id().equals(clipId)) return clip;
-        }
+        for (var clip : clips) if (clip.id().equals(clipId)) return clip;
         return null;
     }
 
     private int indexOfClip(String clipId) {
-        for (int i = 0; i < clips.size(); i++) {
-            if (clips.get(i).id().equals(clipId)) return i;
-        }
+        for (int i = 0; i < clips.size(); i++) if (clips.get(i).id().equals(clipId)) return i;
         return -1;
-    }
-
-    public SignalClip primarySelectedClip() {
-        return findClip(primarySelectedClipId.get());
     }
 
     public List<SignalClip> clipsOnChannel(SequenceChannel channel) {
@@ -284,48 +337,9 @@ public final class SequenceEditSession {
             .toList();
     }
 
-    // ==================== Track management ====================
-
-    public void addTrack(SequenceChannel channel, String label) {
-        pushUndo();
-        int count = (int) tracks.stream().filter(t -> t.channel().equals(channel)).count();
-        tracks.add(new EditorTrack(
-            UUID.randomUUID().toString(), channel,
-            label + " " + (count + 1), false
-        ));
-        bumpRevision();
-    }
-
-    public void removeTrack(String trackId) {
-        var track = tracks.stream().filter(t -> t.id().equals(trackId)).findFirst().orElse(null);
-        if (track == null) return;
-        long channelCount = tracks.stream().filter(t -> t.channel().equals(track.channel())).count();
-        if (channelCount <= 1) return;
-        pushUndo();
-        tracks.removeIf(t -> t.id().equals(trackId));
-        bumpRevision();
-    }
-
-    public void reorderTrack(int fromIndex, int toIndex) {
-        if (fromIndex < 0 || toIndex < 0 || fromIndex >= tracks.size() || toIndex >= tracks.size()) return;
-        if (fromIndex == toIndex) return;
-        pushUndo();
-        var moved = tracks.remove(fromIndex);
-        tracks.add(toIndex, moved);
-        bumpRevision();
-    }
-
-    public void setTrackCollapsed(String trackId, boolean collapsed) {
-        for (int i = 0; i < tracks.size(); i++) {
-            if (tracks.get(i).id().equals(trackId)) {
-                tracks.set(i, tracks.get(i).withCollapsed(collapsed));
-                bumpRevision();
-                return;
-            }
-        }
-    }
-
-    // ==================== Mutations (all push undo) ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Clip mutations (all push undo)
+    // ══════════════════════════════════════════════════════════════════════════
 
     public void addClip(SignalClip clip) {
         pushUndo();
@@ -410,8 +424,7 @@ public final class SequenceEditSession {
         clips.set(idx, new SignalClip(
             clip.id(), clip.channel(), clip.shape(),
             newStartTime, newDuration, clip.amplitude(),
-            newMediaOffset, newMediaDuration,
-            clip.params(), clip.splinePoints()
+            newMediaOffset, newMediaDuration
         ));
         bumpRevision();
     }
@@ -424,22 +437,22 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    public void setClipParam(String clipId, String paramName, double value) {
-        int idx = indexOfClip(clipId);
-        if (idx < 0) return;
-        pushUndo();
-        var clip = clips.get(idx);
-        var newParams = new java.util.HashMap<>(clip.params());
-        newParams.put(paramName, value);
-        clips.set(idx, clip.withParams(newParams));
-        bumpRevision();
-    }
-
+    /** Replace a clip's shape outright (and its typed parameters). */
     public void setClipShape(String clipId, ClipShape newShape) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         pushUndo();
         clips.set(idx, clips.get(idx).withShape(newShape));
+        bumpRevision();
+    }
+
+    /** Morph a clip to a different shape kind, using that kind's defaults for the current media duration. */
+    public void changeClipKind(String clipId, ClipKind newKind) {
+        int idx = indexOfClip(clipId);
+        if (idx < 0) return;
+        pushUndo();
+        var clip = clips.get(idx);
+        clips.set(idx, clip.withShape(newKind.defaultFor(clip.mediaDuration())));
         bumpRevision();
     }
 
@@ -477,8 +490,8 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    public void setActiveSimConfig(ax.xz.mri.project.ProjectNodeId configId) {
-        if (java.util.Objects.equals(configId, activeSimConfigId.get())) return;
+    public void setActiveSimConfig(ProjectNodeId configId) {
+        if (Objects.equals(configId, activeSimConfigId.get())) return;
         pushUndo();
         activeSimConfigId.set(configId);
         bumpRevision();
@@ -495,16 +508,8 @@ public final class SequenceEditSession {
     public void recentreClip(String clipId) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        var clip = clips.get(idx);
-        double newMediaDuration = clip.duration() * 4.0;
-        double newMediaOffset = clip.duration() * 1.5;
         pushUndo();
-        clips.set(idx, new SignalClip(
-            clip.id(), clip.channel(), clip.shape(),
-            clip.startTime(), clip.duration(), clip.amplitude(),
-            newMediaOffset, newMediaDuration,
-            clip.params(), clip.splinePoints()
-        ));
+        clips.set(idx, clips.get(idx).centred());
         bumpRevision();
     }
 
@@ -516,30 +521,32 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    // ==================== Spline points ====================
+    // ── Spline points ────────────────────────────────────────────────────────
 
-    public void updateSplinePoint(String clipId, int pointIndex, SignalClip.SplinePoint newPoint) {
+    public void updateSplinePoint(String clipId, int pointIndex, ClipShape.Spline.Point newPoint) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         var clip = clips.get(idx);
-        if (pointIndex < 0 || pointIndex >= clip.splinePoints().size()) return;
+        if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
+        if (pointIndex < 0 || pointIndex >= spline.points().size()) return;
         pushUndo();
-        var points = new ArrayList<>(clip.splinePoints());
+        var points = new ArrayList<>(spline.points());
         points.set(pointIndex, newPoint);
-        clips.set(idx, clip.withSplinePoints(points));
+        clips.set(idx, clip.withShape(spline.withPoints(points)));
         bumpRevision();
     }
 
-    public void addSplinePoint(String clipId, SignalClip.SplinePoint point) {
+    public void addSplinePoint(String clipId, ClipShape.Spline.Point point) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
         var clip = clips.get(idx);
-        var points = new ArrayList<>(clip.splinePoints());
+        if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
+        pushUndo();
+        var points = new ArrayList<>(spline.points());
         int insertAt = 0;
         while (insertAt < points.size() && points.get(insertAt).t() < point.t()) insertAt++;
         points.add(insertAt, point);
-        clips.set(idx, clip.withSplinePoints(points));
+        clips.set(idx, clip.withShape(spline.withPoints(points)));
         bumpRevision();
     }
 
@@ -547,16 +554,17 @@ public final class SequenceEditSession {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         var clip = clips.get(idx);
-        if (pointIndex < 0 || pointIndex >= clip.splinePoints().size()) return;
-        if (clip.splinePoints().size() <= 2) return;
+        if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
+        if (pointIndex < 0 || pointIndex >= spline.points().size()) return;
+        if (spline.points().size() <= 2) return;
         pushUndo();
-        var points = new ArrayList<>(clip.splinePoints());
+        var points = new ArrayList<>(spline.points());
         points.remove(pointIndex);
-        clips.set(idx, clip.withSplinePoints(points));
+        clips.set(idx, clip.withShape(spline.withPoints(points)));
         bumpRevision();
     }
 
-    // ==================== Split ====================
+    // ── Split ────────────────────────────────────────────────────────────────
 
     public void splitClip(String clipId, double splitTime) {
         int idx = indexOfClip(clipId);
@@ -565,60 +573,19 @@ public final class SequenceEditSession {
         if (splitTime <= clip.startTime() || splitTime >= clip.endTime()) return;
 
         pushUndo();
-        double leftDuration = splitTime - clip.startTime();
-        double rightDuration = clip.endTime() - splitTime;
-
-        var leftParams = new java.util.HashMap<>(clip.params());
-        var rightParams = new java.util.HashMap<>(clip.params());
-
-        if (clip.shape() == ClipShape.SINC) {
-            double originalCenter = clip.duration() / 2.0 + clip.param("centerOffset", 0);
-            leftParams.put("centerOffset", originalCenter - leftDuration / 2.0);
-            double rightLocalCenter = originalCenter - leftDuration;
-            rightParams.put("centerOffset", rightLocalCenter - rightDuration / 2.0);
-        }
-
-        List<SignalClip.SplinePoint> leftPoints = List.of();
-        List<SignalClip.SplinePoint> rightPoints = List.of();
-        if (clip.shape() == ClipShape.SPLINE && !clip.splinePoints().isEmpty()) {
-            double splitU = leftDuration / clip.duration();
-            var lp = new ArrayList<SignalClip.SplinePoint>();
-            var rp = new ArrayList<SignalClip.SplinePoint>();
-            for (var pt : clip.splinePoints()) {
-                if (pt.t() <= splitU) {
-                    lp.add(new SignalClip.SplinePoint(pt.t() / splitU, pt.value()));
-                }
-                if (pt.t() >= splitU) {
-                    rp.add(new SignalClip.SplinePoint((pt.t() - splitU) / (1 - splitU), pt.value()));
-                }
-            }
-            if (lp.isEmpty() || lp.getLast().t() < 1.0) lp.add(new SignalClip.SplinePoint(1.0, 0));
-            if (rp.isEmpty() || rp.getFirst().t() > 0.0) rp.addFirst(new SignalClip.SplinePoint(0.0, 0));
-            leftPoints = lp;
-            rightPoints = rp;
-        }
-
-        var leftClip = new SignalClip(
-            UUID.randomUUID().toString(), clip.channel(), clip.shape(),
-            clip.startTime(), leftDuration, clip.amplitude(),
-            0, leftDuration, leftParams, leftPoints
-        );
-        var rightClip = new SignalClip(
-            UUID.randomUUID().toString(), clip.channel(), clip.shape(),
-            splitTime, rightDuration, clip.amplitude(),
-            0, rightDuration, rightParams, rightPoints
-        );
-
-        clips.set(idx, leftClip);
-        clips.add(idx + 1, rightClip);
+        var split = clip.split(splitTime);
+        clips.set(idx, split.left());
+        clips.add(idx + 1, split.right());
         selectedClipIds.clear();
-        selectedClipIds.add(leftClip.id());
-        selectedClipIds.add(rightClip.id());
-        primarySelectedClipId.set(leftClip.id());
+        selectedClipIds.add(split.left().id());
+        selectedClipIds.add(split.right().id());
+        primarySelectedClipId.set(split.left().id());
         bumpRevision();
     }
 
-    // ==================== Snapping ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Snapping
+    // ══════════════════════════════════════════════════════════════════════════
 
     public double snapTime(double rawTime) {
         if (!snapEnabled.get()) return rawTime;
@@ -640,11 +607,12 @@ public final class SequenceEditSession {
             double snapped = Math.round(rawTime / grid) * grid;
             if (Math.abs(snapped - rawTime) < threshold) return snapped;
         }
-
         return rawTime;
     }
 
-    // ==================== Viewport helpers ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Viewport helpers
+    // ══════════════════════════════════════════════════════════════════════════
 
     public void zoomViewAround(double centreTime, double factor) {
         double span = viewEnd.get() - viewStart.get();
@@ -664,100 +632,38 @@ public final class SequenceEditSession {
         viewEnd.set(totalDuration.get());
     }
 
-    // ==================== Convenience factories ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Clip creation factories
+    // ══════════════════════════════════════════════════════════════════════════
 
-    public SignalClip createDefaultClip(ClipShape shape, SequenceChannel channel, double startTime) {
-        double clipDuration = (viewEnd.get() - viewStart.get()) * 0.15;
-        clipDuration = Math.max(dt.get() * 5, clipDuration);
-        double mediaDuration = clipDuration * 2.0;
-        double mediaOffset = clipDuration * 0.5;
-        double amplitude = defaultAmplitudeForChannel(channel);
-
-        var params = defaultParamsForShape(shape, mediaDuration);
-        List<SignalClip.SplinePoint> splinePoints = List.of();
-        if (shape == ClipShape.SPLINE) {
-            splinePoints = List.of(
-                new SignalClip.SplinePoint(0.0, 0.0),
-                new SignalClip.SplinePoint(0.5, 1.0),
-                new SignalClip.SplinePoint(1.0, 0.0)
-            );
-        }
-
-        return new SignalClip(
-            UUID.randomUUID().toString(),
-            channel, shape, startTime, clipDuration, amplitude,
-            mediaOffset, mediaDuration, params, splinePoints
-        );
+    /** Create a clip with a duration equal to 15 % of the visible span. */
+    public SignalClip createDefaultClip(ClipKind kind, SequenceChannel channel, double startTime) {
+        double clipDuration = Math.max(dt.get() * 5, (viewEnd.get() - viewStart.get()) * 0.15);
+        return SignalClip.freshCentred(channel, kind, startTime, clipDuration, defaultAmplitudeForChannel(channel));
     }
 
-    public SignalClip createClipCentred(ClipShape shape, SequenceChannel channel, double startTime, double duration) {
-        double mediaDuration = duration * 4.0;
-        double mediaOffset = duration * 1.5;
-        double amplitude = defaultAmplitudeForChannel(channel);
-        var params = defaultParamsForShape(shape, mediaDuration);
-        List<SignalClip.SplinePoint> splinePoints = List.of();
-        if (shape == ClipShape.SPLINE) {
-            splinePoints = List.of(
-                new SignalClip.SplinePoint(0.0, 0.0),
-                new SignalClip.SplinePoint(0.5, 1.0),
-                new SignalClip.SplinePoint(1.0, 0.0)
-            );
-        }
-
-        return new SignalClip(
-            UUID.randomUUID().toString(),
-            channel, shape, startTime, duration, amplitude,
-            mediaOffset, mediaDuration, params, splinePoints
-        );
+    /** Create a clip with an explicit duration (used by click-and-drag creation). */
+    public SignalClip createClipCentred(ClipKind kind, SequenceChannel channel, double startTime, double duration) {
+        return SignalClip.freshCentred(channel, kind, startTime, duration, defaultAmplitudeForChannel(channel));
     }
 
     /**
-     * Default amplitude for a newly-created clip on the given channel.
-     *
-     * <p>For field-backed channels, uses the configured {@link FieldDefinition#maxAmplitude()}
-     * of the corresponding field (falling back to {@code |min|} or 1 if no config).
-     * For {@link SequenceChannel#RF_GATE} returns 1 (gate on).
+     * Sensible starting amplitude for a clip on the given channel — driven by
+     * the active config's {@link FieldDefinition#maxAmplitude()} so a new clip
+     * lands on a visible part of the axis instead of at zero.
      */
-    private double defaultAmplitudeForChannel(SequenceChannel channel) {
+    public double defaultAmplitudeForChannel(SequenceChannel channel) {
         if (channel.isRfGate()) return 1.0;
         var field = fieldForChannel(channel);
         if (field == null) return 1.0;
         double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
         if (m == 0) return 1.0;
-        // For bipolar REAL fields, seed at 2/3 of max; for unipolar, at max.
-        if (field.minAmplitude() < 0) return 0.66 * field.maxAmplitude();
-        return field.maxAmplitude();
+        return field.minAmplitude() < 0 ? 0.66 * field.maxAmplitude() : field.maxAmplitude();
     }
 
-    /**
-     * Look up the {@link FieldDefinition} corresponding to a given channel in
-     * the currently-active config. Returns {@code null} for RF-gate or if no
-     * config / no matching field.
-     */
-    public FieldDefinition fieldForChannel(SequenceChannel channel) {
-        if (channel == null || channel.isRfGate()) return null;
-        var config = activeConfig.get();
-        if (config == null) return null;
-        for (var f : config.fields()) {
-            if (f.name().equals(channel.fieldName()) && channel.subIndex() < f.kind().channelCount()) {
-                return f;
-            }
-        }
-        return null;
-    }
-
-    private Map<String, Double> defaultParamsForShape(ClipShape shape, double clipDuration) {
-        return switch (shape) {
-            case SINC -> Map.of("bandwidthHz", 4000.0, "centerOffset", 0.0, "windowFactor", 1.0);
-            case TRAPEZOID -> Map.of("riseTime", clipDuration * 0.15, "flatTime", clipDuration * 0.5);
-            case GAUSSIAN -> Map.of("sigma", clipDuration * 0.2);
-            case TRIANGLE -> Map.of("peakPosition", 0.5);
-            case SINE -> Map.of("frequencyHz", 1000.0, "phase", 0.0, "cycles", 0.0);
-            default -> Map.of();
-        };
-    }
-
-    // ==================== Undo/Redo ====================
+    // ══════════════════════════════════════════════════════════════════════════
+    // Undo / Redo
+    // ══════════════════════════════════════════════════════════════════════════
 
     public void undo() {
         if (undoStack.isEmpty()) return;
@@ -787,20 +693,18 @@ public final class SequenceEditSession {
             totalDuration.get(),
             Set.copyOf(selectedClipIds),
             primarySelectedClipId.get(),
-            List.copyOf(tracks),
             activeSimConfigId.get()
         );
     }
 
-    private void applySnapshot(EditSnapshot snapshot) {
-        clips.setAll(snapshot.clips);
-        dt.set(snapshot.dt);
-        totalDuration.set(snapshot.totalDuration);
+    private void applySnapshot(EditSnapshot s) {
+        clips.setAll(s.clips);
+        dt.set(s.dt);
+        totalDuration.set(s.totalDuration);
         selectedClipIds.clear();
-        selectedClipIds.addAll(snapshot.selectedClipIds);
-        primarySelectedClipId.set(snapshot.primarySelectedClipId);
-        tracks.setAll(snapshot.tracks);
-        activeSimConfigId.set(snapshot.activeSimConfigId);
+        selectedClipIds.addAll(s.selectedClipIds);
+        primarySelectedClipId.set(s.primarySelectedClipId);
+        activeSimConfigId.set(s.activeSimConfigId);
         bumpRevision();
     }
 
@@ -809,9 +713,7 @@ public final class SequenceEditSession {
         canRedo.set(!redoStack.isEmpty());
     }
 
-    private void bumpRevision() {
-        revision.set(revision.get() + 1);
-    }
+    private void bumpRevision() { revision.set(revision.get() + 1); }
 
     private record EditSnapshot(
         List<SignalClip> clips,
@@ -819,13 +721,11 @@ public final class SequenceEditSession {
         double totalDuration,
         Set<String> selectedClipIds,
         String primarySelectedClipId,
-        List<EditorTrack> tracks,
-        ax.xz.mri.project.ProjectNodeId activeSimConfigId
+        ProjectNodeId activeSimConfigId
     ) {
         EditSnapshot {
             clips = List.copyOf(clips);
             selectedClipIds = Set.copyOf(selectedClipIds);
-            tracks = List.copyOf(tracks);
         }
     }
 }

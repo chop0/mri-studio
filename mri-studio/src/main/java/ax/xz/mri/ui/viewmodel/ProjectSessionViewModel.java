@@ -492,16 +492,24 @@ public final class ProjectSessionViewModel {
         return ef;
     }
 
-    /** Create an empty sequence with a single zero-channel segment. */
-    public ax.xz.mri.project.SequenceDocument createEmptySequence(String name) {
+    /**
+     * Create an empty sequence bound to a simulation config.
+     *
+     * <p>The sequence starts with one zero-channel segment of 100 steps; the
+     * editor grows the step width as clips are placed. The binding to
+     * {@code configId} is persisted on the document so the sequence editor
+     * wires up its tracks as soon as the tab opens.
+     */
+    public ax.xz.mri.project.SequenceDocument createEmptySequence(String name, ProjectNodeId configId) {
         var repo = repository.get();
-        // Zero channels — the sequence editor will grow steps when a sim-config is associated.
         var steps = new java.util.ArrayList<ax.xz.mri.model.sequence.PulseStep>();
         for (int i = 0; i < 100; i++) steps.add(new ax.xz.mri.model.sequence.PulseStep(new double[0], 0));
         var doc = new ax.xz.mri.project.SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,
             List.of(new ax.xz.mri.model.sequence.Segment(1e-5, 0, 100)),
-            List.of(new ax.xz.mri.model.sequence.PulseSegment(steps))
+            List.of(new ax.xz.mri.model.sequence.PulseSegment(steps)),
+            null,
+            configId
         );
         repo.addSequence(doc);
         explorer.refresh();
