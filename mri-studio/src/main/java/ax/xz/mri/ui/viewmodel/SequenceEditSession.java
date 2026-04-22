@@ -752,6 +752,7 @@ public final class SequenceEditSession {
             case TRAPEZOID -> Map.of("riseTime", clipDuration * 0.15, "flatTime", clipDuration * 0.5);
             case GAUSSIAN -> Map.of("sigma", clipDuration * 0.2);
             case TRIANGLE -> Map.of("peakPosition", 0.5);
+            case SINE -> Map.of("frequencyHz", 1000.0, "phase", 0.0, "cycles", 0.0);
             default -> Map.of();
         };
     }

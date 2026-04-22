@@ -30,6 +30,7 @@ public final class SequenceEditorIcons {
             case GAUSSIAN -> drawGaussian(g);
             case SPLINE -> drawSpline(g);
             case TRIANGLE -> drawTriangle(g);
+            case SINE -> drawSine(g);
             case DELETE_CLIP -> drawDelete(g);
             case DUPLICATE_CLIP -> drawDuplicate(g);
             case SPOILER -> drawSpoiler(g);
@@ -72,6 +73,29 @@ public final class SequenceEditorIcons {
         g.fillOval(10, 10, 4, 4);
         g.fillOval(16, 4, 4, 4);
         g.setStroke(INK);
+    }
+
+    private static void drawSine(GraphicsContext g) {
+        g.setStroke(ACCENT);
+        g.setLineWidth(1.6);
+        // Two full cycles of a sine wave across the icon, with a faint zero line.
+        g.setStroke(INK.deriveColor(0, 1, 1, 0.35));
+        g.setLineWidth(0.8);
+        g.strokeLine(2, 12, 22, 12);
+        g.setStroke(ACCENT);
+        g.setLineWidth(1.6);
+        int n = 32;
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        for (int i = 0; i < n; i++) {
+            double t = i / (double) (n - 1);
+            double s = Math.sin(t * 4 * Math.PI); // two cycles
+            xs[i] = 2 + t * 20;
+            ys[i] = 12 - s * 8;
+        }
+        g.strokePolyline(xs, ys, n);
+        g.setStroke(INK);
+        g.setLineWidth(1.6);
     }
 
     private static void drawTriangle(GraphicsContext g) {

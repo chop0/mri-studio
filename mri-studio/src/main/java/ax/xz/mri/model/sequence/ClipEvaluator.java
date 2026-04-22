@@ -39,6 +39,7 @@ public final class ClipEvaluator {
             case GAUSSIAN  -> evaluateGaussian(clip, u);
             case TRIANGLE  -> evaluateTriangle(clip, u);
             case SPLINE    -> evaluateSpline(clip, u);
+            case SINE      -> evaluateSine(clip, u);
         };
     }
 
@@ -106,6 +107,31 @@ public final class ClipEvaluator {
 
         double x = (u - 0.5) / sigmaFrac;
         return Math.exp(-0.5 * x * x);
+    }
+
+    private static double evaluateSine(SignalClip clip, double u) {
+        // Sinusoidal oscillation over the media extent.
+        //
+        // Two parameterisations are supported (mutually exclusive):
+        //   - cycles > 0    → exactly N cycles fit within the media extent,
+        //                     independent of duration. Good for "I want N oscillations".
+        //   - cycles == 0   → frequencyHz controls the real-world frequency; the
+        //                     number of cycles scales with the clip's media duration.
+        //
+        // "phase" is a radian offset applied to the argument of sin(·).
+        double cycles = clip.param("cycles", 0.0);
+        double phase = clip.param("phase", 0.0);
+
+        double theta;
+        if (cycles > 0) {
+            theta = 2.0 * Math.PI * cycles * u + phase;
+        } else {
+            double frequencyHz = clip.param("frequencyHz", 1000.0);
+            // u is normalised media position [0,1]; convert to seconds.
+            double tSeconds = u * clip.mediaDuration() * 1e-6;
+            theta = 2.0 * Math.PI * frequencyHz * tSeconds + phase;
+        }
+        return Math.sin(theta);
     }
 
     private static double evaluateTriangle(SignalClip clip, double u) {

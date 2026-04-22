@@ -7,7 +7,8 @@ public enum ClipShape {
     TRAPEZOID("Trapezoid", "Linear ramp up, flat top, linear ramp down"),
     GAUSSIAN("Gaussian", "Gaussian envelope with configurable sigma"),
     SPLINE("Spline", "Cubic spline through draggable control points"),
-    TRIANGLE("Triangle", "Linear ramp to peak, then ramp down");
+    TRIANGLE("Triangle", "Linear ramp to peak, then ramp down"),
+    SINE("Sine", "Sinusoidal oscillation with configurable frequency and phase");
 
     private final String displayName;
     private final String description;

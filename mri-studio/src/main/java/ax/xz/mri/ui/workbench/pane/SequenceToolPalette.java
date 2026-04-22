@@ -52,6 +52,7 @@ public final class SequenceToolPalette extends HBox {
         addCreationTool(SequenceToolKind.GAUSSIAN);
         addCreationTool(SequenceToolKind.SPLINE);
         addCreationTool(SequenceToolKind.TRIANGLE);
+        addCreationTool(SequenceToolKind.SINE);
         getChildren().add(vsep());
 
         // Clip actions

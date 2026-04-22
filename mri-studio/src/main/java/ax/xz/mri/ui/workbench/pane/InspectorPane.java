@@ -457,6 +457,14 @@ public final class InspectorPane extends WorkbenchPane {
                 row = addInspectorField(grid, row, "Peak Position", clip.param("peakPosition", 0.5), 0, 1, 0.05,
                     v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "peakPosition", v); } finally { suppressRefresh = false; } });
             }
+            case SINE -> {
+                row = addInspectorField(grid, row, "Frequency (Hz)", clip.param("frequencyHz", 1000), 0.1, 10_000_000, 100,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "frequencyHz", v); } finally { suppressRefresh = false; } });
+                row = addInspectorField(grid, row, "Phase (rad)", clip.param("phase", 0), -2 * Math.PI, 2 * Math.PI, 0.1,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "phase", v); } finally { suppressRefresh = false; } });
+                row = addInspectorField(grid, row, "Cycles", clip.param("cycles", 0), 0, 10000, 0.25,
+                    v -> { suppressRefresh = true; try { editSession.setClipParam(clip.id(), "cycles", v); } finally { suppressRefresh = false; } });
+            }
             case SPLINE -> {
                 content.getChildren().add(new Label(clip.splinePoints().size() + " control points"));
             }

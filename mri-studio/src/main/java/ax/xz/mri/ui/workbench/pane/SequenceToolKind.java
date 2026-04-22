@@ -14,6 +14,7 @@ public enum SequenceToolKind {
     GAUSSIAN("Gaussian", "Place a Gaussian RF envelope clip", true, ClipShape.GAUSSIAN),
     SPLINE("Spline", "Place a spline clip with draggable control points", true, ClipShape.SPLINE),
     TRIANGLE("Triangle", "Place a triangle ramp clip", true, ClipShape.TRIANGLE),
+    SINE("Sine", "Place a sine wave clip with configurable frequency", true, ClipShape.SINE),
 
     // --- Clip actions (click, immediate) ---
     DELETE_CLIP("Delete Clip", "Remove the selected clip", false, null),
