@@ -1,21 +1,27 @@
 package ax.xz.mri.support;
 
-import ax.xz.mri.model.field.DynamicFieldMap;
+import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.field.FieldMap;
-import ax.xz.mri.model.field.ReceiveCoilMap;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
+import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.service.circuit.CompiledCircuit;
+import ax.xz.mri.service.circuit.CompiledCircuit.CompiledCoil;
+import ax.xz.mri.service.circuit.CompiledCircuit.CompiledProbe;
+import ax.xz.mri.service.circuit.CompiledCircuit.CompiledSource;
+import ax.xz.mri.service.circuit.CompiledCircuit.TopologyLink;
 
 import java.util.List;
 
 /**
  * Small deterministic Bloch documents used by unit tests.
  *
- * <p>Channel layout: controls = [b1x, b1y, gx, gz], rfGate separate. The
- * synthetic {@link FieldMap} carries three driven fields (RF QUADRATURE,
- * Gx REAL, Gz REAL) plus a uniform isotropic receive coil.
+ * <p>Channel layout: controls = [rf_I, rf_Q, gx, gz]. The synthetic
+ * {@link CompiledCircuit} carries three drive sources (RF QUADRATURE, Gx REAL,
+ * Gz REAL), three coils (each with a deterministic eigenfield shape), and one
+ * probe wired to the RF coil for receive.
  */
 public final class TestBlochDataFactory {
     private TestBlochDataFactory() {}
@@ -93,8 +99,7 @@ public final class TestBlochDataFactory {
             new Segment(1.0e-6, 0, 2),
             new Segment(1.0e-6, 2, 0)
         );
-        field.dynamicFields = buildDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
-        field.receiveCoils = buildIsotropicReceive(field.rMm.length, field.zMm.length);
+        field.circuit = buildTestCircuit(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
         return field;
     }
 
@@ -126,12 +131,12 @@ public final class TestBlochDataFactory {
         field.t2 = 1.0e9;
         field.sliceHalf = 0.005;
         field.segments = List.of(new Segment(1.0e-6, 1, 0));
-        field.dynamicFields = buildDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
-        field.receiveCoils = buildIsotropicReceive(field.rMm.length, field.zMm.length);
+        field.circuit = buildTestCircuit(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
         return field;
     }
 
-    private static List<DynamicFieldMap> buildDynamicFields(double[] rMm, double[] zMm, double b0, double fovX, double fovZ) {
+    /** Build a three-coil, one-probe compiled circuit with deterministic eigenfields. */
+    public static CompiledCircuit buildTestCircuit(double[] rMm, double[] zMm, double b0, double fovX, double fovZ) {
         int nR = rMm.length;
         int nZ = zMm.length;
         double fovXHalf = Math.max(fovX / 2, 1e-9);
@@ -139,7 +144,11 @@ public final class TestBlochDataFactory {
         double[][] rfEx = new double[nR][nZ];
         double[][] rfEy = new double[nR][nZ];
         double[][] rfEz = new double[nR][nZ];
+        double[][] gxEx = new double[nR][nZ];
+        double[][] gxEy = new double[nR][nZ];
         double[][] gxEz = new double[nR][nZ];
+        double[][] gzEx = new double[nR][nZ];
+        double[][] gzEy = new double[nR][nZ];
         double[][] gzEz = new double[nR][nZ];
         for (int ri = 0; ri < nR; ri++) {
             double rM = Math.abs(rMm[ri]) * 1e-3;
@@ -150,23 +159,40 @@ public final class TestBlochDataFactory {
                 gzEz[ri][zi] = zM + sq(rM / 2) / (2 * b0);
             }
         }
-        return List.of(
-            new DynamicFieldMap("RF", 0, 2, 0.0, 0.0, rfEx, rfEy, rfEz),
-            new DynamicFieldMap("Gx", 2, 1, 0.0, 0.0, new double[nR][nZ], new double[nR][nZ], gxEz),
-            new DynamicFieldMap("Gz", 3, 1, 0.0, 0.0, new double[nR][nZ], new double[nR][nZ], gzEz)
-        );
-    }
 
-    public static List<ReceiveCoilMap> buildIsotropicReceive(int nR, int nZ) {
-        double[][] ex = new double[nR][nZ];
-        double[][] ey = new double[nR][nZ];
-        double[][] ez = new double[nR][nZ];
-        for (int ri = 0; ri < nR; ri++) {
-            for (int zi = 0; zi < nZ; zi++) {
-                ex[ri][zi] = 1.0;
-            }
-        }
-        return List.of(new ReceiveCoilMap("Primary RX", 1.0, 0.0, ex, ey, ez));
+        var rfCoilId = new ComponentId("coil-rf");
+        var gxCoilId = new ComponentId("coil-gx");
+        var gzCoilId = new ComponentId("coil-gz");
+        var rfSrcId = new ComponentId("src-rf");
+        var gxSrcId = new ComponentId("src-gx");
+        var gzSrcId = new ComponentId("src-gz");
+        var probeId = new ComponentId("probe-rx");
+
+        var sources = List.of(
+            new CompiledSource(rfSrcId, "RF", 0, AmplitudeKind.QUADRATURE, 0.0, 0.0),
+            new CompiledSource(gxSrcId, "Gx", 2, AmplitudeKind.REAL, 0.0, 0.0),
+            new CompiledSource(gzSrcId, "Gz", 3, AmplitudeKind.REAL, 0.0, 0.0)
+        );
+        var coils = List.of(
+            new CompiledCoil(rfCoilId, "RF Coil", 0, 0, rfEx, rfEy, rfEz),
+            new CompiledCoil(gxCoilId, "Gx Coil", 0, 0, gxEx, gxEy, gxEz),
+            new CompiledCoil(gzCoilId, "Gz Coil", 0, 0, gzEx, gzEy, gzEz)
+        );
+        var probes = List.of(
+            new CompiledProbe(probeId, "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY)
+        );
+        var drives = List.of(
+            new TopologyLink(0, 0, List.of(), true),
+            new TopologyLink(1, 1, List.of(), true),
+            new TopologyLink(2, 2, List.of(), true)
+        );
+        var observes = List.of(new TopologyLink(0, 0, List.of(), true));
+
+        return new CompiledCircuit(
+            sources, List.of(), coils, probes,
+            drives, observes,
+            List.of(), List.of(), List.of(),
+            /* totalChannelCount = */ 4);
     }
 
     private static double sq(double v) { return v * v; }

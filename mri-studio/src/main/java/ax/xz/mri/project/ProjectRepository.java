@@ -1,5 +1,7 @@
 package ax.xz.mri.project;
 
+import ax.xz.mri.model.circuit.CircuitDocument;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +16,7 @@ public final class ProjectRepository {
     private final List<ProjectNodeId> sequenceIds = new ArrayList<>();
     private final List<ProjectNodeId> simConfigIds = new ArrayList<>();
     private final List<ProjectNodeId> eigenfieldIds = new ArrayList<>();
+    private final List<ProjectNodeId> circuitIds = new ArrayList<>();
 
     public ProjectRepository(ProjectManifest manifest) {
         this.manifest = Objects.requireNonNull(manifest);
@@ -41,6 +44,10 @@ public final class ProjectRepository {
 
     public List<ProjectNodeId> eigenfieldIds() {
         return List.copyOf(eigenfieldIds);
+    }
+
+    public List<ProjectNodeId> circuitIds() {
+        return List.copyOf(circuitIds);
     }
 
     public ProjectNode node(ProjectNodeId id) {
@@ -142,6 +149,44 @@ public final class ProjectRepository {
         }
         var renamed = ef.withName(newName);
         nodes.put(eigenfieldId, renamed);
+        return renamed;
+    }
+
+    // --- Circuits ---
+
+    public void addCircuit(CircuitDocument circuit) {
+        nodes.put(circuit.id(), circuit);
+        if (!circuitIds.contains(circuit.id())) {
+            circuitIds.add(circuit.id());
+        }
+    }
+
+    public void removeCircuit(ProjectNodeId circuitId) {
+        var node = nodes.get(circuitId);
+        if (!(node instanceof CircuitDocument)) return;
+        nodes.remove(circuitId);
+        circuitIds.remove(circuitId);
+    }
+
+    public CircuitDocument circuit(ProjectNodeId circuitId) {
+        var node = nodes.get(circuitId);
+        return node instanceof CircuitDocument c ? c : null;
+    }
+
+    public void updateCircuit(CircuitDocument updated) {
+        if (!circuitIds.contains(updated.id())) {
+            throw new IllegalArgumentException("Circuit " + updated.id() + " does not exist");
+        }
+        nodes.put(updated.id(), updated);
+    }
+
+    public CircuitDocument renameCircuit(ProjectNodeId circuitId, String newName) {
+        var node = nodes.get(circuitId);
+        if (!(node instanceof CircuitDocument circuit)) {
+            throw new IllegalArgumentException("Node " + circuitId + " is not a circuit");
+        }
+        var renamed = circuit.withName(newName);
+        nodes.put(circuitId, renamed);
         return renamed;
     }
 

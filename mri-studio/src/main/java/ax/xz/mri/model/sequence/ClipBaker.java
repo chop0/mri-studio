@@ -1,8 +1,8 @@
 package ax.xz.mri.model.sequence;
 
+import ax.xz.mri.model.circuit.CircuitComponent;
+import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.DrivePath;
-import ax.xz.mri.model.simulation.SimulationConfig;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -10,18 +10,18 @@ import java.util.List;
 
 /**
  * Bakes a {@link ClipSequence} into flat {@link Segment}/{@link PulseSegment}
- * arrays consumed by the simulator.
+ * arrays the simulator consumes.
  *
- * <p>Walks the time axis at {@code seq.dt()}, evaluates each output channel by
- * summing every clip whose track routes to it, and emits one
- * {@link PulseSegment} spanning the full duration. Per-step
- * {@link PulseStep#controls()} is sized to
- * {@link SimulationConfig#totalChannelCount()} in {@link DrivePath} order.
+ * <p>Walks the time axis at {@code seq.dt()}, evaluates each output channel
+ * by summing every clip whose track routes to it, and emits a single
+ * {@link PulseSegment} over the whole duration. The per-step
+ * {@link PulseStep#controls()} is sized to the circuit's total channel count
+ * in voltage-source declaration order.
  *
- * <p>{@link PulseStep#rfGate()} is an optimisation hint auto-computed from the
- * running magnitude of every {@link AmplitudeKind#QUADRATURE QUADRATURE} drive
- * path; the simulator's explicit T/R gating comes from
- * {@link AmplitudeKind#GATE GATE} paths wired to coils.
+ * <p>{@link PulseStep#rfGate()} is an optimisation hint derived from the
+ * running magnitude of every {@link AmplitudeKind#QUADRATURE} source. The
+ * simulator's T/R gating comes from explicit
+ * {@link CircuitComponent.SwitchComponent Switch} components in the circuit.
  */
 public final class ClipBaker {
     public static final double RF_GATE_THRESHOLD = 1e-12;
@@ -30,8 +30,8 @@ public final class ClipBaker {
 
     public record BakeResult(List<Segment> segments, List<PulseSegment> pulseSegments) {}
 
-    public static BakeResult bake(ClipSequence seq, SimulationConfig config) {
-        if (seq == null || seq.totalDuration() <= 0 || seq.dt() <= 0 || config == null) {
+    public static BakeResult bake(ClipSequence seq, CircuitDocument circuit) {
+        if (seq == null || seq.totalDuration() <= 0 || seq.dt() <= 0 || circuit == null) {
             return new BakeResult(List.of(), List.of());
         }
 
@@ -43,15 +43,17 @@ public final class ClipBaker {
         var tracksById = new HashMap<String, Track>();
         for (var t : seq.tracks()) tracksById.put(t.id(), t);
 
-        int totalChannels = config.totalChannelCount();
+        int totalChannels = 0;
+        for (var src : circuit.voltageSources()) totalChannels += src.channelCount();
+
         var channelSlots = new SequenceChannel[totalChannels];
         var quadratureSlotIndices = new ArrayList<Integer>();
         int cursor = 0;
-        for (var path : config.drivePaths()) {
-            int count = path.channelCount();
+        for (var src : circuit.voltageSources()) {
+            int count = src.channelCount();
             for (int sub = 0; sub < count; sub++) {
-                channelSlots[cursor + sub] = SequenceChannel.ofPath(path.name(), sub);
-                if (path.kind() == AmplitudeKind.QUADRATURE) {
+                channelSlots[cursor + sub] = SequenceChannel.of(src.name(), sub);
+                if (src.kind() == AmplitudeKind.QUADRATURE) {
                     quadratureSlotIndices.add(cursor + sub);
                 }
             }
@@ -83,26 +85,22 @@ public final class ClipBaker {
         return new BakeResult(List.of(segment), List.of(pulseSegment));
     }
 
-    /** Initial human-readable track name for a drive-path channel. */
-    public static String defaultTrackName(DrivePath path, int subIndex) {
-        if (path.kind() == AmplitudeKind.QUADRATURE) {
-            return path.name() + " \u00b7 " + (subIndex == 0 ? "I" : "Q");
+    /** Human-friendly track name for a voltage source's channel. */
+    public static String defaultTrackName(CircuitComponent.VoltageSource src, int subIndex) {
+        if (src.kind() == AmplitudeKind.QUADRATURE) {
+            return src.name() + " \u00b7 " + (subIndex == 0 ? "I" : "Q");
         }
-        return path.name();
+        return src.name();
     }
 
-    /**
-     * Seed a default track list for a given config: one track per drive-path
-     * channel slot, in config order. STATIC paths yield no tracks.
-     */
-    public static List<Track> defaultTracksFor(SimulationConfig config) {
-        if (config == null) return List.of();
+    /** One track per voltage-source channel slot, in declaration order. */
+    public static List<Track> defaultTracksFor(CircuitDocument circuit) {
+        if (circuit == null) return List.of();
         var out = new ArrayList<Track>();
-        for (var path : config.drivePaths()) {
-            int count = path.channelCount();
+        for (var src : circuit.voltageSources()) {
+            int count = src.channelCount();
             for (int sub = 0; sub < count; sub++) {
-                out.add(new Track(SequenceChannel.ofPath(path.name(), sub),
-                    defaultTrackName(path, sub)));
+                out.add(new Track(SequenceChannel.of(src.name(), sub), defaultTrackName(src, sub)));
             }
         }
         return List.copyOf(out);

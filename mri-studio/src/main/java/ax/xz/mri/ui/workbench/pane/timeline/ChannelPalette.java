@@ -40,9 +40,9 @@ public final class ChannelPalette {
     /** Colour for a channel, given the active session. */
     public static Color colourFor(SequenceEditSession session, SequenceChannel channel) {
         if (channel == null) return UNKNOWN;
-        var field = session.pathForChannel(channel);
-        if (field == null) return UNKNOWN;
-        return colourFor(field.kind(), field.name());
+        var src = session.sourceForChannel(channel);
+        if (src == null) return UNKNOWN;
+        return colourFor(src.kind(), src.name());
     }
 
     /** Colour for an (AmplitudeKind, fieldName) pair without needing a session. */

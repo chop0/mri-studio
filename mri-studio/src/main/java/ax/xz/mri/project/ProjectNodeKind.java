@@ -4,5 +4,6 @@ package ax.xz.mri.project;
 public enum ProjectNodeKind {
     SEQUENCE,
     SIMULATION_CONFIG,
-    EIGENFIELD
+    EIGENFIELD,
+    CIRCUIT
 }

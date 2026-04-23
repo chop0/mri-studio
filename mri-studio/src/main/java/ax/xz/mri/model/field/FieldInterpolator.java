@@ -3,10 +3,9 @@ package ax.xz.mri.model.field;
 /**
  * Bilinear interpolation into the spatial field map.
  *
- * <p>Produces a {@link FieldPoint} with static Bz, per-dynamic-field eigenfield
- * components, and per-receive-coil sensitivity components at the requested
- * (r, z). No shape formulas are hardcoded — every spatial dependence comes
- * from user-authored eigenfield scripts baked into {@link FieldMap}.
+ * <p>For each compiled coil, returns the per-point eigenfield components. No
+ * shape formulas are hardcoded — every spatial dependence comes from the
+ * user-authored eigenfield scripts baked into the compiled circuit.
  */
 public final class FieldInterpolator {
     private FieldInterpolator() {}
@@ -23,35 +22,21 @@ public final class FieldInterpolator {
             mz0 = bilerp(f.mz0, f.rMm, f.zMm, rm, zMm);
         }
 
-        int nDyn = f.dynamicFields == null ? 0 : f.dynamicFields.size();
-        double[] ex = new double[nDyn];
-        double[] ey = new double[nDyn];
-        double[] ez = new double[nDyn];
-        for (int i = 0; i < nDyn; i++) {
-            var df = f.dynamicFields.get(i);
-            ex[i] = bilerp(df.ex, f.rMm, f.zMm, rm, zMm);
-            ey[i] = bilerp(df.ey, f.rMm, f.zMm, rm, zMm);
-            ez[i] = bilerp(df.ez, f.rMm, f.zMm, rm, zMm);
+        int nCoils = f.circuit == null ? 0 : f.circuit.coils().size();
+        double[] coilEx = new double[nCoils];
+        double[] coilEy = new double[nCoils];
+        double[] coilEz = new double[nCoils];
+        for (int i = 0; i < nCoils; i++) {
+            var coil = f.circuit.coils().get(i);
+            coilEx[i] = bilerp(coil.ex(), f.rMm, f.zMm, rm, zMm);
+            coilEy[i] = bilerp(coil.ey(), f.rMm, f.zMm, rm, zMm);
+            coilEz[i] = bilerp(coil.ez(), f.rMm, f.zMm, rm, zMm);
         }
 
-        int nRx = f.receiveCoils == null ? 0 : f.receiveCoils.size();
-        double[] rxEx = new double[nRx];
-        double[] rxEy = new double[nRx];
-        double[] rxEz = new double[nRx];
-        for (int i = 0; i < nRx; i++) {
-            var rc = f.receiveCoils.get(i);
-            rxEx[i] = bilerp(rc.ex, f.rMm, f.zMm, rm, zMm);
-            rxEy[i] = bilerp(rc.ey, f.rMm, f.zMm, rm, zMm);
-            rxEz[i] = bilerp(rc.ez, f.rMm, f.zMm, rm, zMm);
-        }
-
-        return new FieldPoint(staticBz, mx0, my0, mz0, ex, ey, ez, rxEx, rxEy, rxEz);
+        return new FieldPoint(staticBz, mx0, my0, mz0, coilEx, coilEy, coilEz);
     }
 
-    /**
-     * Bilinear interpolation; clamps to grid edges.
-     * {@code grid} is indexed {@code [r][z]}; {@code rArr} and {@code zArr} are the axis sample positions.
-     */
+    /** Bilinear interpolation with edge clamping. */
     public static double bilerp(double[][] grid, double[] rArr, double[] zArr, double r, double z) {
         int nr = rArr.length, nz = zArr.length;
         if (nr == 0 || nz == 0) return 0;

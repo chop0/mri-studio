@@ -11,6 +11,7 @@ public final class ProjectDisplayNames {
             case SEQUENCE -> "Sequence: " + node.name();
             case SIMULATION_CONFIG -> "Simulation: " + node.name();
             case EIGENFIELD -> "Eigenfield: " + node.name();
+            case CIRCUIT -> "Circuit: " + node.name();
         };
     }
 }

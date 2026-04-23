@@ -86,11 +86,14 @@ public final class NewSequenceWizard {
             "Bind this sequence to a simulation config",
             configs,
             SimulationConfigDocument::name,
-            cfg -> cfg.config() == null ? "" :
-                String.format("B0 %.3f T, %d field%s",
-                    cfg.config().referenceB0Tesla(),
-                    cfg.config().drivePaths().size(),
-                    cfg.config().drivePaths().size() == 1 ? "" : "s"));
+            cfg -> {
+                var cfgData = cfg.config();
+                if (cfgData == null) return "";
+                var circuit = repo.circuit(cfgData.circuitId());
+                int sources = circuit == null ? 0 : circuit.voltageSources().size();
+                return String.format("B0 %.3f T, %d source%s",
+                    cfgData.referenceB0Tesla(), sources, sources == 1 ? "" : "s");
+            });
 
         return WizardDialog.<SequenceDocument>builder("New Sequence")
             .step(starterStep)

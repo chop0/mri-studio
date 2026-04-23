@@ -145,21 +145,21 @@ public final class TimelineOverviewBar extends ResizableCanvas {
 
     private void paintCompressedWaveforms(GraphicsContext g, AxisScrubBar.Bounds bounds, double domain) {
         int pixelCount = (int) Math.max(1, Math.min(bounds.width(), 900));
-        var config = session.activeConfig.get();
-        if (config == null || config.drivePaths().isEmpty()) return;
+        var circuit = session.activeCircuit();
+        if (circuit == null || circuit.voltageSources().isEmpty()) return;
 
-        // Build channel-slot list matching the config's lane order
+        // Build channel-slot list matching the circuit's voltage-source declaration order
         var slots = new ArrayList<SequenceChannel>();
         var maxes = new ArrayList<Double>();
         var colours = new ArrayList<Color>();
-        for (var field : config.drivePaths()) {
-            int count = field.kind().channelCount();
-            double fMax = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
-            if (fMax == 0) fMax = 1;
+        for (var src : circuit.voltageSources()) {
+            int count = src.channelCount();
+            double sMax = Math.max(Math.abs(src.minAmplitude()), Math.abs(src.maxAmplitude()));
+            if (sMax == 0) sMax = 1;
             for (int sub = 0; sub < count; sub++) {
-                slots.add(SequenceChannel.ofPath(field.name(), sub));
-                maxes.add(fMax);
-                colours.add(ChannelPalette.colourFor(field.kind(), field.name()));
+                slots.add(SequenceChannel.of(src.name(), sub));
+                maxes.add(sMax);
+                colours.add(ChannelPalette.colourFor(src.kind(), src.name()));
             }
         }
 

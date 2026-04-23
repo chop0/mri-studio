@@ -35,7 +35,7 @@ public final class SimConfigEditorProvider implements DocumentEditorProvider {
 	}
 
 	@Override public boolean isDirty() { return editorPane.isDirty(); }
-	@Override public void save() { editorPane.savePublic(); }
+	@Override public void save() { editorPane.save(); }
 	@Override public void dispose() {}
 
 	public SimulationConfigDocument configDoc() { return configDoc; }

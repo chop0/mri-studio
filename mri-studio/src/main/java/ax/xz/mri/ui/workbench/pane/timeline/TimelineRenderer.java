@@ -90,8 +90,8 @@ public final class TimelineRenderer {
             var track = tracks.get(i);
             double top = geom.trackTop(i);
             double h = geom.trackHeight(i);
-            var field = session.pathForChannel(track.outputChannel());
-            boolean orphan = field == null;
+            var src = session.sourceForChannel(track.outputChannel());
+            boolean orphan = src == null;
 
             // Row background — alternating, with a faint tint if orphan.
             g.setFill(i % 2 == 0 ? BG : BG_ALT);
@@ -101,7 +101,7 @@ public final class TimelineRenderer {
                 g.fillRect(pL, top, pW, h);
             }
 
-            paintLabel(g, geom, track, field, top, h);
+            paintLabel(g, geom, track, src, top, h);
 
             // Lane divider
             g.setStroke(LANE_BORDER);
@@ -154,11 +154,12 @@ public final class TimelineRenderer {
                 new double[]{btnY, btnY, btnY + COLLAPSE_BTN_SIZE}, 3);
         }
 
-        // Kind badge (I / Q / R)
+        // Kind badge (I / Q / R / G)
         String badge = null;
-        if (field instanceof ax.xz.mri.model.simulation.DrivePath fd) {
-            if (fd.kind() == AmplitudeKind.QUADRATURE) badge = track.outputChannel().subIndex() == 0 ? "I" : "Q";
-            else if (fd.kind() == AmplitudeKind.REAL) badge = "R";
+        if (field instanceof ax.xz.mri.model.circuit.CircuitComponent.VoltageSource src) {
+            if (src.kind() == AmplitudeKind.QUADRATURE) badge = track.outputChannel().subIndex() == 0 ? "I" : "Q";
+            else if (src.kind() == AmplitudeKind.REAL) badge = "R";
+            else if (src.kind() == AmplitudeKind.GATE) badge = "G";
         }
         if (badge != null) {
             double badgeX = labelW - 16;
@@ -444,11 +445,11 @@ public final class TimelineRenderer {
         return hw * 1.15;
     }
 
-    /** Hardware limit for a channel — the peak of the field amplitude range. */
+    /** Hardware limit for a channel — the peak of the voltage source's amplitude range. */
     public static double channelHardwareMax(SequenceEditSession session, SequenceChannel channel) {
-        var field = session.pathForChannel(channel);
-        if (field != null) {
-            double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+        var src = session.sourceForChannel(channel);
+        if (src != null) {
+            double m = Math.max(Math.abs(src.minAmplitude()), Math.abs(src.maxAmplitude()));
             if (m > 0) return m;
         }
         return 1.0;
@@ -456,7 +457,7 @@ public final class TimelineRenderer {
 
     /** Format an amplitude as a physical value with SI prefix, for axis labels. */
     public static String formatAxisValue(SequenceEditSession session, SequenceChannel channel, double amplitude) {
-        var ef = session.eigenpathForChannel(channel);
+        var ef = session.eigenfieldForChannel(channel);
         double physical = ef != null ? amplitude * ef.defaultMagnitude() : amplitude;
         String units = ef != null ? ef.units() : "";
         return formatWithUnits(physical, units);

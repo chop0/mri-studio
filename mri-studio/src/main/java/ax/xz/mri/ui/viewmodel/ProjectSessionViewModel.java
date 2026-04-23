@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
+import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.sequence.ClipBaker;
 import ax.xz.mri.model.sequence.SequenceStarter;
 import ax.xz.mri.model.sequence.SequenceStarterLibrary;
@@ -91,6 +92,15 @@ public final class ProjectSessionViewModel {
         }
         cleanupDeletedDirs(root.resolve("eigenfields"), currentEigenfieldSlugs);
 
+        var currentCircuitSlugs = new HashSet<String>();
+        for (var circuitId : repo.circuitIds()) {
+            var circuit = (CircuitDocument) repo.node(circuitId);
+            String cSlug = slug(circuit.name());
+            currentCircuitSlugs.add(cSlug);
+            serialiser.writeJson(root.resolve("circuits").resolve(cSlug).resolve("circuit.json"), circuit);
+        }
+        cleanupDeletedDirs(root.resolve("circuits"), currentCircuitSlugs);
+
         explorer.refresh();
     }
 
@@ -113,11 +123,21 @@ public final class ProjectSessionViewModel {
         var manifest = serialiser.readManifest(root.resolve("mri-project.toml"));
         var loadedRepository = new ProjectRepository(manifest);
 
-        var sequencesDir = root.resolve("sequences");
-        if (Files.isDirectory(sequencesDir)) {
-            try (var files = Files.walk(sequencesDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("sequence.json")).toList()) {
-                    loadedRepository.addSequence(serialiser.readJson(path, SequenceDocument.class));
+        var eigenfieldsDir = root.resolve("eigenfields");
+        if (Files.isDirectory(eigenfieldsDir)) {
+            try (var files = Files.walk(eigenfieldsDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("eigenfield.json")).toList()) {
+                    loadedRepository.addEigenfield(serialiser.readJson(path, EigenfieldDocument.class));
+                }
+            }
+        }
+
+        // Circuits must load before sim-configs so that config.circuitId resolves to a present node.
+        var circuitsDir = root.resolve("circuits");
+        if (Files.isDirectory(circuitsDir)) {
+            try (var files = Files.walk(circuitsDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("circuit.json")).toList()) {
+                    loadedRepository.addCircuit(serialiser.readJson(path, CircuitDocument.class));
                 }
             }
         }
@@ -131,11 +151,11 @@ public final class ProjectSessionViewModel {
             }
         }
 
-        var eigenfieldsDir = root.resolve("eigenfields");
-        if (Files.isDirectory(eigenfieldsDir)) {
-            try (var files = Files.walk(eigenfieldsDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("eigenfield.json")).toList()) {
-                    loadedRepository.addEigenfield(serialiser.readJson(path, EigenfieldDocument.class));
+        var sequencesDir = root.resolve("sequences");
+        if (Files.isDirectory(sequencesDir)) {
+            try (var files = Files.walk(sequencesDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("sequence.json")).toList()) {
+                    loadedRepository.addSequence(serialiser.readJson(path, SequenceDocument.class));
                 }
             }
         }
@@ -174,6 +194,19 @@ public final class ProjectSessionViewModel {
             case EigenfieldDocument eigen -> {
                 inspector.inspectedNodeId.set(nodeId);
                 if (onEigenfieldOpened != null) onEigenfieldOpened.accept(eigen);
+            }
+            case CircuitDocument ignored -> {
+                // Circuits don't open standalone — surface their owning sim-config's editor
+                // and let the user navigate to the Schematic tab.
+                inspector.inspectedNodeId.set(nodeId);
+                var owningConfig = repo.simConfigIds().stream()
+                    .map(id -> (SimulationConfigDocument) repo.node(id))
+                    .filter(java.util.Objects::nonNull)
+                    .filter(cfg -> cfg.config() != null && nodeId.equals(cfg.config().circuitId()))
+                    .findFirst().orElse(null);
+                if (owningConfig != null && onSimConfigOpened != null) {
+                    onSimConfigOpened.accept(owningConfig);
+                }
             }
             default -> {
                 workspace.activeNodeId.set(nodeId);
@@ -241,11 +274,8 @@ public final class ProjectSessionViewModel {
 
     public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, ObjectFactory.PhysicsParams params) {
         var repo = repository.get();
-        var transmitCoils = template.createTransmitCoils(repo);
-        var drivePaths = template.createDrivePaths(repo);
-        var receiveCoils = template.createReceiveCoils(repo);
-        var config = ObjectFactory.buildConfig(params, template.referenceB0Tesla(),
-            transmitCoils, drivePaths, receiveCoils);
+        var circuitId = template.createCircuit(repo, name + " circuit");
+        var config = ObjectFactory.buildConfig(params, template.referenceB0Tesla(), circuitId);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         repo.addSimConfig(doc);
@@ -271,9 +301,10 @@ public final class ProjectSessionViewModel {
         var repo = repository.get();
         var configDoc = (SimulationConfigDocument) repo.node(configId);
         var config = configDoc != null ? configDoc.config() : null;
+        CircuitDocument circuit = config != null ? repo.circuit(config.circuitId()) : null;
 
-        var clipSeq = starter.build(config);
-        var baked = ClipBaker.bake(clipSeq, config);
+        var clipSeq = starter.build(config, circuit);
+        var baked = ClipBaker.bake(clipSeq, circuit);
 
         var doc = new SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,

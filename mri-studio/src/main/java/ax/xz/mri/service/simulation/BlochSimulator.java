@@ -1,16 +1,16 @@
 package ax.xz.mri.service.simulation;
 
-import ax.xz.mri.model.field.DynamicFieldMap;
 import ax.xz.mri.model.field.FieldInterpolator;
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.field.FieldPoint;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
+import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
+import ax.xz.mri.service.circuit.CompiledCircuit;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,26 +20,16 @@ import java.util.function.Supplier;
 /**
  * Core Bloch equation simulator.
  *
- * <p>Integrates in the rotating frame at {@code ω_s = γ · b0Ref}. Each step
- * iterates over the dynamic fields in the {@link FieldMap} and accumulates
- * their per-point eigenfield-scaled contributions into the rotating-frame
- * B-vector, then applies Rodrigues' rotation plus relaxation. Static
- * contributions and Bloch–Siegert corrections from fast fields are baked
- * into {@link FieldPoint#staticBz()} at build time.
+ * <p>Integrates in the rotating frame at {@code ω_s = γ · b0Ref}. Each
+ * pulse step has its per-coil (I, Q) drives precomputed once when the pulse
+ * is compiled; {@link #applyStep} then just sums
+ * {@code Σ_c (I_c·E_c − jQ_c·E_c) + staticBz·ẑ} at the current grid point and
+ * applies Rodrigues' rotation plus T1/T2 decay.
  */
 public final class BlochSimulator {
     private static final int COMPILED_CACHE_SIZE = 24;
     private static final int POINT_CONTEXT_CACHE_SIZE = 4096;
-    /**
-     * Upper bound on the number of full trajectories we cache. Each cached
-     * trajectory is {@code (stepCount + 1) × 5 × 8} bytes — at 1 µs steps a
-     * 100 ms CPMG sequence is ~4 MB per trajectory, so keeping this small
-     * matters. Typical usage only needs one entry per visible isochromat
-     * anyway; cache misses fall back to full re-simulation, which is still
-     * cheap because the CompiledPulse kernels are cached independently.
-     */
     private static final int TRAJECTORY_CACHE_SIZE = 32;
-    /** Don't cache trajectories bigger than this — recomputing them is cheaper than holding them. */
     private static final int TRAJECTORY_CACHE_STEP_LIMIT = 200_000;
     private static final int CURSOR_CACHE_SIZE = 4096;
     private static final int CURSOR_CHECKPOINT_INTERVAL = 64;
@@ -51,9 +41,7 @@ public final class BlochSimulator {
     private final Map<SimulationKey, Trajectory> trajectoryCache;
     private final Map<SimulationKey, CursorStateCache> cursorCache;
 
-    public BlochSimulator() {
-        this(false);
-    }
+    public BlochSimulator() { this(false); }
 
     private BlochSimulator(boolean ignored) {
         compiledCache = synchronizedLruCache(COMPILED_CACHE_SIZE);
@@ -70,7 +58,7 @@ public final class BlochSimulator {
         return DEFAULT.simulateToCached(data, rMm, zMm, pulse, tcMicros);
     }
 
-    static void clearCachesForTests() {
+    public static void clearCachesForTests() {
         DEFAULT.compiledCache.clear();
         DEFAULT.pointContextCache.clear();
         DEFAULT.trajectoryCache.clear();
@@ -85,7 +73,6 @@ public final class BlochSimulator {
 
         var context = pointContextFor(data.field(), pulse, rMm, zMm, key);
         var computed = simulateFull(context);
-        // Skip caching very long trajectories to prevent heap blow-up on long CPMG trains.
         if (computed != null && computed.pointCount() <= TRAJECTORY_CACHE_STEP_LIMIT) {
             cachePut(trajectoryCache, key, computed);
         }
@@ -124,26 +111,88 @@ public final class BlochSimulator {
         for (int segmentIndex = 0; segmentIndex < field.segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
             stepCount += pulse.get(segmentIndex).steps().size();
         }
-
         var kernels = new StepKernel[stepCount];
         var stateTimesMicros = new double[stepCount + 1];
         double timeMicros = 0;
         double timeSeconds = 0;
         int kernelIndex = 0;
         stateTimesMicros[0] = 0;
+
+        var compiled = field.circuit;
+        int nCoils = compiled == null ? 0 : compiled.coils().size();
+        double[][] coilI = new double[stepCount][nCoils];
+        double[][] coilQ = new double[stepCount][nCoils];
+        double omegaSim = field.gamma * field.b0Ref;
+
         for (int segmentIndex = 0; segmentIndex < field.segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
             var segment = field.segments.get(segmentIndex);
             double dt = segment.dt();
             double e2 = Math.exp(-dt / field.t2);
             double e1 = Math.exp(-dt / field.t1);
             for (var step : pulse.get(segmentIndex).steps()) {
+                if (compiled != null) {
+                    computeCoilDrives(compiled, step.controls(), timeSeconds, omegaSim,
+                        coilI[kernelIndex], coilQ[kernelIndex]);
+                }
                 kernels[kernelIndex] = new StepKernel(step, dt, e1, e2, timeSeconds);
                 timeMicros += dt * 1e6;
                 timeSeconds += dt;
                 stateTimesMicros[++kernelIndex] = timeMicros;
             }
         }
-        return new CompiledPulse(field, kernels, stateTimesMicros);
+        return new CompiledPulse(field, kernels, stateTimesMicros, coilI, coilQ);
+    }
+
+    /** Compute per-coil (I, Q) drive for this step (no allocations in the hot loop). */
+    private static void computeCoilDrives(CompiledCircuit compiled, double[] controls, double tSeconds,
+                                          double omegaSim, double[] outI, double[] outQ) {
+        java.util.Arrays.fill(outI, 0);
+        java.util.Arrays.fill(outQ, 0);
+        // Resolve switch states.
+        int nSwitches = compiled.switches().size();
+        boolean[] closed = new boolean[nSwitches];
+        for (int i = 0; i < nSwitches; i++) {
+            var sw = compiled.switches().get(i);
+            if (sw.ctlSourceIndex() < 0) { closed[i] = false; continue; }
+            var ctl = compiled.sources().get(sw.ctlSourceIndex());
+            double v = switch (ctl.kind()) {
+                case STATIC -> ctl.staticAmplitude();
+                case REAL, GATE -> controls[ctl.channelOffset()];
+                case QUADRATURE -> Math.hypot(controls[ctl.channelOffset()], controls[ctl.channelOffset() + 1]);
+            };
+            closed[i] = v >= sw.thresholdVolts();
+        }
+        for (var link : compiled.drives()) {
+            if (!allClosed(link.switchIndices(), closed)) continue;
+            var src = compiled.sources().get(link.endpointIndex());
+            double sign = link.forwardPolarity() ? 1.0 : -1.0;
+            if (src.kind() == AmplitudeKind.QUADRATURE) {
+                double i = controls[src.channelOffset()];
+                double q = controls[src.channelOffset() + 1];
+                double deltaOmega = 2 * Math.PI * src.carrierHz() - omegaSim;
+                if (Math.abs(deltaOmega) > 1e-9) {
+                    double phase = deltaOmega * tSeconds;
+                    double c = Math.cos(phase), s = Math.sin(phase);
+                    double ir = i * c - q * s;
+                    double qr = i * s + q * c;
+                    i = ir;
+                    q = qr;
+                }
+                outI[link.coilIndex()] += sign * i;
+                outQ[link.coilIndex()] += sign * q;
+            } else if (src.kind() == AmplitudeKind.REAL) {
+                outI[link.coilIndex()] += sign * controls[src.channelOffset()];
+            }
+            // STATIC sources are folded into FieldMap.staticBz at bake time
+            // (BlochDataFactory.applyStaticContributions) — the per-step path
+            // must not apply them again, or the spin sees double the intended
+            // Bz and the rotating frame no longer aligns with Larmor.
+        }
+    }
+
+    private static boolean allClosed(List<Integer> indices, boolean[] closed) {
+        for (int i : indices) if (!closed[i]) return false;
+        return true;
     }
 
     private static Trajectory simulateFull(PointContext context) {
@@ -165,7 +214,7 @@ public final class BlochSimulator {
             out[oi++] = round5(mz);
             out[oi++] = compiled.kernels()[stepIndex].rfOn() ? 1 : 0;
 
-            var next = applyStep(compiled.kernels()[stepIndex], point, field, mx, my, mz);
+            var next = applyStep(compiled, stepIndex, point, field, mx, my, mz);
             mx = next.mx();
             my = next.my();
             mz = next.mz();
@@ -179,50 +228,20 @@ public final class BlochSimulator {
         return new Trajectory(out);
     }
 
-    /**
-     * Build the rotating-frame B-vector at this step+point by iterating over
-     * dynamic fields, then apply Rodrigues' rotation + relaxation.
-     */
-    private static MagnetisationState applyStep(StepKernel kernel, FieldPoint point, FieldMap field,
+    private static MagnetisationState applyStep(CompiledPulse compiled, int stepIndex, FieldPoint point, FieldMap field,
                                                 double mx, double my, double mz) {
-        double bx = 0, by = 0;
-        double bz = point.staticBz();
-
-        var controls = kernel.step().controls();
-        var dynamics = field.dynamicFields;
-        if (dynamics != null) {
-            int n = dynamics.size();
-            for (int i = 0; i < n; i++) {
-                var df = dynamics.get(i);
-                double ex = point.ex()[i];
-                double ey = point.ey()[i];
-                double ez = point.ez()[i];
-                if (df.channelCount == 1) {
-                    double amp = controls[df.channelOffset];
-                    bx += amp * ex;
-                    by += amp * ey;
-                    bz += amp * ez;
-                } else {
-                    double ampI = controls[df.channelOffset];
-                    double ampQ = controls[df.channelOffset + 1];
-                    // If Δω is non-zero, rotate the (I, Q) pair by Δω·t before applying.
-                    if (Math.abs(df.deltaOmega) > 1e-9) {
-                        double phase = df.deltaOmega * kernel.timeSeconds();
-                        double c = Math.cos(phase);
-                        double s = Math.sin(phase);
-                        double iRot = ampI * c - ampQ * s;
-                        double qRot = ampI * s + ampQ * c;
-                        ampI = iRot;
-                        ampQ = qRot;
-                    }
-                    // Quadrature mixing: B⊥ = I·Ẽ − j·Q·Ẽ where Ẽ = Ex + j·Ey.
-                    bx += ampI * ex - ampQ * ey;
-                    by += ampI * ey + ampQ * ex;
-                    bz += ampI * ez;
-                }
-            }
+        var kernel = compiled.kernels()[stepIndex];
+        double bx = 0, by = 0, bz = point.staticBz();
+        int nCoils = compiled.coilDriveI()[0].length;
+        double[] iRow = compiled.coilDriveI()[stepIndex];
+        double[] qRow = compiled.coilDriveQ()[stepIndex];
+        for (int c = 0; c < nCoils; c++) {
+            double I = iRow[c], Q = qRow[c];
+            double ex = point.coilEx()[c], ey = point.coilEy()[c], ez = point.coilEz()[c];
+            bx += I * ex - Q * ey;
+            by += I * ey + Q * ex;
+            bz += I * ez;
         }
-
         double bPerp2 = bx * bx + by * by;
         if (!kernel.rfOn() && bPerp2 < 1e-30) {
             double om = field.gamma * bz;
@@ -233,7 +252,6 @@ public final class BlochSimulator {
             double nmy = (mx * s + my * c) * kernel.e2();
             return new MagnetisationState(nmx, nmy, 1 + (mz - 1) * kernel.e1());
         }
-
         return rodrigues(bx, by, bz, field.gamma, kernel.dt(), mx, my, mz, kernel.e2(), kernel.e1());
     }
 
@@ -285,27 +303,19 @@ public final class BlochSimulator {
         }
     }
 
-    private static <K, V> V cacheGetOrCreate(Map<K, V> cache, K key, Supplier<V> factory) {
+    private static <K, V> V cacheGetOrCreate(Map<K, V> cache, K key, Supplier<V> supplier) {
         synchronized (cache) {
-            var existing = cache.get(key);
-            if (existing != null) return existing;
-        }
-        var created = factory.get();
-        synchronized (cache) {
-            var existing = cache.get(key);
-            if (existing != null) return existing;
-            cache.put(key, created);
-            return created;
+            var value = cache.get(key);
+            if (value == null) {
+                value = supplier.get();
+                cache.put(key, value);
+            }
+            return value;
         }
     }
 
-    private static double round1(double v) {
-        return Math.round(v * 10) / 10.0;
-    }
-
-    private static double round5(double v) {
-        return Math.round(v * 1e5) / 1e5;
-    }
+    private static double round1(double v) { return Math.round(v * 10) / 10.0; }
+    private static double round5(double v) { return Math.round(v * 1e5) / 1e5; }
 
     private record PulseKey(FieldMap field, List<PulseSegment> pulse) {
         @Override
@@ -319,16 +329,14 @@ public final class BlochSimulator {
         }
     }
 
-    private record SimulationKey(PulseKey pulseKey, long rBits, long zBits) {
-    }
+    private record SimulationKey(PulseKey pulseKey, long rBits, long zBits) {}
 
     private record StepKernel(PulseStep step, double dt, double e1, double e2, double timeSeconds) {
-        boolean rfOn() {
-            return step.isRfOn();
-        }
+        boolean rfOn() { return step.isRfOn(); }
     }
 
-    private record CompiledPulse(FieldMap field, StepKernel[] kernels, double[] stateTimesMicros) {
+    private record CompiledPulse(FieldMap field, StepKernel[] kernels, double[] stateTimesMicros,
+                                 double[][] coilDriveI, double[][] coilDriveQ) {
         int targetStateIndex(double tcMicros) {
             if (tcMicros <= 0) return 0;
             int low = 0;
@@ -346,8 +354,7 @@ public final class BlochSimulator {
         }
     }
 
-    private record PointContext(CompiledPulse compiledPulse, FieldPoint fieldPoint) {
-    }
+    private record PointContext(CompiledPulse compiledPulse, FieldPoint fieldPoint) {}
 
     private static final class CursorStateCache {
         private final double initialMx;
@@ -384,7 +391,7 @@ public final class BlochSimulator {
             }
 
             while (stateIndex < targetIndex) {
-                var next = applyStep(compiled.kernels()[stateIndex], point, compiled.field(), mx, my, mz);
+                var next = applyStep(compiled, stateIndex, point, compiled.field(), mx, my, mz);
                 mx = next.mx();
                 my = next.my();
                 mz = next.mz();

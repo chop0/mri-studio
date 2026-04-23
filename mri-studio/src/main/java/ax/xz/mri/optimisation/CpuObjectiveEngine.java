@@ -2,10 +2,7 @@ package ax.xz.mri.optimisation;
 
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.sequence.PulseSegment;
-import ax.xz.mri.optimisation.ProblemGeometry.DynamicFieldSamples;
-import ax.xz.mri.optimisation.ProblemGeometry.ReceiveCoilSamples;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /** Pure Java CPU objective engine. */
@@ -39,22 +36,16 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
         return gradient;
     }
 
-    @Override
-    protected ObjectiveEvaluation evaluateInternal(
-        OptimisationProblem problem,
-        List<PulseSegment> segments,
-        boolean captureSignal
-    ) {
-        return super.evaluateInternal(problem, segments, captureSignal);
-    }
-
     /**
      * Build a {@link ProblemGeometry} from a runtime {@link FieldMap},
-     * flattening the 2D {@code [r][z]} spatial arrays to one point per
-     * {@code (ri, zi)} sample. Per-dynamic-field and primary-receive-coil
-     * eigenfield samples are flattened in the same order.
+     * flattening the {@code [r][z]} spatial arrays to one point per
+     * {@code (ri, zi)} sample. Per-coil eigenfield samples are flattened
+     * alongside in the same order as the field map's compiled coils.
      */
     public static ProblemGeometry geometryFromFieldMap(FieldMap field, int radialStride, int axialStride) {
+        if (field.circuit == null) {
+            throw new IllegalStateException("FieldMap has no compiled circuit; cannot build ProblemGeometry");
+        }
         int rs = Math.max(1, radialStride);
         int zs = Math.max(1, axialStride);
         int nr = (field.rMm.length + rs - 1) / rs;
@@ -66,21 +57,12 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
         double[] mz0 = new double[count];
         double[] staticBz = new double[count];
         double[] wOut = new double[count];
-
-        int dynamicCount = field.dynamicFields == null ? 0 : field.dynamicFields.size();
-        double[][] exFlat = new double[dynamicCount][count];
-        double[][] eyFlat = new double[dynamicCount][count];
-        double[][] ezFlat = new double[dynamicCount][count];
-
-        if (field.receiveCoils == null || field.receiveCoils.isEmpty()) {
-            throw new IllegalStateException(
-                "FieldMap has no receive coils — cannot build ProblemGeometry. Configure at least one ReceiveCoil on the SimulationConfig.");
-        }
-        var primaryRx = field.receiveCoils.getFirst();
-        double[] rxExFlat = new double[count];
-        double[] rxEyFlat = new double[count];
-
+        int nCoils = field.circuit.coils().size();
+        double[][] exFlat = new double[nCoils][count];
+        double[][] eyFlat = new double[nCoils][count];
+        double[][] ezFlat = new double[nCoils][count];
         double sliceHalf = field.sliceHalf == null ? 0.005 : field.sliceHalf;
+
         int offset = 0;
         for (int ri = 0; ri < field.rMm.length; ri += rs) {
             for (int zi = 0; zi < field.zMm.length; zi += zs) {
@@ -88,14 +70,12 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
                 my0[offset] = field.my0 == null ? 0.0 : field.my0[ri][zi];
                 mz0[offset] = field.mz0 == null ? 1.0 : field.mz0[ri][zi];
                 staticBz[offset] = field.staticBz == null ? 0.0 : field.staticBz[ri][zi];
-                for (int d = 0; d < dynamicCount; d++) {
-                    var df = field.dynamicFields.get(d);
-                    exFlat[d][offset] = df.ex[ri][zi];
-                    eyFlat[d][offset] = df.ey[ri][zi];
-                    ezFlat[d][offset] = df.ez[ri][zi];
+                for (int c = 0; c < nCoils; c++) {
+                    var coil = field.circuit.coils().get(c);
+                    exFlat[c][offset] = coil.ex()[ri][zi];
+                    eyFlat[c][offset] = coil.ey()[ri][zi];
+                    ezFlat[c][offset] = coil.ez()[ri][zi];
                 }
-                rxExFlat[offset] = primaryRx.ex[ri][zi];
-                rxEyFlat[offset] = primaryRx.ey[ri][zi];
                 offset++;
             }
         }
@@ -112,26 +92,13 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
         }
         if (outSum > 1e-9) {
             double countOut = 0.0;
-            for (double value : wOut) if (value > 0.0) countOut++;
+            for (double v : wOut) if (v > 0.0) countOut++;
             double mean = outSum / Math.max(countOut, 1.0);
-            for (int index = 0; index < wOut.length; index++) {
-                if (wOut[index] > 0.0) wOut[index] /= mean;
-            }
+            for (int i = 0; i < wOut.length; i++) if (wOut[i] > 0.0) wOut[i] /= mean;
         }
 
-        var dynamics = new ArrayList<DynamicFieldSamples>(dynamicCount);
-        for (int d = 0; d < dynamicCount; d++) {
-            var df = field.dynamicFields.get(d);
-            dynamics.add(new DynamicFieldSamples(
-                df.name, df.channelOffset, df.channelCount, df.deltaOmega,
-                exFlat[d], eyFlat[d], ezFlat[d]));
-        }
-        var primarySamples = new ReceiveCoilSamples(
-            primaryRx.name, primaryRx.gain, primaryRx.phaseDeg, rxExFlat, rxEyFlat);
-
-        return new ProblemGeometry(
-            mx0, my0, mz0, staticBz, wOut,
-            List.copyOf(dynamics), primarySamples,
+        return new ProblemGeometry(mx0, my0, mz0, staticBz, wOut,
+            exFlat, eyFlat, ezFlat, field.circuit,
             field.gamma, field.t1, field.t2, nr, nz);
     }
 }

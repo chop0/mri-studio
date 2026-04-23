@@ -1,11 +1,12 @@
 package ax.xz.mri.service.simulation;
 
+import ax.xz.mri.model.circuit.CircuitComponent;
+import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.BlochDataFactory;
-import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -24,18 +25,15 @@ import static org.junit.jupiter.api.Assertions.*;
  * End-to-end integration tests for a CPMG (Carr–Purcell–Meiboom–Gill) T2
  * measurement built on the low-field MRI template.
  *
- * <p>This is a regression guard for the field-model rewrite. A previously
- * reported bug ("y-flip pulses don't do anything") is caught by
+ * <p>Regression guard for the circuit-level rewrite. A previously reported bug
+ * ("y-flip pulses don't do anything") is caught by
  * {@link #ninetyXPulseMovesMagnetisationIntoTransversePlane}; that test failed
- * because the sim-config template was emitting fields in an order that made
- * {@code PulseStep.controls[0..1]} map to gradients, not RF, so the RF
- * amplitudes landed on the wrong channels.
+ * because the circuit's voltage-source order made {@code PulseStep.controls[0..1]}
+ * map to gradients, not RF.
  *
  * <p>Simulator sign convention: {@code dM/dt = −γ M × B} (effective, after
  * frame choice). A 90°x pulse on thermal equilibrium produces {@code (0, −1, 0)}.
- * A 180°y pulse reflects {@code (Mx, My, Mz) → (−Mx, My, −Mz)}. Tests assert
- * either signed values (where the convention matters) or transverse magnitude
- * only (where it doesn't).
+ * A 180°y pulse reflects {@code (Mx, My, Mz) → (−Mx, My, −Mz)}.
  */
 class CpmgIntegrationTest {
 
@@ -45,7 +43,7 @@ class CpmgIntegrationTest {
     private static final double TAU_S = 1e-3;       // 1 ms pulse-to-pulse half-spacing
 
     private static int steps90() {
-        double rabiRate = GAMMA * B1_MAX;  // ~53 504 rad/s
+        double rabiRate = GAMMA * B1_MAX;
         return (int) Math.round((Math.PI / 2) / (rabiRate * DT));
     }
 
@@ -61,7 +59,7 @@ class CpmgIntegrationTest {
         var segments = new ArrayList<Segment>();
         var pulse = new ArrayList<PulseSegment>();
 
-        // Channel layout after the M2/M3 rewrite: [rf_I, rf_Q, gx, gz, rx_gate].
+        // Channel layout from the low-field template: [rf_I, rf_Q, gx, gz, rx_gate].
         segments.add(new Segment(DT, 0, n90));
         pulse.add(filled(n90, new double[]{B1_MAX, 0, 0, 0, 0}, 1.0));
 
@@ -97,57 +95,59 @@ class CpmgIntegrationTest {
     }
 
     /**
-     * Build a modified low-field config whose B0 eigenfield carries a deliberate
-     * linear z-gradient on top of unity, so an isochromat at a known offset
-     * experiences predictable off-resonance (no Helmholtz curvature guesswork).
+     * Swap the B0 coil's eigenfield for one with a deliberate linear z-ramp on
+     * top of unity, so an isochromat at a known offset experiences predictable
+     * off-resonance.
      */
-    private static SimulationConfig configWithZAxisOffResonance(
-            ProjectRepository repo, SimulationConfig base, String name, double dBzPerMetre) {
-        // Find the B0 path + its transmit coil; swap the coil's eigenfield for
-        // one with a linear z-ramp.
-        var b0Path = base.drivePaths().stream().filter(f -> f.kind() == AmplitudeKind.STATIC).findFirst().orElseThrow();
-        var b0Amplitude = b0Path.maxAmplitude();
+    private static void installZAxisOffResonance(
+            ProjectRepository repo, SimulationConfig config, String suffix, double dBzPerMetre) {
+        var circuit = repo.circuit(config.circuitId());
+        var b0Source = circuit.voltageSources().stream()
+            .filter(s -> s.kind() == AmplitudeKind.STATIC)
+            .findFirst().orElseThrow();
+        double b0Amplitude = b0Source.maxAmplitude();
         double normalisedSlope = dBzPerMetre / b0Amplitude;
         String script = String.format("return Vec3.of(0, 0, 1 + %s * z);", normalisedSlope);
         var eigen = new EigenfieldDocument(
-            new ProjectNodeId("ef-test-" + name), name, "test off-resonance", script, "T", 1.0);
+            new ProjectNodeId("ef-test-" + suffix), "B0 linear " + suffix, "test off-resonance",
+            script, "T", 1.0);
         repo.addEigenfield(eigen);
 
-        var newCoils = new ArrayList<ax.xz.mri.model.simulation.TransmitCoil>(base.transmitCoils());
-        int coilIdx = -1;
-        for (int i = 0; i < newCoils.size(); i++) {
-            if (newCoils.get(i).name().equals(b0Path.transmitCoilName())) { coilIdx = i; break; }
-        }
-        if (coilIdx < 0) throw new IllegalStateException("B0 path references unknown coil");
-        newCoils.set(coilIdx, newCoils.get(coilIdx).withEigenfieldId(eigen.id()));
-        return base.withTransmitCoils(newCoils);
+        // Find the B0 coil (first coil wired to a STATIC source in the low-field template: coil-b0)
+        var b0Coil = circuit.coils().stream()
+            .filter(c -> c.name().equals("B0 Coil"))
+            .findFirst().orElseThrow();
+        var updated = circuit.replaceComponent(b0Coil.withEigenfieldId(eigen.id()));
+        repo.updateCircuit(updated);
     }
 
     @Test
-    void fullDrivePathAssertionsForLowFieldTemplate() {
+    void lowFieldTemplateExposesCanonicalChannelLayout() {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-check",
             SimConfigTemplate.LOW_FIELD_MRI,
             ObjectFactory.PhysicsParams.DEFAULTS);
         var config = doc.config();
+        var repo = session.repository.get();
+        CircuitDocument circuit = repo.circuit(config.circuitId());
 
-        DrivePath b0 = config.drivePaths().stream().filter(f -> f.name().equals("B0")).findFirst().orElseThrow();
-        DrivePath rf = config.drivePaths().stream().filter(f -> f.name().equals("RF")).findFirst().orElseThrow();
-        DrivePath gx = config.drivePaths().stream().filter(f -> f.name().equals("Gradient X")).findFirst().orElseThrow();
-        DrivePath gz = config.drivePaths().stream().filter(f -> f.name().equals("Gradient Z")).findFirst().orElseThrow();
+        var b0 = circuit.voltageSources().stream().filter(s -> s.name().equals("B0")).findFirst().orElseThrow();
+        var rf = circuit.voltageSources().stream().filter(s -> s.name().equals("RF")).findFirst().orElseThrow();
+        var gx = circuit.voltageSources().stream().filter(s -> s.name().equals("Gradient X")).findFirst().orElseThrow();
+        var gz = circuit.voltageSources().stream().filter(s -> s.name().equals("Gradient Z")).findFirst().orElseThrow();
 
         assertEquals(AmplitudeKind.STATIC, b0.kind());
         assertEquals(AmplitudeKind.QUADRATURE, rf.kind());
         assertEquals(AmplitudeKind.REAL, gx.kind());
         assertEquals(AmplitudeKind.REAL, gz.kind());
 
-        // Channel layout: [rf_I, rf_Q, gx, gz, rx_gate].
-        var dynamicPaths = config.drivePaths().stream()
-            .filter(f -> f.kind() != AmplitudeKind.STATIC).toList();
-        assertEquals("RF", dynamicPaths.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
-        assertEquals("Gradient X", dynamicPaths.get(1).name());
-        assertEquals("Gradient Z", dynamicPaths.get(2).name());
-        assertEquals("RX Gate", dynamicPaths.get(3).name());
+        // Channel layout: STATIC B0 contributes 0 channels; dynamic order is [RF_I, RF_Q, Gx, Gz, RX Gate].
+        var dynamic = circuit.voltageSources().stream()
+            .filter(s -> s.kind() != AmplitudeKind.STATIC).toList();
+        assertEquals("RF", dynamic.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
+        assertEquals("Gradient X", dynamic.get(1).name());
+        assertEquals("Gradient Z", dynamic.get(2).name());
+        assertEquals("RX Gate", dynamic.get(3).name());
 
         double expectedLarmor = GAMMA * 0.0154 / (2 * Math.PI);
         assertEquals(expectedLarmor, rf.carrierHz(), 1.0);
@@ -183,7 +183,7 @@ class CpmgIntegrationTest {
             "Got |M⊥| = " + mPerp + " (Mx=" + mx + ", My=" + my + "). " +
             "If |M⊥| ≈ 0 the RF is landing on the wrong channel.");
 
-        // Sign convention sanity check: simulator integrates dM/dt = −γ M × B.
+        // Sign convention: simulator integrates dM/dt = −γ M × B.
         // 90°x on thermal equilibrium → (0, −1, 0).
         assertEquals(-1.0, my, 0.05, "With the simulator's sign convention, My should be ~−1 after 90°x");
     }
@@ -197,32 +197,25 @@ class CpmgIntegrationTest {
             ObjectFactory.PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
-
-        // Install a linear-z off-resonance so the spin dephases a predictable amount
-        // during τ. dBz/dz = 50 µT/m · 10 mm · γ · 1 ms ≈ 0.13 rad. Small but finite.
-        var configOff = configWithZAxisOffResonance(repo, config, "y-flip-off", 50e-6);
+        installZAxisOffResonance(repo, config, "y-flip", 50e-6);
 
         var train = buildCpmg(1);
-        var data = BlochDataFactory.build(configOff, train.segments(), repo);
+        var data = BlochDataFactory.build(config, train.segments(), repo);
 
         // 10 mm off isocentre → ~134 µrad/µs off-resonance → 0.13 rad in 1 ms.
         var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
         assertNotNull(trajectory);
 
         int[] b = segmentStepBoundaries(train.segments());
-        // b[1]=after 90°x, b[2]=after τ, b[3]=after 180°y, b[4]=after 2τ.
         double mxBefore = trajectory.mxAt(b[2]);
         double myBefore = trajectory.myAt(b[2]);
         double mxAfter = trajectory.mxAt(b[3]);
         double myAfter = trajectory.myAt(b[3]);
 
-        // Precondition: dephasing must be large enough that Mx ≠ 0, otherwise the test
-        // trivially passes as "0 flipped to 0" and proves nothing.
         assertTrue(Math.abs(mxBefore) > 0.05,
             "Off-resonance produced negligible dephasing (Mx=" + mxBefore + "). " +
             "Check that the eigenfield's gradient is actually being applied.");
 
-        // 180°y: (Mx, My, Mz) → (−Mx, My, −Mz). Mx flips, My is preserved.
         assertEquals(-mxBefore, mxAfter, 0.05,
             "180°y should flip Mx. Before=" + mxBefore + ", after=" + mxAfter);
         assertEquals(myBefore, myAfter, 0.05,
@@ -231,11 +224,6 @@ class CpmgIntegrationTest {
 
     @Test
     void cpmgEchoRefocusesDephasedEnsemble() {
-        // The CPMG echo is an ensemble phenomenon. A single spin's |M⊥| stays ≈ 1
-        // throughout (negligible T2 decay here). What refocuses is the COHERENT
-        // SUM of many spins with different off-resonance offsets: they dephase
-        // during τ, the 180°y pulse conjugates their phase, and they rephase at
-        // t = 2τ into a peak of the coherent magnitude.
         BlochSimulator.clearCachesForTests();
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-echo",
@@ -243,15 +231,10 @@ class CpmgIntegrationTest {
             ObjectFactory.PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
-
-        // Linear-z off-resonance strong enough that spins dephase substantially
-        // within τ. dBz/dz = 2 mT/m · ±10 mm · γ · 1 ms ≈ ±5.35 rad of spread —
-        // an ensemble that ranges across this collapses to near-zero coherent
-        // magnitude during free precession.
-        var configOff = configWithZAxisOffResonance(repo, config, "echo-off", 2e-3);
+        installZAxisOffResonance(repo, config, "echo", 2e-3);
 
         var train = buildCpmg(1);
-        var data = BlochDataFactory.build(configOff, train.segments(), repo);
+        var data = BlochDataFactory.build(config, train.segments(), repo);
 
         double[] zSamples = {-10, -5, 0, 5, 10};
         var trajectories = new ArrayList<ax.xz.mri.model.simulation.Trajectory>();
@@ -262,13 +245,10 @@ class CpmgIntegrationTest {
         }
 
         int[] b = segmentStepBoundaries(train.segments());
-        int stepCount = trajectories.get(0).pointCount();
 
-        // Coherent sum |ΣM⊥| / N at each timestep.
         double ensembleAfterExcite = coherentMperp(trajectories, b[1]);
         double ensembleAfterFree = coherentMperp(trajectories, b[2]);
 
-        // Search the full 2τ window after the 180° for the ensemble peak.
         double peakEnsemble = 0;
         double peakTimeUs = 0;
         for (int i = b[3]; i < b[4]; i++) {
@@ -282,15 +262,13 @@ class CpmgIntegrationTest {
         assertEquals(1.0, ensembleAfterExcite, 0.02,
             "Right after excitation, all spins are in phase — coherent |M⊥| ≈ 1");
         assertTrue(ensembleAfterFree < 0.4,
-            "After τ of free precession with a ±5 rad phase spread the ensemble " +
-            "should dephase to near-zero coherent |M⊥|. Got " + ensembleAfterFree);
+            "After τ of free precession the ensemble should dephase to near-zero. Got " + ensembleAfterFree);
         assertTrue(peakEnsemble > 0.95,
             "Ensemble echo peak should be close to 1 after refocusing. Got " + peakEnsemble);
         assertTrue(peakEnsemble > ensembleAfterFree + 0.1,
             "Echo peak should be clearly larger than the dephased signal. " +
             "Peak=" + peakEnsemble + ", pre-180 dephased=" + ensembleAfterFree);
 
-        // The peak must be strictly inside the 2τ window.
         double winStart = trajectories.get(0).tAt(b[3]);
         double winEnd = trajectories.get(0).tAt(b[4] - 1);
         double margin = (winEnd - winStart) * 0.1;
@@ -316,23 +294,23 @@ class CpmgIntegrationTest {
             ObjectFactory.PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
-        var configOff = configWithZAxisOffResonance(repo, config, "multi-off", 200e-6);
+        installZAxisOffResonance(repo, config, "multi", 200e-6);
 
         int nEchoes = 4;
         var train = buildCpmg(nEchoes);
-        var data = BlochDataFactory.build(configOff, train.segments(), repo);
+        var data = BlochDataFactory.build(config, train.segments(), repo);
         var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
         assertNotNull(trajectory);
 
         int[] b = segmentStepBoundaries(train.segments());
         double pulse90CentreUs = b[1] * 0.5;
-        double echoTimes[] = new double[nEchoes];
+        double[] echoTimes = new double[nEchoes];
         for (int e = 0; e < nEchoes; e++) {
             int refocusSegment = 2 + 2 * e;
             double pulse180CentreUs = (b[refocusSegment] + 0.5 * (b[refocusSegment + 1] - b[refocusSegment])) * 1.0;
             double tauUs = pulse180CentreUs - pulse90CentreUs;
             echoTimes[e] = pulse180CentreUs + tauUs;
-            pulse90CentreUs = pulse180CentreUs;  // next echo refocuses about the previous 180°
+            pulse90CentreUs = pulse180CentreUs;
         }
 
         for (int e = 0; e < nEchoes; e++) {
@@ -350,9 +328,6 @@ class CpmgIntegrationTest {
 
     @Test
     void longCpmgDoesNotCrashOrConsumeUnboundedMemory() {
-        // Regression: the old path would blow up heap for long sequences. This test
-        // runs a CPMG with ~80 000 steps and a handful of points; it should complete
-        // without OOM at the default test heap.
         BlochSimulator.clearCachesForTests();
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-long",
@@ -361,7 +336,7 @@ class CpmgIntegrationTest {
         var config = doc.config();
         var repo = session.repository.get();
 
-        int nEchoes = 40;  // 40 × 2 ms = 80 ms total → ~80 000 steps per point
+        int nEchoes = 40;
         var train = buildCpmg(nEchoes);
         var data = BlochDataFactory.build(config, train.segments(), repo);
 

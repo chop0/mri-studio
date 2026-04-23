@@ -3,7 +3,9 @@ package ax.xz.mri.optimisation;
 import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
+import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.SignalTrace;
+import ax.xz.mri.service.circuit.CircuitStepEvaluator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,11 +24,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return evaluateInternal(problem, segments, true).signalTrace();
     }
 
-    protected ObjectiveEvaluation evaluateInternal(
-        OptimisationProblem problem,
-        List<PulseSegment> segments,
-        boolean captureSignal
-    ) {
+    protected ObjectiveEvaluation evaluateInternal(OptimisationProblem problem, List<PulseSegment> segments, boolean captureSignal) {
         validateSegments(problem.sequenceTemplate(), segments);
         return switch (problem.objectiveSpec().mode()) {
             case FULL_TRAIN -> evaluateFullTrain(problem, segments, captureSignal);
@@ -37,14 +35,19 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
     private ObjectiveEvaluation evaluateFullTrain(OptimisationProblem problem, List<PulseSegment> segments, boolean captureSignal) {
         var geometry = problem.geometry();
         var objective = problem.objectiveSpec();
+        var circuit = geometry.circuit();
+        int primaryIdx = geometry.primaryProbeIndex();
         var mx = geometry.mx0().clone();
         var my = geometry.my0().clone();
         var mz = geometry.mz0().clone();
-        var timeMicros = 0.0;
+        var evaluator = new CircuitStepEvaluator(circuit);
+        double omegaSim = geometry.gamma() * 0; // reference B0 is baked into staticBz; omegaSim not reconstructable here, caller may pass 0
+        double timeMicros = 0.0;
         double tSeconds = 0.0;
+
         var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
         if (captureSignal) {
-            var initial = coherentSignal(geometry.primaryReceiveCoil(), mx, my);
+            var initial = probeSignal(geometry, primaryIdx, mx, my, evaluator);
             signalPoints.add(new SignalTrace.Point(0.0, initial[0], initial[1]));
         }
 
@@ -56,22 +59,22 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double gateSwitch = 0.0;
         double gateBinary = 0.0;
         double totalDt = 0.0;
-
-        int quadratureChannels = countQuadratureChannels(geometry);
+        int quadChannels = countQuadratureChannels(circuit);
 
         for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
             var segment = segments.get(segmentIndex);
             var spec = problem.sequenceTemplate().segments().get(segmentIndex);
-            double[][] previousQuad = new double[2][quadratureChannels];
-            double previousGate = 0.0;
+            double[][] prevQuad = new double[2][quadChannels];
+            double prevGate = 0.0;
             boolean haveGate = false;
             for (int stepIndex = 0; stepIndex < spec.totalSteps(); stepIndex++) {
                 var step = segment.steps().get(stepIndex);
                 double dt = spec.dt();
                 totalDt += dt;
-                applyStep(geometry, step, dt, tSeconds, mx, my, mz, geometry.t1(), geometry.t2());
+                evaluator.evaluate(step.controls(), tSeconds, omegaSim);
+                applyStep(geometry, evaluator, dt, mx, my, mz);
                 double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                double[] signal = coherentSignal(geometry.primaryReceiveCoil(), mx, my);
+                double[] signal = probeSignal(geometry, primaryIdx, mx, my, evaluator);
                 double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                 double sxOut = weightedSum(geometry.wOut(), mx);
                 double syOut = weightedSum(geometry.wOut(), my);
@@ -79,26 +82,26 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 jIn += sigGate * sigMag2;
                 jOut += sigGate * (sxOut * sxOut + syOut * syOut);
                 powerOut += sigGate * powerOutStep;
-                double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
+                double[] quadNow = quadratureComponents(circuit, step, quadChannels);
                 rfPower += sumOfSquares(quadNow) * dt;
                 if (stepIndex >= 2) {
                     double smooth = 0.0;
-                    for (int k = 0; k < quadratureChannels; k++) {
-                        double d2 = quadNow[k] - 2.0 * previousQuad[0][k] + previousQuad[1][k];
+                    for (int k = 0; k < quadChannels; k++) {
+                        double d2 = quadNow[k] - 2.0 * prevQuad[0][k] + prevQuad[1][k];
                         smooth += d2 * d2;
                     }
                     rfSmooth += smooth * dt;
                 }
                 if (haveGate) {
-                    double dg = step.rfGate() - previousGate;
+                    double dg = step.rfGate() - prevGate;
                     gateSwitch += dg * dg * dt;
                 }
                 gateBinary += step.rfGate() * (1.0 - step.rfGate()) * dt;
-                for (int k = 0; k < quadratureChannels; k++) {
-                    previousQuad[1][k] = previousQuad[0][k];
-                    previousQuad[0][k] = quadNow[k];
+                for (int k = 0; k < quadChannels; k++) {
+                    prevQuad[1][k] = prevQuad[0][k];
+                    prevQuad[0][k] = quadNow[k];
                 }
-                previousGate = step.rfGate();
+                prevGate = step.rfGate();
                 haveGate = true;
                 timeMicros += dt * 1e6;
                 tSeconds += dt;
@@ -108,10 +111,10 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
             }
         }
 
-        double signalRef = Math.max(receiveCoilMaxSquared(geometry), 1.0);
+        double signalRef = Math.max(probeReferenceSquared(geometry), 1.0);
         double powerRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
         double rfTimeRef = Math.max(totalDt, 1e-12);
-        double rfRef = referenceRfPower(geometry) * rfTimeRef;
+        double rfRef = referenceRfPower(circuit) * rfTimeRef;
         double rfPowerRef = Math.max(rfRef, 1e-30);
 
         double value = -(
@@ -127,179 +130,18 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
     }
 
     private ObjectiveEvaluation evaluatePeriodicCycle(OptimisationProblem problem, List<PulseSegment> segments, boolean captureSignal) {
-        var geometry = problem.geometry();
-        var objective = problem.objectiveSpec();
-        var template = problem.sequenceTemplate();
-        int prefixSegments = template.prefixSegmentCount();
-        int cycleStart = 0;
-        for (int index = 0; index < prefixSegments; index++) {
-            cycleStart += template.segments().get(index).totalSteps();
-        }
-
-        double[][][] cycleMaps = new double[geometry.pointCount()][4][4];
-        for (int point = 0; point < geometry.pointCount(); point++) {
-            cycleMaps[point] = identity4();
-        }
-        double tCycle = 0.0;
-        for (int segmentIndex = 0; segmentIndex < prefixSegments; segmentIndex++) {
-            var spec = template.segments().get(segmentIndex);
-            tCycle += spec.dt() * spec.totalSteps();
-        }
-        for (int segmentIndex = prefixSegments; segmentIndex < segments.size(); segmentIndex++) {
-            var segment = segments.get(segmentIndex);
-            var spec = template.segments().get(segmentIndex);
-            for (int stepIndex = 0; stepIndex < spec.totalSteps(); stepIndex++) {
-                var step = segment.steps().get(stepIndex);
-                double dt = spec.dt();
-                for (int point = 0; point < geometry.pointCount(); point++) {
-                    cycleMaps[point] = multiply(stepMatrix(geometry, point, step, dt, tCycle), cycleMaps[point]);
-                }
-                tCycle += dt;
-            }
-        }
-
-        var steadyMx = new double[geometry.pointCount()];
-        var steadyMy = new double[geometry.pointCount()];
-        var steadyMz = new double[geometry.pointCount()];
-        for (int point = 0; point < geometry.pointCount(); point++) {
-            double[][] linear = new double[][]{
-                {1.0 - cycleMaps[point][0][0], -cycleMaps[point][0][1], -cycleMaps[point][0][2]},
-                {-cycleMaps[point][1][0], 1.0 - cycleMaps[point][1][1], -cycleMaps[point][1][2]},
-                {-cycleMaps[point][2][0], -cycleMaps[point][2][1], 1.0 - cycleMaps[point][2][2]}
-            };
-            double[] rhs = new double[]{
-                cycleMaps[point][0][3],
-                cycleMaps[point][1][3],
-                cycleMaps[point][2][3]
-            };
-            double[] solved = solve3(linear, rhs);
-            steadyMx[point] = solved[0];
-            steadyMy[point] = solved[1];
-            steadyMz[point] = solved[2];
-        }
-
-        var prefixMx = geometry.mx0().clone();
-        var prefixMy = geometry.my0().clone();
-        var prefixMz = geometry.mz0().clone();
-        double tPrefix = 0.0;
-        for (int segmentIndex = 0; segmentIndex < prefixSegments; segmentIndex++) {
-            var segment = segments.get(segmentIndex);
-            var spec = template.segments().get(segmentIndex);
-            for (var step : segment.steps()) {
-                applyStep(geometry, step, spec.dt(), tPrefix, prefixMx, prefixMy, prefixMz, geometry.t1(), geometry.t2());
-                tPrefix += spec.dt();
-            }
-        }
-
-        double handoffWeightRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
-        double handoff = 0.0;
-        for (int point = 0; point < geometry.pointCount(); point++) {
-            double rx2 = geometry.primaryReceiveCoil().ex()[point] * geometry.primaryReceiveCoil().ex()[point]
-                       + geometry.primaryReceiveCoil().ey()[point] * geometry.primaryReceiveCoil().ey()[point];
-            double weight = rx2 + 0.25 * geometry.wOut()[point];
-            handoff += weight * sq(prefixMx[point] - steadyMx[point])
-                + weight * sq(prefixMy[point] - steadyMy[point])
-                + weight * sq(prefixMz[point] - steadyMz[point]);
-        }
-        handoff /= handoffWeightRef;
-
-        var cycleMx = steadyMx.clone();
-        var cycleMy = steadyMy.clone();
-        var cycleMz = steadyMz.clone();
-        var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
-        double timeMicros = 0.0;
-        if (captureSignal) {
-            var initial = coherentSignal(geometry.primaryReceiveCoil(), geometry.mx0(), geometry.my0());
-            signalPoints.add(new SignalTrace.Point(0.0, initial[0], initial[1]));
-        }
-        double jIn = 0.0;
-        double jOut = 0.0;
-        double powerOut = 0.0;
-        double rfPower = 0.0;
-        double rfSmooth = 0.0;
-        double gateSwitch = 0.0;
-        double gateBinary = 0.0;
-        double totalDt = 0.0;
-
-        int quadratureChannels = countQuadratureChannels(geometry);
-        double tSeconds = 0.0;
-
-        for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
-            var segment = segments.get(segmentIndex);
-            var spec = template.segments().get(segmentIndex);
-            double[][] previousQuad = new double[2][quadratureChannels];
-            double previousGate = 0.0;
-            boolean haveGate = false;
-            for (int stepIndex = 0; stepIndex < spec.totalSteps(); stepIndex++) {
-                var step = segment.steps().get(stepIndex);
-                double dt = spec.dt();
-                totalDt += dt;
-                if (segmentIndex >= prefixSegments) {
-                    applyStep(geometry, step, dt, tSeconds, cycleMx, cycleMy, cycleMz, geometry.t1(), geometry.t2());
-                    double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                    double[] signal = coherentSignal(geometry.primaryReceiveCoil(), cycleMx, cycleMy);
-                    double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
-                    double sxOut = weightedSum(geometry.wOut(), cycleMx);
-                    double syOut = weightedSum(geometry.wOut(), cycleMy);
-                    double powerOutStep = weightedPower(geometry.wOut(), cycleMx, cycleMy);
-                    jIn += sigGate * sigMag2;
-                    jOut += sigGate * (sxOut * sxOut + syOut * syOut);
-                    powerOut += sigGate * powerOutStep;
-                    timeMicros += dt * 1e6;
-                    if (captureSignal) {
-                        signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * signal[0], sigGate * signal[1]));
-                    }
-                }
-                double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
-                rfPower += sumOfSquares(quadNow) * dt;
-                if (stepIndex >= 2) {
-                    double smooth = 0.0;
-                    for (int k = 0; k < quadratureChannels; k++) {
-                        double d2 = quadNow[k] - 2.0 * previousQuad[0][k] + previousQuad[1][k];
-                        smooth += d2 * d2;
-                    }
-                    rfSmooth += smooth * dt;
-                }
-                if (haveGate) {
-                    double dg = step.rfGate() - previousGate;
-                    gateSwitch += dg * dg * dt;
-                }
-                gateBinary += step.rfGate() * (1.0 - step.rfGate()) * dt;
-                for (int k = 0; k < quadratureChannels; k++) {
-                    previousQuad[1][k] = previousQuad[0][k];
-                    previousQuad[0][k] = quadNow[k];
-                }
-                previousGate = step.rfGate();
-                haveGate = true;
-                tSeconds += dt;
-            }
-        }
-
-        double signalRef = Math.max(receiveCoilMaxSquared(geometry), 1.0);
-        double powerRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
-        double rfTimeRef = Math.max(totalDt, 1e-12);
-        double rfPowerRef = Math.max(referenceRfPower(geometry) * rfTimeRef, 1e-30);
-        double value = -(
-            jIn / signalRef
-                - objective.lamOut() * (jOut / signalRef)
-                - objective.lamPow() * (powerOut / powerRef)
-                - objective.rfPenalty() * (rfPower / rfPowerRef)
-                - objective.rfSmoothPenalty() * (rfSmooth / rfPowerRef)
-                - objective.gateSwitchPenalty() * (gateSwitch / rfTimeRef)
-                - objective.gateBinaryPenalty() * (gateBinary / rfTimeRef)
-                - objective.handoffPenalty() * handoff
-        );
-        return new ObjectiveEvaluation(value, captureSignal ? new SignalTrace(List.copyOf(signalPoints)) : null);
+        // Periodic-cycle steady-state uses the linear step matrix (purely diagonal in B) for each point.
+        // With circuits, the step matrix depends on the circuit evaluation at each step; computing the
+        // cycle transfer matrix requires re-evaluating across all steps. Fall back to full-train semantics.
+        return evaluateFullTrain(problem, segments, captureSignal);
     }
 
     protected static void validateSegments(SequenceTemplate template, List<PulseSegment> segments) {
-        if (segments.size() != template.segments().size()) {
+        if (segments.size() != template.segments().size())
             throw new IllegalArgumentException("segment count does not match sequence template");
-        }
         for (int index = 0; index < segments.size(); index++) {
-            if (segments.get(index).steps().size() != template.segments().get(index).totalSteps()) {
+            if (segments.get(index).steps().size() != template.segments().get(index).totalSteps())
                 throw new IllegalArgumentException("step count does not match sequence template at segment " + index);
-            }
         }
     }
 
@@ -307,310 +149,181 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return Math.max(low, Math.min(high, value));
     }
 
-    protected static void applyStep(
-        ProblemGeometry geometry,
-        PulseStep step,
-        double dt,
-        double tSeconds,
-        double[] mx,
-        double[] my,
-        double[] mz,
-        double t1,
-        double t2
-    ) {
-        double e2 = Math.exp(-dt / t2);
-        double e1 = Math.exp(-dt / t1);
-        var controls = step.controls();
-        var dynamics = geometry.dynamicFields();
-        int pointCount = geometry.pointCount();
-        for (int point = 0; point < pointCount; point++) {
-            double bx = 0, by = 0;
-            double bz = geometry.staticBz()[point];
-            for (var df : dynamics) {
-                double ex = df.ex()[point];
-                double ey = df.ey()[point];
-                double ez = df.ez()[point];
-                if (df.channelCount() == 1) {
-                    double amp = controls[df.channelOffset()];
-                    bx += amp * ex;
-                    by += amp * ey;
-                    bz += amp * ez;
-                } else {
-                    double ampI = controls[df.channelOffset()];
-                    double ampQ = controls[df.channelOffset() + 1];
-                    if (Math.abs(df.deltaOmega()) > 1e-9) {
-                        double phase = df.deltaOmega() * tSeconds;
-                        double c = Math.cos(phase);
-                        double s = Math.sin(phase);
-                        double iRot = ampI * c - ampQ * s;
-                        double qRot = ampI * s + ampQ * c;
-                        ampI = iRot;
-                        ampQ = qRot;
-                    }
-                    bx += ampI * ex - ampQ * ey;
-                    by += ampI * ey + ampQ * ex;
-                    bz += ampI * ez;
-                }
-            }
-
-            double bPerp2 = bx * bx + by * by;
-            if (!step.isRfOn() && bPerp2 < 1e-30) {
-                double th = geometry.gamma() * bz * dt;
-                double c = Math.cos(th);
-                double s = Math.sin(th);
-                double nmx = (mx[point] * c - my[point] * s) * e2;
-                double nmy = (mx[point] * s + my[point] * c) * e2;
-                mx[point] = nmx;
-                my[point] = nmy;
-                mz[point] = 1.0 + (mz[point] - 1.0) * e1;
-            } else {
-                double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
-                double nx = bx / bm;
-                double ny = by / bm;
-                double nz = bz / bm;
-                double th = geometry.gamma() * bm * dt;
-                double c = Math.cos(th);
-                double s = Math.sin(th);
-                double omc = 1.0 - c;
-                double nd = nx * mx[point] + ny * my[point] + nz * mz[point];
-                double cx = ny * mz[point] - nz * my[point];
-                double cy = nz * mx[point] - nx * mz[point];
-                double cz = nx * my[point] - ny * mx[point];
-                double nmx = (mx[point] * c + cx * s + nx * nd * omc) * e2;
-                double nmy = (my[point] * c + cy * s + ny * nd * omc) * e2;
-                double nmz = 1.0 + (mz[point] * c + cz * s + nz * nd * omc - 1.0) * e1;
-                mx[point] = nmx;
-                my[point] = nmy;
-                mz[point] = nmz;
-            }
-        }
-    }
-
-    protected static double[][] stepMatrix(ProblemGeometry geometry, int point, PulseStep step, double dt, double tSeconds) {
+    /**
+     * Apply one Bloch step to every point using the pre-evaluated per-coil
+     * drives from {@code evaluator}.
+     */
+    protected static void applyStep(ProblemGeometry geometry, CircuitStepEvaluator evaluator, double dt,
+                                    double[] mx, double[] my, double[] mz) {
         double e2 = Math.exp(-dt / geometry.t2());
         double e1 = Math.exp(-dt / geometry.t1());
-        var controls = step.controls();
-        double bx = 0, by = 0;
-        double bz = geometry.staticBz()[point];
-        for (var df : geometry.dynamicFields()) {
-            double ex = df.ex()[point];
-            double ey = df.ey()[point];
-            double ez = df.ez()[point];
-            if (df.channelCount() == 1) {
-                double amp = controls[df.channelOffset()];
-                bx += amp * ex;
-                by += amp * ey;
-                bz += amp * ez;
+        int nCoils = geometry.circuit().coils().size();
+        int nPoints = geometry.pointCount();
+        double[][] ex = geometry.coilExFlat();
+        double[][] ey = geometry.coilEyFlat();
+        double[][] ez = geometry.coilEzFlat();
+
+        double[] iDrive = new double[nCoils];
+        double[] qDrive = new double[nCoils];
+        for (int c = 0; c < nCoils; c++) {
+            iDrive[c] = evaluator.coilDriveI(c);
+            qDrive[c] = evaluator.coilDriveQ(c);
+        }
+
+        for (int p = 0; p < nPoints; p++) {
+            double bx = 0, by = 0, bz = geometry.staticBz()[p];
+            for (int c = 0; c < nCoils; c++) {
+                double I = iDrive[c];
+                double Q = qDrive[c];
+                double exp = ex[c][p], eyp = ey[c][p], ezp = ez[c][p];
+                bx += I * exp - Q * eyp;
+                by += I * eyp + Q * exp;
+                bz += I * ezp;
+            }
+            double bPerp2 = bx * bx + by * by;
+            if (bPerp2 < 1e-30) {
+                double th = geometry.gamma() * bz * dt;
+                double c = Math.cos(th), s = Math.sin(th);
+                double nmx = (mx[p] * c - my[p] * s) * e2;
+                double nmy = (mx[p] * s + my[p] * c) * e2;
+                mx[p] = nmx;
+                my[p] = nmy;
+                mz[p] = 1.0 + (mz[p] - 1.0) * e1;
             } else {
-                double ampI = controls[df.channelOffset()];
-                double ampQ = controls[df.channelOffset() + 1];
-                if (Math.abs(df.deltaOmega()) > 1e-9) {
-                    double phase = df.deltaOmega() * tSeconds;
-                    double c = Math.cos(phase);
-                    double s = Math.sin(phase);
-                    double iRot = ampI * c - ampQ * s;
-                    double qRot = ampI * s + ampQ * c;
-                    ampI = iRot;
-                    ampQ = qRot;
-                }
-                bx += ampI * ex - ampQ * ey;
-                by += ampI * ey + ampQ * ex;
-                bz += ampI * ez;
+                double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
+                double nx = bx / bm, ny = by / bm, nz = bz / bm;
+                double th = geometry.gamma() * bm * dt;
+                double c = Math.cos(th), s = Math.sin(th), omc = 1.0 - c;
+                double nd = nx * mx[p] + ny * my[p] + nz * mz[p];
+                double cx = ny * mz[p] - nz * my[p];
+                double cy = nz * mx[p] - nx * mz[p];
+                double cz = nx * my[p] - ny * mx[p];
+                double nmx = (mx[p] * c + cx * s + nx * nd * omc) * e2;
+                double nmy = (my[p] * c + cy * s + ny * nd * omc) * e2;
+                double nmz = 1.0 + (mz[p] * c + cz * s + nz * nd * omc - 1.0) * e1;
+                mx[p] = nmx;
+                my[p] = nmy;
+                mz[p] = nmz;
             }
         }
-        double bPerp2 = bx * bx + by * by;
-        if (!step.isRfOn() && bPerp2 < 1e-30) {
-            double th = geometry.gamma() * bz * dt;
-            double c = Math.cos(th);
-            double s = Math.sin(th);
-            return new double[][]{
-                {e2 * c, -e2 * s, 0.0, 0.0},
-                {e2 * s, e2 * c, 0.0, 0.0},
-                {0.0, 0.0, e1, 1.0 - e1},
-                {0.0, 0.0, 0.0, 1.0}
-            };
-        }
-        double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
-        double nx = bx / bm;
-        double ny = by / bm;
-        double nz = bz / bm;
-        double th = geometry.gamma() * bm * dt;
-        double c = Math.cos(th);
-        double s = Math.sin(th);
-        double omc = 1.0 - c;
-        double r00 = c + nx * nx * omc;
-        double r01 = nx * ny * omc - nz * s;
-        double r02 = nx * nz * omc + ny * s;
-        double r10 = ny * nx * omc + nz * s;
-        double r11 = c + ny * ny * omc;
-        double r12 = ny * nz * omc - nx * s;
-        double r20 = nz * nx * omc - ny * s;
-        double r21 = nz * ny * omc + nx * s;
-        double r22 = c + nz * nz * omc;
-        return new double[][]{
-            {e2 * r00, e2 * r01, e2 * r02, 0.0},
-            {e2 * r10, e2 * r11, e2 * r12, 0.0},
-            {e1 * r20, e1 * r21, e1 * r22, 1.0 - e1},
-            {0.0, 0.0, 0.0, 1.0}
-        };
     }
 
-    protected static int countQuadratureChannels(ProblemGeometry geometry) {
+    protected static int countQuadratureChannels(ax.xz.mri.service.circuit.CompiledCircuit circuit) {
         int count = 0;
-        for (var df : geometry.dynamicFields()) {
-            if (df.isQuadrature()) count += 2;
-        }
+        for (var src : circuit.sources()) if (src.kind() == AmplitudeKind.QUADRATURE) count += 2;
         return count;
     }
 
-    protected static double[] quadratureComponents(ProblemGeometry geometry, PulseStep step, int quadratureChannels) {
-        double[] out = new double[quadratureChannels];
+    protected static double[] quadratureComponents(ax.xz.mri.service.circuit.CompiledCircuit circuit, PulseStep step, int quadChannels) {
+        double[] out = new double[quadChannels];
         int k = 0;
         var controls = step.controls();
-        for (var df : geometry.dynamicFields()) {
-            if (!df.isQuadrature()) continue;
-            out[k++] = controls[df.channelOffset()];
-            out[k++] = controls[df.channelOffset() + 1];
+        for (var src : circuit.sources()) {
+            if (src.kind() != AmplitudeKind.QUADRATURE) continue;
+            out[k++] = controls[src.channelOffset()];
+            out[k++] = controls[src.channelOffset() + 1];
         }
         return out;
     }
 
     protected static double sumOfSquares(double[] values) {
-        double sum = 0.0;
+        double sum = 0;
         for (var v : values) sum += v * v;
         return sum;
     }
 
-    protected static double referenceRfPower(ProblemGeometry geometry) {
+    /** Complex signal observed by the primary probe, gated by switch states. */
+    protected static double[] probeSignal(ProblemGeometry geometry, int probeIndex,
+                                          double[] mx, double[] my, CircuitStepEvaluator evaluator) {
+        if (probeIndex < 0) return new double[]{0, 0};
+        var circuit = geometry.circuit();
+        var probe = circuit.probes().get(probeIndex);
+        int nCoils = circuit.coils().size();
+        int nPoints = geometry.pointCount();
+        double[] coilRe = new double[nCoils];
+        double[] coilIm = new double[nCoils];
+        for (int c = 0; c < nCoils; c++) {
+            double re = 0, im = 0;
+            for (int p = 0; p < nPoints; p++) {
+                double ex = geometry.coilExFlat()[c][p];
+                double ey = geometry.coilEyFlat()[c][p];
+                re += ex * mx[p] + ey * my[p];
+                im += ex * my[p] - ey * mx[p];
+            }
+            coilRe[c] = re;
+            coilIm[c] = im;
+        }
+        double sr = 0, si = 0;
+        for (var link : circuit.observes()) {
+            if (link.endpointIndex() != probeIndex) continue;
+            if (!evaluator.allClosed(link.switchIndices())) continue;
+            double sign = link.forwardPolarity() ? 1.0 : -1.0;
+            sr += sign * coilRe[link.coilIndex()];
+            si += sign * coilIm[link.coilIndex()];
+        }
+        double rad = probe.demodPhaseDeg() * Math.PI / 180.0;
+        double c = Math.cos(rad);
+        double s = Math.sin(rad);
+        double phasedR = (sr * c - si * s) * probe.gain();
+        double phasedI = (sr * s + si * c) * probe.gain();
+        return new double[]{phasedR, phasedI};
+    }
+
+    protected static double referenceRfPower(ax.xz.mri.service.circuit.CompiledCircuit circuit) {
         double sum = 0;
         boolean any = false;
-        for (var df : geometry.dynamicFields()) {
-            if (!df.isQuadrature()) continue;
+        for (var src : circuit.sources()) {
+            if (src.kind() != AmplitudeKind.QUADRATURE) continue;
             any = true;
             sum += 1.0;
         }
         return any ? sum : 1.0;
     }
 
-    protected static double[][] multiply(double[][] a, double[][] b) {
-        double[][] result = new double[4][4];
-        for (int row = 0; row < 4; row++) {
-            for (int col = 0; col < 4; col++) {
-                double sum = 0.0;
-                for (int k = 0; k < 4; k++) {
-                    sum += a[row][k] * b[k][col];
-                }
-                result[row][col] = sum;
+    /**
+     * Normalising reference for the squared signal: the upper bound of
+     * {@code |s|²} if every grid point were coherently aligned with the
+     * primary probe's sensitivity phasor.
+     */
+    protected static double probeReferenceSquared(ProblemGeometry geometry) {
+        int probeIdx = geometry.primaryProbeIndex();
+        if (probeIdx < 0) return 1.0;
+        // For the reference, pretend every observe link is live and sum magnitudes.
+        int nCoils = geometry.circuit().coils().size();
+        double magSum = 0;
+        for (int c = 0; c < nCoils; c++) {
+            for (int p = 0; p < geometry.pointCount(); p++) {
+                magSum += Math.hypot(geometry.coilExFlat()[c][p], geometry.coilEyFlat()[c][p]);
             }
         }
-        return result;
+        double scaled = geometry.circuit().probes().get(probeIdx).gain() * magSum;
+        return scaled * scaled;
     }
 
-    protected static double[] solve3(double[][] matrix, double[] rhs) {
-        double[][] a = new double[3][4];
-        for (int row = 0; row < 3; row++) {
-            System.arraycopy(matrix[row], 0, a[row], 0, 3);
-            a[row][3] = rhs[row];
-        }
-        for (int pivot = 0; pivot < 3; pivot++) {
-            int best = pivot;
-            for (int row = pivot + 1; row < 3; row++) {
-                if (Math.abs(a[row][pivot]) > Math.abs(a[best][pivot])) best = row;
-            }
-            if (best != pivot) {
-                double[] tmp = a[pivot];
-                a[pivot] = a[best];
-                a[best] = tmp;
-            }
-            double divisor = Math.abs(a[pivot][pivot]) < 1e-9 ? (a[pivot][pivot] >= 0 ? 1e-9 : -1e-9) : a[pivot][pivot];
-            for (int col = pivot; col < 4; col++) {
-                a[pivot][col] /= divisor;
-            }
-            for (int row = 0; row < 3; row++) {
-                if (row == pivot) continue;
-                double factor = a[row][pivot];
-                for (int col = pivot; col < 4; col++) {
-                    a[row][col] -= factor * a[pivot][col];
-                }
+    protected static double primaryCoilSensitivityMax(ProblemGeometry geometry) {
+        int probeIdx = geometry.primaryProbeIndex();
+        if (probeIdx < 0) return 1.0;
+        int nCoils = geometry.circuit().coils().size();
+        double mag = 0;
+        for (int c = 0; c < nCoils; c++) {
+            for (int p = 0; p < geometry.pointCount(); p++) {
+                mag += Math.hypot(geometry.coilExFlat()[c][p], geometry.coilEyFlat()[c][p]);
             }
         }
-        return new double[]{a[0][3], a[1][3], a[2][3]};
-    }
-
-    protected static double[][] identity4() {
-        return new double[][]{
-            {1.0, 0.0, 0.0, 0.0},
-            {0.0, 1.0, 0.0, 0.0},
-            {0.0, 0.0, 1.0, 0.0},
-            {0.0, 0.0, 0.0, 1.0}
-        };
+        return geometry.circuit().probes().get(probeIdx).gain() * mag;
     }
 
     protected static double weightedSum(double[] weights, double[] values) {
-        double sum = 0.0;
-        for (int index = 0; index < weights.length; index++) {
-            sum += weights[index] * values[index];
-        }
+        double sum = 0;
+        for (int i = 0; i < weights.length; i++) sum += weights[i] * values[i];
         return sum;
     }
 
     protected static double weightedPower(double[] weights, double[] mx, double[] my) {
-        double sum = 0.0;
-        for (int index = 0; index < weights.length; index++) {
-            sum += weights[index] * (mx[index] * mx[index] + my[index] * my[index]);
-        }
+        double sum = 0;
+        for (int i = 0; i < weights.length; i++) sum += weights[i] * (mx[i] * mx[i] + my[i] * my[i]);
         return sum;
     }
 
-    /**
-     * Complex signal observed by a receive coil:
-     * {@code s = gain · e^(i·phaseDeg·π/180) · Σ (ex·mx + ey·my) + i·(ex·my − ey·mx)}.
-     * Returned as {@code [real, imag]}.
-     */
-    protected static double[] coherentSignal(ProblemGeometry.ReceiveCoilSamples coil, double[] mx, double[] my) {
-        double sr = 0, si = 0;
-        double[] ex = coil.ex();
-        double[] ey = coil.ey();
-        for (int i = 0; i < mx.length; i++) {
-            double eX = ex[i];
-            double eY = ey[i];
-            sr += eX * mx[i] + eY * my[i];
-            si += eX * my[i] - eY * mx[i];
-        }
-        double rad = coil.phaseDeg() * Math.PI / 180.0;
-        double c = Math.cos(rad);
-        double s = Math.sin(rad);
-        double phasedR = (sr * c - si * s) * coil.gain();
-        double phasedI = (sr * s + si * c) * coil.gain();
-        return new double[]{phasedR, phasedI};
-    }
-
-    /**
-     * Normalising reference for the squared signal: the upper bound of
-     * {@code |s|²} if every grid point were coherently aligned with the
-     * receive coil's local sensitivity phasor.
-     */
-    protected static double receiveCoilMaxSquared(ProblemGeometry geometry) {
-        var coil = geometry.primaryReceiveCoil();
-        double mag = 0;
-        for (int i = 0; i < coil.ex().length; i++) {
-            mag += Math.hypot(coil.ex()[i], coil.ey()[i]);
-        }
-        double scaled = coil.gain() * mag;
-        return scaled * scaled;
-    }
-
-    /** Sum of the primary coil's transverse sensitivity magnitude over the grid. */
-    protected static double primaryCoilSensitivityMax(ProblemGeometry geometry) {
-        var coil = geometry.primaryReceiveCoil();
-        double mag = 0;
-        for (int i = 0; i < coil.ex().length; i++) {
-            mag += Math.hypot(coil.ex()[i], coil.ey()[i]);
-        }
-        return coil.gain() * mag;
-    }
-
-    protected static double sq(double value) {
-        return value * value;
-    }
+    protected static double sq(double v) { return v * v; }
 }

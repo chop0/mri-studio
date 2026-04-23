@@ -1,18 +1,18 @@
 package ax.xz.mri.model.simulation;
 
 /**
- * How a {@link DrivePath}'s amplitude schedule is interpreted.
+ * How a voltage source's amplitude schedule is interpreted.
  *
- * <p>This, together with the path's {@code carrierHz}, fully determines how
+ * <p>This, together with the source's {@code carrierHz}, fully determines how
  * the simulator couples the amplitude to the rotating-frame B-field
- * integration (for transmit paths) or to the observational layer (for gate
- * paths). There is no inferred "B0 slot" rule — statics are just drive paths
- * with a fixed amplitude.
+ * integration (for transmit sources) or to switch control (for gate sources).
+ * There is no inferred "B0 slot" rule — statics are just sources with a fixed
+ * amplitude pinned to {@code maxAmplitude}.
  *
  * <p>Pulse-sequence channels per step:
  * <ul>
- *   <li>{@link #STATIC} — 0 channels. Amplitude pinned to
- *       {@link DrivePath#maxAmplitude()}; no timeline control.</li>
+ *   <li>{@link #STATIC} — 0 channels. Amplitude pinned to the source's
+ *       {@code maxAmplitude}; no timeline control.</li>
  *   <li>{@link #REAL} — 1 channel. One real scalar per step, baseband at
  *       {@code carrierHz}. Typical: gradients (carrier = 0).</li>
  *   <li>{@link #QUADRATURE} — 2 channels (I, Q). Complex baseband at

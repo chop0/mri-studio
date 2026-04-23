@@ -1,5 +1,9 @@
 package ax.xz.mri.ui.viewmodel;
 
+import ax.xz.mri.model.circuit.CircuitComponent;
+import ax.xz.mri.model.circuit.CircuitDocument;
+import ax.xz.mri.model.circuit.ComponentId;
+import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.sequence.ClipBaker;
 import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipSequence;
@@ -7,7 +11,6 @@ import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
-import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
@@ -29,8 +32,11 @@ import javafx.collections.ObservableSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -126,15 +132,15 @@ public final class SequenceEditSession {
     public void open(SequenceDocument document) {
         originalDocument.set(document);
 
-        var config = activeConfig.get();
+        var circuit = activeCircuit();
         ClipSequence clipSeq = document.clipSequence();
         if (clipSeq == null) {
             // A sequence created through the wizard always carries a clip
             // sequence; legacy documents without one start empty with the
-            // config's default tracks.
-            clipSeq = new ClipSequence(10.0, 1000.0, ClipBaker.defaultTracksFor(config), List.of());
+            // circuit's default tracks.
+            clipSeq = new ClipSequence(10.0, 1000.0, ClipBaker.defaultTracksFor(circuit), List.of());
         }
-        var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(config) : clipSeq.tracks();
+        var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(circuit) : clipSeq.tracks();
         tracks.setAll(loadedTracks);
         clips.setAll(clipSeq.clips());
         dt.set(clipSeq.dt());
@@ -156,7 +162,7 @@ public final class SequenceEditSession {
         var orig = originalDocument.get();
         var clipSeq = new ClipSequence(dt.get(), totalDuration.get(),
             List.copyOf(tracks), List.copyOf(clips));
-        var baked = ClipBaker.bake(clipSeq, activeConfig.get());
+        var baked = ClipBaker.bake(clipSeq, activeCircuit());
         return new SequenceDocument(
             orig.id(), orig.name(),
             baked.segments(), baked.pulseSegments(),
@@ -205,28 +211,34 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Look up the {@link DrivePath} backing an output channel, or {@code null}. */
-    public DrivePath pathForChannel(SequenceChannel channel) {
+    /** Resolve the {@link CircuitDocument} backing the active sim-config, or {@code null}. */
+    public CircuitDocument activeCircuit() {
+        var repo = repositorySupplier.get();
+        var cfg = activeConfig.get();
+        if (repo == null || cfg == null || cfg.circuitId() == null) return null;
+        return repo.circuit(cfg.circuitId());
+    }
+
+    /** Look up the voltage source backing an output channel, or {@code null}. */
+    public CircuitComponent.VoltageSource sourceForChannel(SequenceChannel channel) {
         if (channel == null) return null;
-        var config = activeConfig.get();
-        if (config == null) return null;
-        for (var p : config.drivePaths()) {
-            if (p.name().equals(channel.drivePathName()) && channel.subIndex() < p.kind().channelCount()) {
-                return p;
+        var circuit = activeCircuit();
+        if (circuit == null) return null;
+        for (var src : circuit.voltageSources()) {
+            if (src.name().equals(channel.sourceName()) && channel.subIndex() < src.channelCount()) {
+                return src;
             }
         }
         return null;
     }
 
-    /** Resolve the eigenfield document behind an output channel, or {@code null}. */
-    public EigenfieldDocument eigenpathForChannel(SequenceChannel channel) {
-        var path = pathForChannel(channel);
-        if (path == null || path.isGate()) return null;
-        var config = activeConfig.get();
-        if (config == null) return null;
-        var coil = config.transmitCoils().stream()
-            .filter(c -> c.name().equals(path.transmitCoilName()))
-            .findFirst().orElse(null);
+    /** Resolve the eigenfield document reachable from a channel's source (through switches), or {@code null}. */
+    public EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
+        var src = sourceForChannel(channel);
+        if (src == null || src.isGate()) return null;
+        var circuit = activeCircuit();
+        if (circuit == null) return null;
+        var coil = coilReachableFromSource(circuit, src.id());
         if (coil == null) return null;
         var repo = repositorySupplier.get();
         if (repo == null) return null;
@@ -235,20 +247,50 @@ public final class SequenceEditSession {
 
     /** Display units declared by the eigenfield behind a channel, or empty string. */
     public String unitsForChannel(SequenceChannel channel) {
-        var ef = eigenpathForChannel(channel);
+        var ef = eigenfieldForChannel(channel);
         return ef != null ? ef.units() : "";
     }
 
-    /** List of all addressable output channels in the active config (empty if no config). */
+    /** List of all addressable output channels in the active circuit (empty if no circuit). */
     public List<SequenceChannel> availableOutputChannels() {
-        var cfg = activeConfig.get();
-        if (cfg == null) return List.of();
+        var circuit = activeCircuit();
+        if (circuit == null) return List.of();
         var out = new ArrayList<SequenceChannel>();
-        for (var path : cfg.drivePaths()) {
-            int count = path.kind().channelCount();
-            for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.ofPath(path.name(), sub));
+        for (var src : circuit.voltageSources()) {
+            int count = src.channelCount();
+            for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.of(src.name(), sub));
         }
         return List.copyOf(out);
+    }
+
+    /** BFS through wires (and transparently through switches) to find a coil reachable from the source. */
+    private static CircuitComponent.Coil coilReachableFromSource(CircuitDocument circuit, ComponentId sourceId) {
+        var adjacency = new HashMap<ComponentTerminal, List<ComponentTerminal>>();
+        for (var w : circuit.wires()) {
+            adjacency.computeIfAbsent(w.from(), k -> new ArrayList<>()).add(w.to());
+            adjacency.computeIfAbsent(w.to(), k -> new ArrayList<>()).add(w.from());
+        }
+        var componentsById = new HashMap<ComponentId, CircuitComponent>();
+        for (var c : circuit.components()) componentsById.put(c.id(), c);
+
+        var visited = new HashSet<ComponentTerminal>();
+        var queue = new ArrayDeque<ComponentTerminal>();
+        queue.add(new ComponentTerminal(sourceId, "a"));
+        queue.add(new ComponentTerminal(sourceId, "b"));
+        while (!queue.isEmpty()) {
+            var term = queue.poll();
+            if (!visited.add(term)) continue;
+            var component = componentsById.get(term.componentId());
+            if (component instanceof CircuitComponent.Coil coil && !term.componentId().equals(sourceId)) {
+                return coil;
+            }
+            if (component instanceof CircuitComponent.SwitchComponent && (term.port().equals("a") || term.port().equals("b"))) {
+                String other = term.port().equals("a") ? "b" : "a";
+                queue.add(new ComponentTerminal(term.componentId(), other));
+            }
+            for (var neighbour : adjacency.getOrDefault(term, List.of())) queue.add(neighbour);
+        }
+        return null;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -330,9 +372,9 @@ public final class SequenceEditSession {
 
     /** Best-effort default name for a new track targeting an output channel. */
     public String defaultTrackNameFor(SequenceChannel channel) {
-        var field = pathForChannel(channel);
-        if (field == null) return channel.drivePathName() + "[" + channel.subIndex() + "]";
-        return ClipBaker.defaultTrackName(field, channel.subIndex());
+        var src = sourceForChannel(channel);
+        if (src == null) return channel.sourceName() + "[" + channel.subIndex() + "]";
+        return ClipBaker.defaultTrackName(src, channel.subIndex());
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -743,15 +785,15 @@ public final class SequenceEditSession {
 
     /**
      * Sensible starting amplitude for a clip targeting a given output channel,
-     * driven by the active config's {@link FieldDefinition#maxAmplitude()} so
-     * new clips land on a visible part of the axis.
+     * driven by the active circuit's voltage-source max amplitude so new clips
+     * land on a visible part of the axis.
      */
     public double defaultAmplitudeForChannel(SequenceChannel channel) {
-        var field = pathForChannel(channel);
-        if (field == null) return 1.0;
-        double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
+        var src = sourceForChannel(channel);
+        if (src == null) return 1.0;
+        double m = Math.max(Math.abs(src.minAmplitude()), Math.abs(src.maxAmplitude()));
         if (m == 0) return 1.0;
-        return field.minAmplitude() < 0 ? 0.66 * field.maxAmplitude() : field.maxAmplitude();
+        return src.minAmplitude() < 0 ? 0.66 * src.maxAmplitude() : src.maxAmplitude();
     }
 
     // ══════════════════════════════════════════════════════════════════════════

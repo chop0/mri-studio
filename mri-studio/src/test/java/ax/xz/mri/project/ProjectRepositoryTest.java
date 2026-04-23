@@ -1,18 +1,14 @@
 package ax.xz.mri.project;
 
-import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.DrivePath;
-import ax.xz.mri.model.simulation.ReceiveCoil;
+import ax.xz.mri.model.circuit.CircuitComponent;
+import ax.xz.mri.model.circuit.CircuitDocument;
+import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.simulation.SimulationConfig;
-import ax.xz.mri.model.simulation.TransmitCoil;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class ProjectRepositoryTest {
 
@@ -32,17 +28,11 @@ class ProjectRepositoryTest {
     @Test
     void addAndRenameSimConfig() {
         var repo = ProjectRepository.untitled();
-        var eigenId = new ProjectNodeId("ef-1");
-        repo.addEigenfield(new EigenfieldDocument(
-            eigenId, "E", "desc", "return Vec3.of(1,0,0);", "T", 1.0));
+        var circuitId = new ProjectNodeId("circuit-1");
+        repo.addCircuit(CircuitDocument.empty(circuitId, "Test Circuit"));
 
-        var rx = new ReceiveCoil("RX", eigenId, 1.0, 0.0);
-        var coil = new TransmitCoil("Drive Coil", eigenId, 0);
         var cfg = new SimulationConfig(
-            1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6,
-            List.of(coil),
-            List.of(new DrivePath("Drive", "Drive Coil", AmplitudeKind.REAL, 0, -1, 1, null)),
-            List.of(rx));
+            1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6, circuitId);
         var doc = new SimulationConfigDocument(new ProjectNodeId("simcfg-1"), "Cfg A", cfg);
         repo.addSimConfig(doc);
         assertEquals(doc, repo.simConfig(doc.id()));
@@ -62,5 +52,35 @@ class ProjectRepositoryTest {
         repo.removeEigenfield(ef.id());
         assertNull(repo.node(ef.id()));
         assertTrue(repo.eigenfieldIds().isEmpty());
+    }
+
+    @Test
+    void addUpdateAndRemoveCircuit() {
+        var repo = ProjectRepository.untitled();
+        var id = new ProjectNodeId("circuit-7");
+        var original = CircuitDocument.empty(id, "Draft");
+        repo.addCircuit(original);
+        assertEquals(List.of(id), repo.circuitIds());
+        assertEquals(original, repo.circuit(id));
+
+        var coil = new CircuitComponent.Coil(
+            new ComponentId("coil-0"), "C0", null, 0, 0);
+        var updated = original.addComponent(coil, null);
+        repo.updateCircuit(updated);
+        assertEquals(updated, repo.circuit(id));
+
+        repo.removeCircuit(id);
+        assertNull(repo.circuit(id));
+        assertTrue(repo.circuitIds().isEmpty());
+    }
+
+    @Test
+    void renameCircuit() {
+        var repo = ProjectRepository.untitled();
+        var id = new ProjectNodeId("circuit-8");
+        repo.addCircuit(CircuitDocument.empty(id, "Draft"));
+        var renamed = repo.renameCircuit(id, "Final");
+        assertEquals("Final", renamed.name());
+        assertEquals("Final", repo.circuit(id).name());
     }
 }

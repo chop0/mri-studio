@@ -952,3 +952,47 @@
     -fx-font-weight: 700;
     -fx-text-fill: -studio-accent;
 }
+
+/* ---- Schematic editor ---- */
+.schematic-toolbar {
+    -fx-background-color: -studio-panel-bg;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.schematic-toolbar-button {
+    -fx-padding: 3 10 3 10;
+    -fx-font-size: 11px;
+    -fx-background-radius: 4;
+    -fx-border-radius: 4;
+}
+.schematic-toolbar-button:selected {
+    -fx-background-color: -studio-accent;
+    -fx-text-fill: white;
+}
+.schematic-toolbar-hint {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-tertiary;
+}
+.schematic-inspector-title {
+    -fx-font-weight: 700;
+    -fx-font-size: 13px;
+    -fx-text-fill: -studio-text;
+    -fx-padding: 0 0 6 0;
+}
+.schematic-inspector-hint {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-padding: 0 0 6 0;
+}
+.schematic-inspector-value {
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    -fx-font-size: 11px;
+    -fx-text-fill: -studio-accent;
+}
+.schematic-status-bar {
+    -fx-background-color: -studio-panel-bg;
+    -fx-border-color: -studio-border-subtle transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text-tertiary;
+}

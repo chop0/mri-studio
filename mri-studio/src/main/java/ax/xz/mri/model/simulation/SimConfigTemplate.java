@@ -1,79 +1,33 @@
 package ax.xz.mri.model.simulation;
 
-import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
-import ax.xz.mri.model.simulation.dsl.ReceiveCoilStarterLibrary;
+import ax.xz.mri.model.circuit.starter.CircuitStarter;
+import ax.xz.mri.model.circuit.starter.CircuitStarterLibrary;
+import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
-import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.ui.wizard.WizardStep;
 
-import java.util.List;
+import java.util.UUID;
 
 /**
  * Named starting-point templates for new simulation configs.
  *
- * <p>Each template creates a set of {@link TransmitCoil transmit coils},
- * {@link DrivePath drive paths}, and {@link ReceiveCoil receive coils}
- * backed by starter eigenfields in the starter library. Values are set for
- * a typical low-field MRI setup when applicable.
+ * <p>Each template seeds a {@link ax.xz.mri.model.circuit.CircuitDocument}
+ * into the repository and points the new {@link SimulationConfig} at it.
+ * Field-level physics knobs (tissue, grid, reference frame) come from the
+ * user's wizard input; the circuit handles sources / switches / coils /
+ * probes.
  */
 public enum SimConfigTemplate {
-    EMPTY("Empty", "No coils or paths \u2014 build from scratch") {
-        @Override
-        public List<TransmitCoil> createTransmitCoils(ProjectRepository repo) { return List.of(); }
-
-        @Override
-        public List<DrivePath> createDrivePaths(ProjectRepository repo) { return List.of(); }
-
-        @Override
-        public List<ReceiveCoil> createReceiveCoils(ProjectRepository repo) { return List.of(); }
-
-        @Override
-        public double referenceB0Tesla() { return 1.5; }
-
-        @Override
-        public WizardStep configStep() { return null; }
+    EMPTY("Empty", "Just a grounded blank schematic \u2014 build from scratch") {
+        @Override public CircuitStarter circuitStarter() { return CircuitStarterLibrary.byId("empty").orElseThrow(); }
+        @Override public double referenceB0Tesla() { return 1.5; }
+        @Override public WizardStep configStep() { return null; }
     },
     LOW_FIELD_MRI("Standard low-field \u00b9H MRI",
-            "B0 + Gx + Gz + RF TX + RX coil + T/R switch gate for a ~15 mT Helmholtz system") {
+            "B0 + Gx + Gz + RF TX + RX probe through a T/R switch on a ~15 mT Helmholtz system") {
         private LowFieldMriConfigStep step;
 
-        @Override
-        public List<TransmitCoil> createTransmitCoils(ProjectRepository repo) {
-            var b0 = ensureEigenfield(repo, "B0 Helmholtz", "helmholtz-b0");
-            var gx = ensureEigenfield(repo, "Gradient X", "gradient-x");
-            var gz = ensureEigenfield(repo, "Gradient Z", "gradient-z");
-            var rf = ensureEigenfield(repo, "RF Transverse", "uniform-b-perp");
-
-            return List.of(
-                new TransmitCoil("B0 Coil", b0.id(), 0.0),
-                new TransmitCoil("Gx Coil", gx.id(), 0.0),
-                new TransmitCoil("Gz Coil", gz.id(), 0.0),
-                new TransmitCoil("RF Coil", rf.id(), 0.0)
-            );
-        }
-
-        @Override
-        public List<DrivePath> createDrivePaths(ProjectRepository repo) {
-            double b0Tesla = step != null ? step.getB0Tesla() : 0.0154;
-            double gamma = step != null ? step.getGamma() : 267.522e6;
-            double larmorHz = gamma * b0Tesla / (2 * Math.PI);
-
-            return List.of(
-                new DrivePath("B0", "B0 Coil", AmplitudeKind.STATIC, 0, 0, b0Tesla, null),
-                new DrivePath("RF", "RF Coil", AmplitudeKind.QUADRATURE, larmorHz, 0, 200e-6, null),
-                new DrivePath("Gradient X", "Gx Coil", AmplitudeKind.REAL, 0, -0.030, 0.030, null),
-                new DrivePath("Gradient Z", "Gz Coil", AmplitudeKind.REAL, 0, -0.030, 0.030, null),
-                new DrivePath("RX Gate", null, AmplitudeKind.GATE, 0, 0, 1.0, null)
-            );
-        }
-
-        @Override
-        public List<ReceiveCoil> createReceiveCoils(ProjectRepository repo) {
-            var starter = ReceiveCoilStarterLibrary.byId("uniform-isotropic").orElseThrow();
-            var rxEigen = ensureEigenfield(repo, "RX Whole-volume", starter.eigenfieldStarterId());
-            return List.of(new ReceiveCoil("Primary RX", rxEigen.id(),
-                starter.gain(), starter.phaseDeg(), 0.0, "RX Gate"));
-        }
+        @Override public CircuitStarter circuitStarter() { return CircuitStarterLibrary.byId("low-field-mri").orElseThrow(); }
 
         @Override
         public double referenceB0Tesla() {
@@ -98,18 +52,22 @@ public enum SimConfigTemplate {
     public String displayName() { return displayName; }
     public String description() { return description; }
 
-    public abstract List<TransmitCoil> createTransmitCoils(ProjectRepository repo);
-    public abstract List<DrivePath> createDrivePaths(ProjectRepository repo);
-    public abstract List<ReceiveCoil> createReceiveCoils(ProjectRepository repo);
-
+    public abstract CircuitStarter circuitStarter();
     public abstract double referenceB0Tesla();
     public abstract WizardStep configStep();
 
+    /**
+     * Seed a fresh circuit into the repository via this template's starter,
+     * and return its id so a {@link SimulationConfig} can point at it.
+     */
+    public ProjectNodeId createCircuit(ProjectRepository repository, String name) {
+        var starter = circuitStarter();
+        var id = new ProjectNodeId("circuit-" + UUID.randomUUID());
+        var doc = starter.build(id, name, repository);
+        repository.addCircuit(doc);
+        return id;
+    }
+
     @Override
     public String toString() { return displayName; }
-
-    private static ax.xz.mri.project.EigenfieldDocument ensureEigenfield(ProjectRepository repo, String name, String starterId) {
-        var s = EigenfieldStarterLibrary.byId(starterId).orElseThrow();
-        return ObjectFactory.findOrCreateEigenfield(repo, name, s.description(), s.source(), s.units(), s.defaultMagnitude());
-    }
 }

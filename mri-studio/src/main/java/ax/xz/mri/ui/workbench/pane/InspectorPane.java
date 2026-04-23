@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNode;
 import ax.xz.mri.project.ProjectNodeId;
@@ -116,6 +117,7 @@ public final class InspectorPane extends WorkbenchPane {
                 content.getChildren().add(infoLine("Description",
                     eigenfield.description() == null ? "" : eigenfield.description()));
             }
+            case CircuitDocument circuit -> populateCircuit(circuit);
             default -> content.getChildren().add(infoLine("Kind", node.kind().name()));
         }
     }
@@ -262,8 +264,14 @@ public final class InspectorPane extends WorkbenchPane {
             content.getChildren().add(infoLine("B\u2080 ref", String.format("%.4f T", cfg.referenceB0Tesla())));
             content.getChildren().add(infoLine("T\u2081", String.format("%.0f ms", cfg.t1Ms())));
             content.getChildren().add(infoLine("T\u2082", String.format("%.0f ms", cfg.t2Ms())));
-            content.getChildren().add(infoLine("Fields", String.valueOf(cfg.drivePaths().size())));
-            content.getChildren().add(infoLine("Receive coils", String.valueOf(cfg.receiveCoils().size())));
+            var repo = paneContext.session().project.repository.get();
+            var circuit = repo.circuit(cfg.circuitId());
+            if (circuit != null) {
+                content.getChildren().add(infoLine("Circuit", circuit.name()));
+                content.getChildren().add(infoLine("Drive sources", String.valueOf(circuit.voltageSources().size())));
+                content.getChildren().add(infoLine("Coils", String.valueOf(circuit.coils().size())));
+                content.getChildren().add(infoLine("Probes", String.valueOf(circuit.probes().size())));
+            }
         }
         content.getChildren().add(new Separator());
         content.getChildren().add(actionRow(
@@ -272,10 +280,32 @@ public final class InspectorPane extends WorkbenchPane {
         ));
     }
 
+    private void populateCircuit(CircuitDocument circuit) {
+        content.getChildren().add(infoLine("Type", "Circuit"));
+        content.getChildren().add(infoLine("Name", circuit.name()));
+        content.getChildren().add(infoLine("Components", String.valueOf(circuit.components().size())));
+        content.getChildren().add(infoLine("Wires", String.valueOf(circuit.wires().size())));
+        content.getChildren().add(infoLine("Drive sources", String.valueOf(circuit.voltageSources().size())));
+        content.getChildren().add(infoLine("Coils", String.valueOf(circuit.coils().size())));
+        content.getChildren().add(infoLine("Probes", String.valueOf(circuit.probes().size())));
+        content.getChildren().add(new Separator());
+        var repo = paneContext.session().project.repository.get();
+        var owningConfig = repo.simConfigIds().stream()
+            .map(id -> (SimulationConfigDocument) repo.node(id))
+            .filter(Objects::nonNull)
+            .filter(cfg -> cfg.config() != null && circuit.id().equals(cfg.config().circuitId()))
+            .findFirst().orElse(null);
+        if (owningConfig != null) {
+            var openBtn = button("Open in editor",
+                () -> paneContext.session().project.openNode(owningConfig.id()));
+            content.getChildren().add(actionRow(openBtn));
+        }
+    }
+
     private Node header(ProjectNode node) {
         var icon = switch (node.kind()) {
             case SEQUENCE -> StudioIcons.create(StudioIconKind.SEQUENCE);
-            case SIMULATION_CONFIG -> StudioIcons.create(StudioIconKind.SIMULATION);
+            case SIMULATION_CONFIG, CIRCUIT -> StudioIcons.create(StudioIconKind.SIMULATION);
             case EIGENFIELD -> StudioIcons.create(StudioIconKind.EIGENFIELD);
         };
         var title = new Label(ProjectDisplayNames.label(node));

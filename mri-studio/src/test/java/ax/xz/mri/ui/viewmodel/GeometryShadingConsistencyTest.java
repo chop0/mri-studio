@@ -44,15 +44,16 @@ class GeometryShadingConsistencyTest {
         int nTau = (int) Math.round(TAU_S / DT);
         var segments = new ArrayList<Segment>();
         var pulse = new ArrayList<PulseSegment>();
+        // Low-field MRI channel layout: [rf_I, rf_Q, gx, gz, rx_gate].
         segments.add(new Segment(DT, 0, n90));
-        pulse.add(filled(n90, new double[]{B1, 0, 0, 0}, 1.0));
+        pulse.add(filled(n90, new double[]{B1, 0, 0, 0, 0}, 1.0));
         segments.add(new Segment(DT, nTau, 0));
-        pulse.add(filled(nTau, new double[]{0, 0, 0, 0}, 0.0));
+        pulse.add(filled(nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
         for (int e = 0; e < nEchoes; e++) {
             segments.add(new Segment(DT, 0, n180));
-            pulse.add(filled(n180, new double[]{0, B1, 0, 0}, 1.0));
+            pulse.add(filled(n180, new double[]{0, B1, 0, 0, 0}, 1.0));
             segments.add(new Segment(DT, 2 * nTau, 0));
-            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0}, 0.0));
+            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
         }
         return new Train(segments, pulse);
     }

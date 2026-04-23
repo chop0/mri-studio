@@ -481,7 +481,10 @@ public final class TimelineInteraction {
     }
 
     private Menu buildRouteTrackMenu(Track track) {
-        var menu = new Menu("Route to Output");
+        // "Send to …" reads naturally even when the user hasn't internalised the
+        // DAW track / circuit voltage-source split: every item is the name of a
+        // circuit source this track's waveform will drive.
+        var menu = new Menu("Send to voltage source");
         for (var channel : session.availableOutputChannels()) {
             var name = session.defaultTrackNameFor(channel);
             var item = new MenuItem(name);

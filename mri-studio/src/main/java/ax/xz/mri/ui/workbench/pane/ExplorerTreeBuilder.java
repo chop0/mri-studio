@@ -27,6 +27,12 @@ public final class ExplorerTreeBuilder {
         }
         if (!simConfigs.getChildren().isEmpty()) root.getChildren().add(simConfigs);
 
+        var circuits = branch("Circuits", null, StudioIconKind.SIMULATION);
+        for (var circuitId : repository.circuitIds()) {
+            circuits.getChildren().add(leaf(repository.node(circuitId), StudioIconKind.SIMULATION));
+        }
+        if (!circuits.getChildren().isEmpty()) root.getChildren().add(circuits);
+
         var eigenfields = branch("Eigenfields", null, StudioIconKind.EIGENFIELD);
         for (var eigenfieldId : repository.eigenfieldIds()) {
             eigenfields.getChildren().add(leaf(repository.node(eigenfieldId), StudioIconKind.EIGENFIELD));
@@ -46,7 +52,7 @@ public final class ExplorerTreeBuilder {
     private static StudioIconKind iconFor(ProjectNodeKind kind) {
         return switch (kind) {
             case SEQUENCE -> StudioIconKind.SEQUENCE;
-            case SIMULATION_CONFIG -> StudioIconKind.SIMULATION;
+            case SIMULATION_CONFIG, CIRCUIT -> StudioIconKind.SIMULATION;
             case EIGENFIELD -> StudioIconKind.EIGENFIELD;
         };
     }

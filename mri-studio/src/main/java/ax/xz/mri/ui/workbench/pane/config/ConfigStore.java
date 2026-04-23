@@ -1,27 +1,22 @@
 package ax.xz.mri.ui.workbench.pane.config;
 
-import ax.xz.mri.model.simulation.DrivePath;
-import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
-import ax.xz.mri.model.simulation.TransmitCoil;
+import ax.xz.mri.project.ProjectNodeId;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.DoubleBinding;
-import javafx.beans.binding.IntegerBinding;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.property.SimpleObjectProperty;
-import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
-
-import java.util.List;
 
 /**
- * Observable store over a {@link SimulationConfig} record. Exposes one JavaFX
- * property per field plus derived bindings. Maintains two-way sync between
- * the record and the properties so the UI can bind plain bidirectionally.
+ * Observable store over a {@link SimulationConfig} record.
+ *
+ * <p>Each field becomes a property that the UI binds bidirectionally; every
+ * edit rebuilds the underlying record and republishes. A re-entrancy guard
+ * prevents oscillation.
  */
 public final class ConfigStore {
     public final ObjectProperty<SimulationConfig> config = new SimpleObjectProperty<>();
@@ -36,13 +31,10 @@ public final class ConfigStore {
     public final IntegerProperty nR               = new SimpleIntegerProperty();
     public final DoubleProperty  referenceB0Tesla = new SimpleDoubleProperty();
     public final DoubleProperty  dtSeconds        = new SimpleDoubleProperty();
-    public final ObservableList<TransmitCoil> transmitCoils = FXCollections.observableArrayList();
-    public final ObservableList<DrivePath> drivePaths = FXCollections.observableArrayList();
-    public final ObservableList<ReceiveCoil> receiveCoils = FXCollections.observableArrayList();
+    public final ObjectProperty<ProjectNodeId> circuitId = new SimpleObjectProperty<>();
 
     public final DoubleBinding  larmorHz;
     public final DoubleBinding  nyquistHz;
-    public final IntegerBinding totalChannels;
 
     private boolean syncing;
 
@@ -53,11 +45,6 @@ public final class ConfigStore {
         nyquistHz = Bindings.createDoubleBinding(
             () -> dtSeconds.get() > 0 ? 1.0 / (2 * dtSeconds.get()) : Double.POSITIVE_INFINITY,
             dtSeconds);
-        totalChannels = Bindings.createIntegerBinding(() -> {
-            int sum = 0;
-            for (var p : drivePaths) sum += p.channelCount();
-            return sum;
-        }, drivePaths);
 
         writeFrom(initial);
         config.set(initial);
@@ -75,12 +62,7 @@ public final class ConfigStore {
             double v = n.doubleValue();
             return v > 0 ? c.withDtSeconds(v) : c;
         }));
-        transmitCoils.addListener((javafx.collections.ListChangeListener<TransmitCoil>) ch ->
-            rebuildFromProperties(c -> c.withTransmitCoils(List.copyOf(transmitCoils))));
-        drivePaths.addListener((javafx.collections.ListChangeListener<DrivePath>) ch ->
-            rebuildFromProperties(c -> c.withDrivePaths(List.copyOf(drivePaths))));
-        receiveCoils.addListener((javafx.collections.ListChangeListener<ReceiveCoil>) ch ->
-            rebuildFromProperties(c -> c.withReceiveCoils(List.copyOf(receiveCoils))));
+        circuitId.addListener((obs, o, n) -> rebuildFromProperties(c -> c.withCircuitId(n)));
 
         config.addListener((obs, oldC, newC) -> {
             if (syncing || newC == null) return;
@@ -120,16 +102,6 @@ public final class ConfigStore {
         nR.set(c.nR());
         referenceB0Tesla.set(c.referenceB0Tesla());
         dtSeconds.set(c.dtSeconds());
-        if (!listEquals(transmitCoils, c.transmitCoils())) transmitCoils.setAll(c.transmitCoils());
-        if (!listEquals(drivePaths, c.drivePaths())) drivePaths.setAll(c.drivePaths());
-        if (!listEquals(receiveCoils, c.receiveCoils())) receiveCoils.setAll(c.receiveCoils());
-    }
-
-    private static <T> boolean listEquals(List<T> a, List<T> b) {
-        if (a.size() != b.size()) return false;
-        for (int i = 0; i < a.size(); i++) {
-            if (!a.get(i).equals(b.get(i))) return false;
-        }
-        return true;
+        circuitId.set(c.circuitId());
     }
 }

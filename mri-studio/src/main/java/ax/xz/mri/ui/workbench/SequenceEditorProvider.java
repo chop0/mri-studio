@@ -97,11 +97,13 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		if (cfg == null) {
 			configStripContainer.getChildren().add(new Label("No simulation config"));
 		} else {
+			var circuit = sessionRef.project.repository.get().circuit(cfg.circuitId());
+			int sourceCount = circuit == null ? 0 : circuit.voltageSources().size();
 			configStripContainer.getChildren().addAll(
 				new Label("B\u2080: " + String.format("%.4f T", cfg.referenceB0Tesla())),
 				new Label("T\u2081: " + String.format("%.0f ms", cfg.t1Ms())),
 				new Label("T\u2082: " + String.format("%.0f ms", cfg.t2Ms())),
-				new Label(cfg.drivePaths().size() + " fields")
+				new Label(sourceCount + " source" + (sourceCount == 1 ? "" : "s"))
 			);
 			var activeConfigId = editSession.activeSimConfigId.get();
 			if (activeConfigId != null) {
