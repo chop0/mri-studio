@@ -26,10 +26,12 @@ import java.util.List;
     @JsonSubTypes.Type(value = CircuitComponent.SwitchComponent.class, name = "switch"),
     @JsonSubTypes.Type(value = CircuitComponent.Coil.class, name = "coil"),
     @JsonSubTypes.Type(value = CircuitComponent.Probe.class, name = "probe"),
-    @JsonSubTypes.Type(value = CircuitComponent.Ground.class, name = "ground"),
     @JsonSubTypes.Type(value = CircuitComponent.Resistor.class, name = "resistor"),
     @JsonSubTypes.Type(value = CircuitComponent.Capacitor.class, name = "capacitor"),
     @JsonSubTypes.Type(value = CircuitComponent.Inductor.class, name = "inductor"),
+    @JsonSubTypes.Type(value = CircuitComponent.ShuntResistor.class, name = "shunt_resistor"),
+    @JsonSubTypes.Type(value = CircuitComponent.ShuntCapacitor.class, name = "shunt_capacitor"),
+    @JsonSubTypes.Type(value = CircuitComponent.ShuntInductor.class, name = "shunt_inductor"),
     @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer")
 })
 public sealed interface CircuitComponent {
@@ -71,7 +73,17 @@ public sealed interface CircuitComponent {
                 throw new IllegalArgumentException("VoltageSource.outputImpedanceOhms must be non-negative, got " + outputImpedanceOhms);
         }
 
-        @Override public List<String> ports() { return List.of("out"); }
+        /**
+         * Two output ports:
+         * <ul>
+         *   <li>{@code out} carries the scheduled voltage.</li>
+         *   <li>{@code active} is a derived 0/1 signal that reads 1 whenever any
+         *       control channel on this source is non-zero this step — the
+         *       "clip is playing" tap. Wire a switch's {@code ctl} here to
+         *       auto-gate an RX path without hand-authoring a GATE source.</li>
+         * </ul>
+         */
+        @Override public List<String> ports() { return List.of("out", "active"); }
 
         @JsonIgnore
         public int channelCount() { return kind.channelCount(); }
@@ -119,7 +131,8 @@ public sealed interface CircuitComponent {
         String name,
         @JsonProperty("closed_ohms") double closedOhms,
         @JsonProperty("open_ohms") double openOhms,
-        @JsonProperty("threshold_volts") double thresholdVolts
+        @JsonProperty("threshold_volts") double thresholdVolts,
+        @JsonProperty("invert_ctl") boolean invertCtl
     ) implements CircuitComponent {
         public SwitchComponent {
             if (id == null) throw new IllegalArgumentException("Switch.id must not be null");
@@ -128,11 +141,20 @@ public sealed interface CircuitComponent {
             if (!(openOhms > closedOhms)) throw new IllegalArgumentException("Switch.openOhms must exceed closedOhms");
         }
 
+        /** Convenience constructor for the common case of a non-inverting switch. */
+        public SwitchComponent(ComponentId id, String name, double closedOhms, double openOhms, double thresholdVolts) {
+            this(id, name, closedOhms, openOhms, thresholdVolts, false);
+        }
+
         @Override public List<String> ports() { return List.of("a", "b", "ctl"); }
 
         @Override
         public SwitchComponent withName(String newName) {
-            return new SwitchComponent(id, newName, closedOhms, openOhms, thresholdVolts);
+            return new SwitchComponent(id, newName, closedOhms, openOhms, thresholdVolts, invertCtl);
+        }
+
+        public SwitchComponent withInvertCtl(boolean invert) {
+            return new SwitchComponent(id, name, closedOhms, openOhms, thresholdVolts, invert);
         }
     }
 
@@ -141,9 +163,10 @@ public sealed interface CircuitComponent {
     /**
      * A physical coil — the bridge between the circuit and the FOV. Carries
      * an {@linkplain #eigenfieldId() eigenfield} describing the B-field
-     * shape at unit current. The current through the coil produces a B
+     * shape at unit current. Current into {@code in} produces a B
      * contribution; the magnetisation's time-derivative (reciprocity)
-     * contributes an EMF between the coil's terminals.
+     * induces an EMF at {@code in}. The return side is always ground, so
+     * coils expose only one wireable terminal.
      */
     record Coil(
         ComponentId id,
@@ -161,7 +184,7 @@ public sealed interface CircuitComponent {
                 throw new IllegalArgumentException("Coil.seriesResistanceOhms must be finite non-negative");
         }
 
-        @Override public List<String> ports() { return List.of("a", "b"); }
+        @Override public List<String> ports() { return List.of("in"); }
 
         @Override
         public Coil withName(String newName) {
@@ -230,21 +253,6 @@ public sealed interface CircuitComponent {
         }
     }
 
-    // ─── Ground ───────────────────────────────────────────────────────────────
-
-    /** The reference node. A circuit must contain at least one. */
-    record Ground(ComponentId id, String name) implements CircuitComponent {
-        public Ground {
-            if (id == null) throw new IllegalArgumentException("Ground.id must not be null");
-            if (name == null || name.isBlank()) throw new IllegalArgumentException("Ground.name must be non-blank");
-        }
-
-        @Override public List<String> ports() { return List.of("a"); }
-
-        @Override
-        public Ground withName(String newName) { return new Ground(id, newName); }
-    }
-
     // ─── Passives ─────────────────────────────────────────────────────────────
 
     record Resistor(ComponentId id, String name, @JsonProperty("resistance_ohms") double resistanceOhms) implements CircuitComponent {
@@ -290,6 +298,41 @@ public sealed interface CircuitComponent {
         public Inductor withName(String newName) { return new Inductor(id, newName, inductanceHenry); }
 
         public Inductor withInductanceHenry(double v) { return new Inductor(id, name, v); }
+    }
+
+    // ─── Shunt passives: one terminal, other side is ground ─────────────────
+
+    record ShuntResistor(ComponentId id, String name, @JsonProperty("resistance_ohms") double resistanceOhms) implements CircuitComponent {
+        public ShuntResistor {
+            if (id == null) throw new IllegalArgumentException("ShuntResistor.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntResistor.name must be non-blank");
+            if (!(resistanceOhms > 0)) throw new IllegalArgumentException("ShuntResistor.resistanceOhms must be > 0");
+        }
+        @Override public List<String> ports() { return List.of("in"); }
+        @Override public ShuntResistor withName(String newName) { return new ShuntResistor(id, newName, resistanceOhms); }
+        public ShuntResistor withResistanceOhms(double v) { return new ShuntResistor(id, name, v); }
+    }
+
+    record ShuntCapacitor(ComponentId id, String name, @JsonProperty("capacitance_farads") double capacitanceFarads) implements CircuitComponent {
+        public ShuntCapacitor {
+            if (id == null) throw new IllegalArgumentException("ShuntCapacitor.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntCapacitor.name must be non-blank");
+            if (!(capacitanceFarads > 0)) throw new IllegalArgumentException("ShuntCapacitor.capacitanceFarads must be > 0");
+        }
+        @Override public List<String> ports() { return List.of("in"); }
+        @Override public ShuntCapacitor withName(String newName) { return new ShuntCapacitor(id, newName, capacitanceFarads); }
+        public ShuntCapacitor withCapacitanceFarads(double v) { return new ShuntCapacitor(id, name, v); }
+    }
+
+    record ShuntInductor(ComponentId id, String name, @JsonProperty("inductance_henry") double inductanceHenry) implements CircuitComponent {
+        public ShuntInductor {
+            if (id == null) throw new IllegalArgumentException("ShuntInductor.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntInductor.name must be non-blank");
+            if (!(inductanceHenry > 0)) throw new IllegalArgumentException("ShuntInductor.inductanceHenry must be > 0");
+        }
+        @Override public List<String> ports() { return List.of("in"); }
+        @Override public ShuntInductor withName(String newName) { return new ShuntInductor(id, newName, inductanceHenry); }
+        public ShuntInductor withInductanceHenry(double v) { return new ShuntInductor(id, name, v); }
     }
 
     /** Ideal two-port transformer with ports {@code pa}, {@code pb} (primary) and {@code sa}, {@code sb} (secondary). */

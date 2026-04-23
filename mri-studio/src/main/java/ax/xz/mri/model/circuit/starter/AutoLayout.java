@@ -31,7 +31,7 @@ public final class AutoLayout {
 
     public static CircuitLayout arrange(List<CircuitComponent> components, List<Wire> wires) {
         var layout = CircuitLayout.empty();
-        int[] rowsPerColumn = new int[5];
+        int[] rowsPerColumn = new int[4];
         for (var component : components) {
             int col = columnFor(component);
             double x = ORIGIN_X + col * COLUMN_SPACING;
@@ -60,12 +60,14 @@ public final class AutoLayout {
         return switch (component) {
             case CircuitComponent.VoltageSource v -> 0;
             case CircuitComponent.SwitchComponent s -> 1;
-            case CircuitComponent.Coil c -> 2;
-            case CircuitComponent.Probe p -> 3;
-            case CircuitComponent.Ground g -> 4;
             case CircuitComponent.Resistor r -> 1;
             case CircuitComponent.Capacitor c -> 1;
             case CircuitComponent.Inductor l -> 1;
+            case CircuitComponent.ShuntResistor r -> 2;
+            case CircuitComponent.ShuntCapacitor c -> 2;
+            case CircuitComponent.ShuntInductor l -> 2;
+            case CircuitComponent.Coil c -> 2;
+            case CircuitComponent.Probe p -> 3;
             case CircuitComponent.IdealTransformer t -> 2;
         };
     }

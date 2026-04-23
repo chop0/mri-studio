@@ -11,6 +11,7 @@ module ax.xz.mri {
     opens ax.xz.mri.model.sequence to com.fasterxml.jackson.databind;
     opens ax.xz.mri.model.simulation to com.fasterxml.jackson.databind;
     opens ax.xz.mri.model.scenario to com.fasterxml.jackson.databind;
+    opens ax.xz.mri.model.circuit to com.fasterxml.jackson.databind;
     opens ax.xz.mri.project to com.fasterxml.jackson.databind;
     opens ax.xz.mri.ui.workbench to com.fasterxml.jackson.databind;
     opens ax.xz.mri.ui.workbench.layout to com.fasterxml.jackson.databind;

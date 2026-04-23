@@ -28,20 +28,23 @@ public record ComponentGeometry(double width, double height, List<Terminal> term
 
     public static ComponentGeometry of(CircuitComponent component) {
         return switch (component) {
-            case CircuitComponent.VoltageSource ignored -> SINGLE_TERMINAL_OUT;
+            case CircuitComponent.VoltageSource ignored -> new ComponentGeometry(90, 70, List.of(
+                new Terminal("out", 45, 0),
+                new Terminal("active", 0, 35)
+            ));
             case CircuitComponent.SwitchComponent ignored -> new ComponentGeometry(90, 70, List.of(
                 new Terminal("a", -45, 0),
                 new Terminal("b", 45, 0),
                 new Terminal("ctl", 0, 35)
             ));
-            case CircuitComponent.Coil ignored -> TWO_TERMINAL_HORIZONTAL;
+            case CircuitComponent.Coil ignored -> SINGLE_TERMINAL_IN;
             case CircuitComponent.Probe ignored -> SINGLE_TERMINAL_IN;
-            case CircuitComponent.Ground ignored -> new ComponentGeometry(40, 40, List.of(
-                new Terminal("a", 0, -20)
-            ));
             case CircuitComponent.Resistor ignored -> TWO_TERMINAL_HORIZONTAL;
             case CircuitComponent.Capacitor ignored -> TWO_TERMINAL_HORIZONTAL;
             case CircuitComponent.Inductor ignored -> TWO_TERMINAL_HORIZONTAL;
+            case CircuitComponent.ShuntResistor ignored -> SINGLE_TERMINAL_IN;
+            case CircuitComponent.ShuntCapacitor ignored -> SINGLE_TERMINAL_IN;
+            case CircuitComponent.ShuntInductor ignored -> SINGLE_TERMINAL_IN;
             case CircuitComponent.IdealTransformer ignored -> new ComponentGeometry(100, 80, List.of(
                 new Terminal("pa", -50, -20),
                 new Terminal("pb", -50, 20),
@@ -54,10 +57,6 @@ public record ComponentGeometry(double width, double height, List<Terminal> term
     private static final ComponentGeometry TWO_TERMINAL_HORIZONTAL = new ComponentGeometry(90, 60, List.of(
         new Terminal("a", -45, 0),
         new Terminal("b", 45, 0)
-    ));
-
-    private static final ComponentGeometry SINGLE_TERMINAL_OUT = new ComponentGeometry(90, 60, List.of(
-        new Terminal("out", 45, 0)
     ));
 
     private static final ComponentGeometry SINGLE_TERMINAL_IN = new ComponentGeometry(90, 60, List.of(

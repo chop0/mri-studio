@@ -7,10 +7,6 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
-import javafx.scene.control.ScrollPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 
 import java.util.UUID;
@@ -30,21 +26,19 @@ public final class ComponentPalette extends VBox {
         getChildren().add(header);
 
         addSection("Sources");
-        addButton("Voltage source (REAL)", "Real-valued drive",
+        addButton("Voltage source (real)", "Real-valued drive",
             onPick, () -> newSource(AmplitudeKind.REAL, "Source"));
         addButton("RF source (I/Q)", "Two-channel RF drive",
             onPick, () -> newSource(AmplitudeKind.QUADRATURE, "RF"));
-        addButton("Static source (B0-like)", "Fixed amplitude",
+        addButton("Static source", "Fixed amplitude (B0-like)",
             onPick, () -> newSource(AmplitudeKind.STATIC, "Static"));
         addButton("Gate source", "0/1 digital signal",
             onPick, () -> newSource(AmplitudeKind.GATE, "Gate"));
 
-        addSection("Connectors");
-        addButton("Switch", "Gate-controlled T/R switch",
+        addSection("Switch");
+        addButton("Switch", "Gated pass-through",
             onPick, () -> new CircuitComponent.SwitchComponent(
                 newId("sw"), "Switch", 0.5, 1e9, 0.5));
-        addButton("Ground", "Reference node",
-            onPick, () -> new CircuitComponent.Ground(newId("gnd"), "GND"));
 
         addSection("Coils + probes");
         addButton("Coil", "Bridges circuit and FOV",
@@ -52,13 +46,21 @@ public final class ComponentPalette extends VBox {
         addButton("Probe", "Voltage measurement",
             onPick, () -> new CircuitComponent.Probe(newId("probe"), "Probe", 1, 0, Double.POSITIVE_INFINITY));
 
-        addSection("Passives");
-        addButton("Resistor", "Linear resistance",
+        addSection("Series passives");
+        addButton("Resistor (series)", "Linear resistance inline",
             onPick, () -> new CircuitComponent.Resistor(newId("r"), "R", 50));
-        addButton("Capacitor", "Reactive capacitance",
+        addButton("Capacitor (series)", "Reactive capacitance inline",
             onPick, () -> new CircuitComponent.Capacitor(newId("c"), "C", 1e-9));
-        addButton("Inductor", "Reactive inductance",
+        addButton("Inductor (series)", "Reactive inductance inline",
             onPick, () -> new CircuitComponent.Inductor(newId("l"), "L", 1e-6));
+
+        addSection("Parallel (shunt to ground)");
+        addButton("Resistor (parallel)", "Shunt resistance to ground",
+            onPick, () -> new CircuitComponent.ShuntResistor(newId("rshunt"), "Rp", 50));
+        addButton("Capacitor (parallel)", "Shunt capacitance to ground",
+            onPick, () -> new CircuitComponent.ShuntCapacitor(newId("cshunt"), "Cp", 1e-9));
+        addButton("Inductor (parallel)", "Shunt inductance to ground",
+            onPick, () -> new CircuitComponent.ShuntInductor(newId("lshunt"), "Lp", 1e-6));
     }
 
     private void addSection(String title) {

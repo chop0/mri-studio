@@ -78,7 +78,7 @@ public final class SchematicPane extends BorderPane {
         // over the schematic pane, no focus wrestling.
         addEventFilter(KeyEvent.KEY_PRESSED, this::onKey);
 
-        canvas.setContextMenuRequested((hit, evt) -> showContextMenu(hit));
+        canvas.setContextMenuRequested((hit, req) -> showContextMenu(hit, req));
         canvas.setOnComponentActivated(id -> {
             var component = session.componentAt(id);
             if (component instanceof CircuitComponent.Coil coil && coil.eigenfieldId() != null) {
@@ -139,7 +139,7 @@ public final class SchematicPane extends BorderPane {
         var doc = session.doc();
         int components = doc.components().size();
         int wires = doc.wires().size();
-        hint.setText(components + " components \u00b7 " + wires + " wires");
+        hint.setText(components + " components, " + wires + " wires");
     }
 
     private void armPlacement(CircuitComponent component) {
@@ -147,7 +147,7 @@ public final class SchematicPane extends BorderPane {
         session.statusMessage.set("Click on the canvas to place " + component.name() + ". Press Esc to cancel.");
     }
 
-    private void showContextMenu(SchematicCanvas.Hit hit) {
+    private void showContextMenu(SchematicCanvas.Hit hit, SchematicCanvas.ContextMenuRequest req) {
         var menu = new ContextMenu();
         switch (hit.kind()) {
             case COMPONENT -> populateComponentMenu(menu, hit);
@@ -155,8 +155,7 @@ public final class SchematicPane extends BorderPane {
             case TERMINAL -> populateTerminalMenu(menu, hit);
             case EMPTY -> populateAddMenu(menu, hit);
         }
-        menu.show(canvas, canvas.localToScreen(hit.worldX(), hit.worldY()).getX(),
-            canvas.localToScreen(hit.worldX(), hit.worldY()).getY());
+        if (!menu.getItems().isEmpty()) menu.show(canvas, req.screenX(), req.screenY());
     }
 
     private void populateComponentMenu(ContextMenu menu, SchematicCanvas.Hit hit) {
@@ -208,14 +207,19 @@ public final class SchematicPane extends BorderPane {
         addMenu(menu, "Probe", () -> new CircuitComponent.Probe(
             newId("probe"), uniqueName("Probe"), 1, 0, Double.POSITIVE_INFINITY), hit);
         menu.getItems().add(new SeparatorMenuItem());
-        addMenu(menu, "Resistor", () -> new CircuitComponent.Resistor(
+        addMenu(menu, "Resistor (series)", () -> new CircuitComponent.Resistor(
             newId("r"), uniqueName("R"), 50), hit);
-        addMenu(menu, "Capacitor", () -> new CircuitComponent.Capacitor(
+        addMenu(menu, "Capacitor (series)", () -> new CircuitComponent.Capacitor(
             newId("c"), uniqueName("C"), 1e-9), hit);
-        addMenu(menu, "Inductor", () -> new CircuitComponent.Inductor(
+        addMenu(menu, "Inductor (series)", () -> new CircuitComponent.Inductor(
             newId("l"), uniqueName("L"), 1e-6), hit);
         menu.getItems().add(new SeparatorMenuItem());
-        addMenu(menu, "Ground", () -> new CircuitComponent.Ground(newId("gnd"), uniqueName("GND")), hit);
+        addMenu(menu, "Resistor (parallel)", () -> new CircuitComponent.ShuntResistor(
+            newId("rshunt"), uniqueName("Rp"), 50), hit);
+        addMenu(menu, "Capacitor (parallel)", () -> new CircuitComponent.ShuntCapacitor(
+            newId("cshunt"), uniqueName("Cp"), 1e-9), hit);
+        addMenu(menu, "Inductor (parallel)", () -> new CircuitComponent.ShuntInductor(
+            newId("lshunt"), uniqueName("Lp"), 1e-6), hit);
     }
 
     private void addMenu(ContextMenu menu, String label, java.util.function.Supplier<CircuitComponent> factory,

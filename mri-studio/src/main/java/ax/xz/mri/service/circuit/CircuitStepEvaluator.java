@@ -45,12 +45,17 @@ public final class CircuitStepEvaluator {
         }
         for (int i = 0; i < switchClosed.length; i++) {
             var sw = compiled.switches().get(i);
+            boolean raw;
             if (sw.ctlSourceIndex() < 0) {
-                switchClosed[i] = false;
+                raw = false;
+            } else if (sw.ctlViaActive()) {
+                var src = compiled.sources().get(sw.ctlSourceIndex());
+                raw = sourceActive(src, controls);
             } else {
                 double ctl = sourceValues[sw.ctlSourceIndex()];
-                switchClosed[i] = ctl >= sw.thresholdVolts();
+                raw = ctl >= sw.thresholdVolts();
             }
+            switchClosed[i] = sw.invertCtl() ? !raw : raw;
         }
         java.util.Arrays.fill(coilDriveI, 0);
         java.util.Arrays.fill(coilDriveQ, 0);
@@ -89,5 +94,16 @@ public final class CircuitStepEvaluator {
     public boolean allClosed(java.util.List<Integer> switchIndices) {
         for (int idx : switchIndices) if (!switchClosed[idx]) return false;
         return true;
+    }
+
+    /** Any of the source's control channels is non-zero this step. */
+    public static boolean sourceActive(CompiledCircuit.CompiledSource src, double[] controls) {
+        int count = src.channelCount();
+        int offset = src.channelOffset();
+        for (int i = 0; i < count; i++) {
+            if (controls[offset + i] != 0.0) return true;
+        }
+        // STATIC sources are always "active" in the sense that their staticAmplitude flows.
+        return src.kind() == ax.xz.mri.model.simulation.AmplitudeKind.STATIC && src.staticAmplitude() != 0.0;
     }
 }

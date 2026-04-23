@@ -24,13 +24,9 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for explicit switch-gated acquisition (the M3 milestone) and basic
- * symmetry declarations on eigenfields.
- *
- * <p>Under the circuit model there's no more implicit "rfGate" hint driving the
- * receive path; a probe only observes the signal when every switch on its
- * topology link to a coil is closed. A GATE voltage source wired to a switch's
- * {@code ctl} port opens/closes the path.
+ * Tests for explicit switch-gated acquisition and basic symmetry declarations
+ * on eigenfields. A probe only observes when every switch on its topology
+ * link is closed.
  */
 class AcquisitionGateAndSymmetryTest {
 
@@ -73,29 +69,22 @@ class AcquisitionGateAndSymmetryTest {
             "RX Gate", AmplitudeKind.GATE, 0, 0, 1, 0);
         var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", b0Id, 0, 0);
         var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxId, 0, 0);
-        var rxSwitch = new CircuitComponent.SwitchComponent(
-            new ComponentId("sw-rx"), "RX Switch", 0.5, 1e9, 0.5);
-        var probe = new CircuitComponent.Probe(new ComponentId("probe-rx"),
-            "RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd-0"), "GND");
+        var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "RX Switch", 0.5, 1e9, 0.5);
+        var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
 
         var wires = new ArrayList<Wire>();
-        wires.add(new Wire("w-b0-out", new ComponentTerminal(b0Src.id(), "out"), new ComponentTerminal(b0Coil.id(), "a")));
-        wires.add(new Wire("w-b0-g",   new ComponentTerminal(b0Coil.id(), "b"), new ComponentTerminal(gnd.id(), "a")));
-        wires.add(new Wire("w-probe-in", new ComponentTerminal(probe.id(), "in"), new ComponentTerminal(rxSwitch.id(), "a")));
-        wires.add(new Wire("w-probe-sw", new ComponentTerminal(rxSwitch.id(), "b"), new ComponentTerminal(rxCoil.id(), "a")));
-        wires.add(new Wire("w-rx-g",     new ComponentTerminal(rxCoil.id(), "b"), new ComponentTerminal(gnd.id(), "a")));
-        wires.add(new Wire("w-ctl-out",  new ComponentTerminal(rxGate.id(), "out"), new ComponentTerminal(rxSwitch.id(), "ctl")));
+        wires.add(new Wire("w-b0",        new ComponentTerminal(b0Src.id(), "out"), new ComponentTerminal(b0Coil.id(), "in")));
+        wires.add(new Wire("w-probe-in",  new ComponentTerminal(probe.id(), "in"), new ComponentTerminal(sw.id(), "a")));
+        wires.add(new Wire("w-probe-sw",  new ComponentTerminal(sw.id(), "b"), new ComponentTerminal(rxCoil.id(), "in")));
+        wires.add(new Wire("w-ctl",       new ComponentTerminal(rxGate.id(), "out"), new ComponentTerminal(sw.id(), "ctl")));
 
         var circuitId = new ProjectNodeId("circuit-0");
         var circuit = new CircuitDocument(circuitId, "Test",
-            List.of(b0Src, rxGate, b0Coil, rxCoil, rxSwitch, probe, gnd),
-            wires, CircuitLayout.empty());
+            List.of(b0Src, rxGate, b0Coil, rxCoil, sw, probe), wires, CircuitLayout.empty());
         repo.addCircuit(circuit);
 
         var cfg = new SimulationConfig(1000, 1000, GAMMA, 5, 20, 10, 3, 3, B0, DT, circuitId);
 
-        // Two segments: gate open (ctl >= threshold) then closed. Controls layout: [rx_gate].
         var firstHalf = new PulseSegment(filled(10, 1.0));
         var secondHalf = new PulseSegment(filled(10, 0.0));
         var segments = List.of(new Segment(DT, 10, 0), new Segment(DT, 10, 0));
@@ -106,7 +95,6 @@ class AcquisitionGateAndSymmetryTest {
         assertFalse(signals.byProbe().isEmpty(), "Probe should emit a trace");
 
         var trace = signals.byProbe().values().iterator().next();
-        // When the gate goes low, the probe must report (0, 0).
         var closedPhase = trace.points().stream()
             .filter(p -> p.tMicros() >= 10 * DT * 1e6)
             .toList();

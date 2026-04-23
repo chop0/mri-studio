@@ -65,11 +65,18 @@ public record CompiledCircuit(
      * {@link CompiledCircuit#sources()} of the source whose value drives the
      * switch's {@code ctl} port — or {@code -1} if the ctl is floating (in
      * which case the switch is treated as permanently open).
+     *
+     * <p>When {@link #ctlViaActive()} is {@code true}, the ctl was wired to
+     * the source's {@code active} port rather than its {@code out} port, so
+     * the switch closes whenever any clip is currently driving the source
+     * (instead of reading the raw voltage).
      */
     public record CompiledSwitch(
         ComponentId id,
         String name,
         int ctlSourceIndex,
+        boolean ctlViaActive,
+        boolean invertCtl,
         double closedOhms,
         double openOhms,
         double thresholdVolts

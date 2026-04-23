@@ -27,11 +27,8 @@ public final class ExplorerTreeBuilder {
         }
         if (!simConfigs.getChildren().isEmpty()) root.getChildren().add(simConfigs);
 
-        var circuits = branch("Circuits", null, StudioIconKind.SIMULATION);
-        for (var circuitId : repository.circuitIds()) {
-            circuits.getChildren().add(leaf(repository.node(circuitId), StudioIconKind.SIMULATION));
-        }
-        if (!circuits.getChildren().isEmpty()) root.getChildren().add(circuits);
+        // Circuits are not a first-class browse target yet: they're always paired
+        // with a sim-config, so the user reaches them via the config's editor.
 
         var eigenfields = branch("Eigenfields", null, StudioIconKind.EIGENFIELD);
         for (var eigenfieldId : repository.eigenfieldIds()) {

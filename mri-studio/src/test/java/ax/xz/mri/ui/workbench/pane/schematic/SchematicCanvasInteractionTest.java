@@ -131,16 +131,13 @@ class SchematicCanvasInteractionTest {
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd"), "GND");
         var wires = List.of(
-            new Wire("w1", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "a")),
-            new Wire("w3", new ComponentTerminal(coil.id(), "b"), new ComponentTerminal(gnd.id(), "a"))
+            new Wire("w1", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"))
         );
         var layout = CircuitLayout.empty()
             .with(new ComponentPosition(src.id(), 100, 100, 0))
-            .with(new ComponentPosition(coil.id(), 300, 100, 0))
-            .with(new ComponentPosition(gnd.id(), 500, 100, 0));
+            .with(new ComponentPosition(coil.id(), 300, 100, 0));
         return new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(src, coil, gnd), wires, layout);
+            List.of(src, coil), wires, layout);
     }
 }

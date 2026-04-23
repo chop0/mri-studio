@@ -153,14 +153,23 @@ public final class BlochSimulator {
         boolean[] closed = new boolean[nSwitches];
         for (int i = 0; i < nSwitches; i++) {
             var sw = compiled.switches().get(i);
-            if (sw.ctlSourceIndex() < 0) { closed[i] = false; continue; }
-            var ctl = compiled.sources().get(sw.ctlSourceIndex());
-            double v = switch (ctl.kind()) {
-                case STATIC -> ctl.staticAmplitude();
-                case REAL, GATE -> controls[ctl.channelOffset()];
-                case QUADRATURE -> Math.hypot(controls[ctl.channelOffset()], controls[ctl.channelOffset() + 1]);
-            };
-            closed[i] = v >= sw.thresholdVolts();
+            boolean raw;
+            if (sw.ctlSourceIndex() < 0) {
+                raw = false;
+            } else {
+                var ctl = compiled.sources().get(sw.ctlSourceIndex());
+                if (sw.ctlViaActive()) {
+                    raw = ax.xz.mri.service.circuit.CircuitStepEvaluator.sourceActive(ctl, controls);
+                } else {
+                    double v = switch (ctl.kind()) {
+                        case STATIC -> ctl.staticAmplitude();
+                        case REAL, GATE -> controls[ctl.channelOffset()];
+                        case QUADRATURE -> Math.hypot(controls[ctl.channelOffset()], controls[ctl.channelOffset() + 1]);
+                    };
+                    raw = v >= sw.thresholdVolts();
+                }
+            }
+            closed[i] = sw.invertCtl() ? !raw : raw;
         }
         for (var link : compiled.drives()) {
             if (!allClosed(link.switchIndices(), closed)) continue;

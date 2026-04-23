@@ -955,7 +955,7 @@
 
 /* ---- Schematic editor ---- */
 .schematic-toolbar {
-    -fx-background-color: -studio-panel-bg;
+    -fx-background-color: -studio-surface-muted;
     -fx-border-color: transparent transparent -studio-border-subtle transparent;
     -fx-border-width: 0 0 1 0;
 }
@@ -964,14 +964,22 @@
     -fx-font-size: 11px;
     -fx-background-radius: 4;
     -fx-border-radius: 4;
+    -fx-background-color: transparent;
+    -fx-text-fill: -studio-text;
+}
+.schematic-toolbar-button:hover {
+    -fx-background-color: -studio-surface-hover;
 }
 .schematic-toolbar-button:selected {
     -fx-background-color: -studio-accent;
-    -fx-text-fill: white;
+    -fx-text-fill: -studio-text-inverse;
 }
 .schematic-toolbar-hint {
     -fx-font-size: 10px;
     -fx-text-fill: -studio-text-tertiary;
+}
+.schematic-inspector {
+    -fx-background-color: -studio-surface;
 }
 .schematic-inspector-title {
     -fx-font-weight: 700;
@@ -989,8 +997,15 @@
     -fx-font-size: 11px;
     -fx-text-fill: -studio-accent;
 }
+.schematic-palette-scroll, .schematic-inspector-scroll {
+    -fx-background-color: -studio-surface-muted;
+    -fx-pref-width: 220;
+}
+.schematic-canvas-host {
+    -fx-background-color: -studio-surface-alt;
+}
 .schematic-status-bar {
-    -fx-background-color: -studio-panel-bg;
+    -fx-background-color: -studio-surface-muted;
     -fx-border-color: -studio-border-subtle transparent transparent transparent;
     -fx-border-width: 1 0 0 0;
     -fx-font-size: 10px;

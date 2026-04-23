@@ -87,8 +87,17 @@ public final class CircuitEditSession {
     }
 
     public void addComponent(CircuitComponent component, ComponentPosition position) {
-        apply(doc -> doc.addComponent(component, position));
-        selectOnly(component.id());
+        var existing = new java.util.HashSet<String>();
+        for (var c : doc().components()) existing.add(c.name());
+        var withUniqueName = existing.contains(component.name())
+            ? component.withName(uniqueName(existing, component.name()))
+            : component;
+        var finalPosition = (position == null || !position.id().equals(withUniqueName.id()))
+            ? (position == null ? null
+                : new ComponentPosition(withUniqueName.id(), position.x(), position.y(), position.rotationQuarters()))
+            : position;
+        apply(doc -> doc.addComponent(withUniqueName, finalPosition));
+        selectOnly(withUniqueName.id());
     }
 
     public void replaceComponent(CircuitComponent updated) {
@@ -99,7 +108,34 @@ public final class CircuitEditSession {
         apply(doc -> {
             var existing = doc.layout().positionOf(id).orElse(null);
             int rot = existing == null ? 0 : existing.rotationQuarters();
-            return doc.withLayout(doc.layout().with(new ComponentPosition(id, newX, newY, rot)));
+            boolean mirrored = existing != null && existing.mirrored();
+            return doc.withLayout(doc.layout().with(new ComponentPosition(id, newX, newY, rot, mirrored)));
+        });
+    }
+
+    /** Rotate every selected component 90 degrees clockwise. */
+    public void rotateSelection() {
+        if (selectedComponents.isEmpty()) return;
+        apply(doc -> {
+            var layout = doc.layout();
+            for (var id : selectedComponents) {
+                var pos = layout.positionOf(id).orElse(null);
+                if (pos != null) layout = layout.with(pos.withRotationQuarters(pos.rotationQuarters() + 1));
+            }
+            return doc.withLayout(layout);
+        });
+    }
+
+    /** Flip every selected component horizontally. */
+    public void mirrorSelection() {
+        if (selectedComponents.isEmpty()) return;
+        apply(doc -> {
+            var layout = doc.layout();
+            for (var id : selectedComponents) {
+                var pos = layout.positionOf(id).orElse(null);
+                if (pos != null) layout = layout.with(pos.withMirrored(!pos.mirrored()));
+            }
+            return doc.withLayout(layout);
         });
     }
 
@@ -190,15 +226,17 @@ public final class CircuitEditSession {
                 newId, v.name(), v.kind(), v.carrierHz(),
                 v.minAmplitude(), v.maxAmplitude(), v.outputImpedanceOhms());
             case CircuitComponent.SwitchComponent s -> new CircuitComponent.SwitchComponent(
-                newId, s.name(), s.closedOhms(), s.openOhms(), s.thresholdVolts());
+                newId, s.name(), s.closedOhms(), s.openOhms(), s.thresholdVolts(), s.invertCtl());
             case CircuitComponent.Coil c -> new CircuitComponent.Coil(
                 newId, c.name(), c.eigenfieldId(), c.selfInductanceHenry(), c.seriesResistanceOhms());
             case CircuitComponent.Probe p -> new CircuitComponent.Probe(
                 newId, p.name(), p.gain(), p.demodPhaseDeg(), p.loadImpedanceOhms());
-            case CircuitComponent.Ground g -> new CircuitComponent.Ground(newId, g.name());
             case CircuitComponent.Resistor r -> new CircuitComponent.Resistor(newId, r.name(), r.resistanceOhms());
             case CircuitComponent.Capacitor c -> new CircuitComponent.Capacitor(newId, c.name(), c.capacitanceFarads());
             case CircuitComponent.Inductor l -> new CircuitComponent.Inductor(newId, l.name(), l.inductanceHenry());
+            case CircuitComponent.ShuntResistor r -> new CircuitComponent.ShuntResistor(newId, r.name(), r.resistanceOhms());
+            case CircuitComponent.ShuntCapacitor c -> new CircuitComponent.ShuntCapacitor(newId, c.name(), c.capacitanceFarads());
+            case CircuitComponent.ShuntInductor l -> new CircuitComponent.ShuntInductor(newId, l.name(), l.inductanceHenry());
             case CircuitComponent.IdealTransformer t -> new CircuitComponent.IdealTransformer(newId, t.name(), t.turnsRatio());
         };
     }

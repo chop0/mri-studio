@@ -66,9 +66,11 @@ public final class SchematicCanvas extends Canvas {
     private final javafx.beans.property.ObjectProperty<PrimaryMode> primaryMode =
         new javafx.beans.property.SimpleObjectProperty<>(PrimaryMode.SELECT);
 
-    private BiConsumer<Hit, javafx.scene.input.MouseEvent> contextMenuHandler;
+    private BiConsumer<Hit, ContextMenuRequest> contextMenuHandler;
     private Consumer<ComponentId> onComponentActivated;
     private Runnable onEmptyCanvasActivated;
+
+    public record ContextMenuRequest(double screenX, double screenY) {}
 
     public SchematicCanvas(CircuitEditSession session) {
         this.session = session;
@@ -87,10 +89,14 @@ public final class SchematicCanvas extends Canvas {
         setOnMouseClicked(this::onMouseClicked);
         setOnScroll(this::onScroll);
         setOnKeyPressed(this::onKeyPressed);
+        // Grab focus whenever the pointer is over the canvas so Delete/Esc work
+        // even when the user hasn't clicked first.
+        setOnMouseEntered(e -> requestFocus());
         setOnContextMenuRequested(evt -> {
             if (contextMenuHandler != null) {
                 var hit = hitTest(evt.getX(), evt.getY());
-                contextMenuHandler.accept(hit, null);
+                contextMenuHandler.accept(hit, new ContextMenuRequest(evt.getScreenX(), evt.getScreenY()));
+                evt.consume();
             }
         });
 
@@ -100,7 +106,7 @@ public final class SchematicCanvas extends Canvas {
 
     // ───────── API ─────────
 
-    public void setContextMenuRequested(BiConsumer<Hit, javafx.scene.input.MouseEvent> handler) {
+    public void setContextMenuRequested(BiConsumer<Hit, ContextMenuRequest> handler) {
         this.contextMenuHandler = handler;
     }
 
@@ -250,7 +256,7 @@ public final class SchematicCanvas extends Canvas {
             boolean selected = session.selectedComponents.contains(c.id());
             boolean hovered = c.id().equals(hoveredComponent)
                 && (hoveredTerminal == null || !hoveredTerminal.kind().isTerminal());
-            ComponentRenderer.draw(g, c, pos.x(), pos.y(), selected, hovered);
+            ComponentRenderer.draw(g, c, pos, selected, hovered);
         }
     }
 
@@ -273,7 +279,9 @@ public final class SchematicCanvas extends Canvas {
             var prototype = tool.placementPrototype();
             if (prototype != null) {
                 g.setGlobalAlpha(0.45);
-                ComponentRenderer.draw(g, prototype, lastMouseWorldX, lastMouseWorldY, false, false);
+                var phantomPos = new ax.xz.mri.model.circuit.ComponentPosition(
+                    prototype.id(), lastMouseWorldX, lastMouseWorldY, 0, false);
+                ComponentRenderer.draw(g, prototype, phantomPos, false, false);
                 g.setGlobalAlpha(1);
             }
         }
@@ -288,7 +296,8 @@ public final class SchematicCanvas extends Canvas {
         if (pos == null) return null;
         var geom = ComponentGeometry.of(comp);
         var term = geom.terminal(terminal.port());
-        return new double[]{pos.x() + term.xOffset(), pos.y() + term.yOffset()};
+        var xform = pos.transformOffset(term.xOffset(), term.yOffset());
+        return new double[]{pos.x() + xform[0], pos.y() + xform[1]};
     }
 
     /** Determine what's under a canvas-space point (scene coords). */
@@ -302,21 +311,26 @@ public final class SchematicCanvas extends Canvas {
             if (pos == null) continue;
             var geom = ComponentGeometry.of(c);
             for (var t : geom.terminals()) {
-                double tx = pos.x() + t.xOffset();
-                double ty = pos.y() + t.yOffset();
+                var xform = pos.transformOffset(t.xOffset(), t.yOffset());
+                double tx = pos.x() + xform[0];
+                double ty = pos.y() + xform[1];
                 if (Math.hypot(worldX - tx, worldY - ty) <= TERMINAL_HIT_RADIUS) {
                     return Hit.terminal(new ComponentTerminal(c.id(), t.port()), tx, ty);
                 }
             }
         }
-        // Component bodies next.
+        // Component bodies next. Rotation can make width/height swap; 90/270 turns
+        // swap the effective bounding box.
         for (int i = doc.components().size() - 1; i >= 0; i--) {
             var c = doc.components().get(i);
             var pos = doc.layout().positionOf(c.id()).orElse(null);
             if (pos == null) continue;
             var geom = ComponentGeometry.of(c);
-            if (worldX >= pos.x() - geom.halfWidth() && worldX <= pos.x() + geom.halfWidth()
-                    && worldY >= pos.y() - geom.halfHeight() && worldY <= pos.y() + geom.halfHeight()) {
+            boolean sideways = pos.rotationQuarters() % 2 == 1;
+            double hw = sideways ? geom.halfHeight() : geom.halfWidth();
+            double hh = sideways ? geom.halfWidth() : geom.halfHeight();
+            if (worldX >= pos.x() - hw && worldX <= pos.x() + hw
+                    && worldY >= pos.y() - hh && worldY <= pos.y() + hh) {
                 return Hit.component(c.id(), pos.x(), pos.y());
             }
         }
@@ -517,6 +531,14 @@ public final class SchematicCanvas extends Canvas {
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.D) {
             session.duplicateSelection(40, 40);
+            return true;
+        }
+        if (e.isShortcutDown() && e.getCode() == KeyCode.R) {
+            session.rotateSelection();
+            return true;
+        }
+        if (e.isShortcutDown() && e.getCode() == KeyCode.E) {
+            session.mirrorSelection();
             return true;
         }
         if (e.isShortcutDown() && (e.getCode() == KeyCode.PLUS || e.getCode() == KeyCode.EQUALS)) {

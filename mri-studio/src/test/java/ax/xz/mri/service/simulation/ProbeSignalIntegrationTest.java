@@ -23,9 +23,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * End-to-end probe-signal tests. A gated probe should be silent while its
- * switch is open; a probe on an iso-directional coil should read the
- * expected reciprocity integral while the switch is closed.
+ * End-to-end probe-signal test: a gated probe should be silent while its
+ * switch is open.
  */
 class ProbeSignalIntegrationTest {
 
@@ -45,24 +44,20 @@ class ProbeSignalIntegrationTest {
         var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxEf, 0, 0);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "SW", 0.5, 1e9, 0.5);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd"), "GND");
 
         var wires = List.of(
-            wire("w-b0-out", b0Src.id(), "out", b0Coil.id(), "a"),
-            wire("w-b0-g",   b0Coil.id(), "b", gnd.id(), "a"),
-            // Probe observes RX Coil through the switch.
+            wire("w-b0", b0Src.id(), "out", b0Coil.id(), "in"),
+            // Probe observes RX coil through the switch.
             wire("w-probe-in", probe.id(), "in", sw.id(), "a"),
-            wire("w-probe-sw", sw.id(), "b", rxCoil.id(), "a"),
-            wire("w-rx-g",     rxCoil.id(), "b", gnd.id(), "a"),
-            // Gate controls the switch.
-            wire("w-ctl-out", gate.id(), "out", sw.id(), "ctl")
+            wire("w-probe-sw", sw.id(), "b", rxCoil.id(), "in"),
+            // Gate drives the switch (positive: closed when gate == 1).
+            wire("w-ctl", gate.id(), "out", sw.id(), "ctl")
         );
         var circuitId = new ProjectNodeId("c");
         var circuit = new CircuitDocument(circuitId, "T",
-            List.of(b0Src, gate, b0Coil, rxCoil, sw, probe, gnd), wires, CircuitLayout.empty());
+            List.of(b0Src, gate, b0Coil, rxCoil, sw, probe), wires, CircuitLayout.empty());
         repo.addCircuit(circuit);
 
-        // Single channel: RX Gate (GATE, 1). 10 open steps + 10 closed steps.
         var config = new SimulationConfig(1000, 1000, GAMMA, 5, 20, 10, 3, 3, B0, DT, circuitId);
         var steps = new ArrayList<PulseStep>();
         for (int i = 0; i < 10; i++) steps.add(new PulseStep(new double[]{1.0}, 0.0));
@@ -79,8 +74,6 @@ class ProbeSignalIntegrationTest {
         int open = 0;
         for (var p : trace.points()) {
             if (p.tMicros() < 10 * DT * 1e6) {
-                // Gate open: probe sees the coil. (No transverse M to observe yet, so signal ≈ 0
-                // regardless; just ensure no NaN / exception.)
                 closed++;
                 assertFalse(Double.isNaN(p.real()));
                 assertFalse(Double.isNaN(p.imag()));

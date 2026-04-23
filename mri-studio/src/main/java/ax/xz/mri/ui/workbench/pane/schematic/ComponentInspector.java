@@ -72,14 +72,19 @@ public final class ComponentInspector extends VBox {
             case CircuitComponent.SwitchComponent s -> populateSwitch(s);
             case CircuitComponent.Coil c -> populateCoil(c);
             case CircuitComponent.Probe p -> populateProbe(p);
-            case CircuitComponent.Resistor r -> populateScalar("Resistance", "\u03a9", r.resistanceOhms(),
+            case CircuitComponent.Resistor r -> populateScalar("Resistance (ohms)", r.resistanceOhms(),
                 v -> session.replaceComponent(r.withResistanceOhms(v)));
-            case CircuitComponent.Capacitor c -> populateScalar("Capacitance", "F", c.capacitanceFarads(),
+            case CircuitComponent.Capacitor c -> populateScalar("Capacitance (F)", c.capacitanceFarads(),
                 v -> session.replaceComponent(c.withCapacitanceFarads(v)));
-            case CircuitComponent.Inductor l -> populateScalar("Inductance", "H", l.inductanceHenry(),
+            case CircuitComponent.Inductor l -> populateScalar("Inductance (H)", l.inductanceHenry(),
                 v -> session.replaceComponent(l.withInductanceHenry(v)));
-            case CircuitComponent.Ground ignored -> { /* nothing else */ }
-            case CircuitComponent.IdealTransformer t -> populateScalar("Turns ratio", "", t.turnsRatio(),
+            case CircuitComponent.ShuntResistor r -> populateScalar("Shunt R (ohms)", r.resistanceOhms(),
+                v -> session.replaceComponent(r.withResistanceOhms(v)));
+            case CircuitComponent.ShuntCapacitor c -> populateScalar("Shunt C (F)", c.capacitanceFarads(),
+                v -> session.replaceComponent(c.withCapacitanceFarads(v)));
+            case CircuitComponent.ShuntInductor l -> populateScalar("Shunt L (H)", l.inductanceHenry(),
+                v -> session.replaceComponent(l.withInductanceHenry(v)));
+            case CircuitComponent.IdealTransformer t -> populateScalar("Turns ratio", t.turnsRatio(),
                 v -> session.replaceComponent(t.withTurnsRatio(v)));
         }
     }
@@ -97,23 +102,25 @@ public final class ComponentInspector extends VBox {
         getChildren().add(doubleField("Carrier (Hz)", v.carrierHz(), d -> session.replaceComponent(v.withCarrierHz(d))));
         getChildren().add(doubleField("Min amplitude", v.minAmplitude(), d -> session.replaceComponent(v.withMinAmplitude(d))));
         getChildren().add(doubleField("Max amplitude", v.maxAmplitude(), d -> session.replaceComponent(v.withMaxAmplitude(d))));
-        getChildren().add(doubleField("Output \u03a9", v.outputImpedanceOhms(),
+        getChildren().add(doubleField("Output R (ohms)", v.outputImpedanceOhms(),
             d -> session.replaceComponent(v.withOutputImpedanceOhms(d))));
     }
 
     private void populateSwitch(CircuitComponent.SwitchComponent s) {
-        getChildren().add(doubleField("Closed \u03a9", s.closedOhms(), d -> {
-            var next = new CircuitComponent.SwitchComponent(s.id(), s.name(), d, s.openOhms(), s.thresholdVolts());
-            session.replaceComponent(next);
-        }));
-        getChildren().add(doubleField("Open \u03a9", s.openOhms(), d -> {
-            var next = new CircuitComponent.SwitchComponent(s.id(), s.name(), s.closedOhms(), d, s.thresholdVolts());
-            session.replaceComponent(next);
-        }));
-        getChildren().add(doubleField("Threshold V", s.thresholdVolts(), d -> {
-            var next = new CircuitComponent.SwitchComponent(s.id(), s.name(), s.closedOhms(), s.openOhms(), d);
-            session.replaceComponent(next);
-        }));
+        getChildren().add(doubleField("Closed (ohms)", s.closedOhms(), d -> session.replaceComponent(
+            new CircuitComponent.SwitchComponent(s.id(), s.name(), d, s.openOhms(), s.thresholdVolts(), s.invertCtl()))));
+        getChildren().add(doubleField("Open (ohms)", s.openOhms(), d -> session.replaceComponent(
+            new CircuitComponent.SwitchComponent(s.id(), s.name(), s.closedOhms(), d, s.thresholdVolts(), s.invertCtl()))));
+        getChildren().add(doubleField("Threshold V", s.thresholdVolts(), d -> session.replaceComponent(
+            new CircuitComponent.SwitchComponent(s.id(), s.name(), s.closedOhms(), s.openOhms(), d, s.invertCtl()))));
+        var invert = new javafx.scene.control.CheckBox("Invert ctl (close when ctl is low)");
+        invert.setSelected(s.invertCtl());
+        invert.setOnAction(e -> session.replaceComponent(s.withInvertCtl(invert.isSelected())));
+        var row = new HBox(6, new Label(""));
+        ((Label) row.getChildren().get(0)).setPrefWidth(100);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().add(invert);
+        getChildren().add(row);
     }
 
     private void populateCoil(CircuitComponent.Coil c) {
@@ -160,7 +167,7 @@ public final class ComponentInspector extends VBox {
 
         getChildren().add(doubleField("Self-L (H)", c.selfInductanceHenry(),
             d -> session.replaceComponent(c.withSelfInductanceHenry(d))));
-        getChildren().add(doubleField("Series \u03a9", c.seriesResistanceOhms(),
+        getChildren().add(doubleField("Series R (ohms)", c.seriesResistanceOhms(),
             d -> session.replaceComponent(c.withSeriesResistanceOhms(d))));
     }
 
@@ -179,14 +186,14 @@ public final class ComponentInspector extends VBox {
         traceRow.getChildren().addAll(traceLabel, traceName);
         getChildren().add(traceRow);
         getChildren().add(doubleField("Gain", p.gain(), d -> session.replaceComponent(p.withGain(d))));
-        getChildren().add(doubleField("Phase (\u00b0)", p.demodPhaseDeg(),
+        getChildren().add(doubleField("Phase (deg)", p.demodPhaseDeg(),
             d -> session.replaceComponent(p.withDemodPhaseDeg(d))));
-        getChildren().add(doubleField("Load \u03a9", p.loadImpedanceOhms(),
+        getChildren().add(doubleField("Load (ohms)", p.loadImpedanceOhms(),
             d -> session.replaceComponent(p.withLoadImpedanceOhms(d))));
     }
 
-    private void populateScalar(String label, String unit, double value, Consumer<Double> onUpdate) {
-        getChildren().add(doubleField(label + (unit.isEmpty() ? "" : " (" + unit + ")"), value, onUpdate));
+    private void populateScalar(String label, double value, Consumer<Double> onUpdate) {
+        getChildren().add(doubleField(label, value, onUpdate));
     }
 
     // ───────── Field builders ─────────
@@ -249,10 +256,12 @@ public final class ComponentInspector extends VBox {
             case CircuitComponent.SwitchComponent s -> "Switch";
             case CircuitComponent.Coil c -> "Coil";
             case CircuitComponent.Probe p -> "Probe";
-            case CircuitComponent.Ground g -> "Ground";
-            case CircuitComponent.Resistor r -> "Resistor";
-            case CircuitComponent.Capacitor c -> "Capacitor";
-            case CircuitComponent.Inductor l -> "Inductor";
+            case CircuitComponent.Resistor r -> "Resistor (series)";
+            case CircuitComponent.Capacitor c -> "Capacitor (series)";
+            case CircuitComponent.Inductor l -> "Inductor (series)";
+            case CircuitComponent.ShuntResistor r -> "Resistor (parallel)";
+            case CircuitComponent.ShuntCapacitor c -> "Capacitor (parallel)";
+            case CircuitComponent.ShuntInductor l -> "Inductor (parallel)";
             case CircuitComponent.IdealTransformer t -> "Ideal transformer";
         };
     }

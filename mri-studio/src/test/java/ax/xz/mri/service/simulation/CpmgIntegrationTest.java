@@ -59,18 +59,18 @@ class CpmgIntegrationTest {
         var segments = new ArrayList<Segment>();
         var pulse = new ArrayList<PulseSegment>();
 
-        // Channel layout from the low-field template: [rf_I, rf_Q, gx, gz, rx_gate].
+        // Channel layout from the low-field template: [rf_I, rf_Q, gx, gz].
         segments.add(new Segment(DT, 0, n90));
-        pulse.add(filled(n90, new double[]{B1_MAX, 0, 0, 0, 0}, 1.0));
+        pulse.add(filled(n90, new double[]{B1_MAX, 0, 0, 0}, 1.0));
 
         segments.add(new Segment(DT, nTau, 0));
-        pulse.add(filled(nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
+        pulse.add(filled(nTau, new double[]{0, 0, 0, 0}, 0.0));
 
         for (int e = 0; e < nEchoes; e++) {
             segments.add(new Segment(DT, 0, n180));
-            pulse.add(filled(n180, new double[]{0, B1_MAX, 0, 0, 0}, 1.0));
+            pulse.add(filled(n180, new double[]{0, B1_MAX, 0, 0}, 1.0));
             segments.add(new Segment(DT, 2 * nTau, 0));
-            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
+            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0}, 0.0));
         }
         return new Train(segments, pulse);
     }
@@ -141,13 +141,14 @@ class CpmgIntegrationTest {
         assertEquals(AmplitudeKind.REAL, gx.kind());
         assertEquals(AmplitudeKind.REAL, gz.kind());
 
-        // Channel layout: STATIC B0 contributes 0 channels; dynamic order is [RF_I, RF_Q, Gx, Gz, RX Gate].
+        // Channel layout: STATIC B0 contributes 0 channels; dynamic order is [RF_I, RF_Q, Gx, Gz].
+        // The RX switch is gated by RF.active — no dedicated RX Gate source.
         var dynamic = circuit.voltageSources().stream()
             .filter(s -> s.kind() != AmplitudeKind.STATIC).toList();
+        assertEquals(3, dynamic.size(), "exactly three dynamic sources: RF, Gx, Gz");
         assertEquals("RF", dynamic.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
         assertEquals("Gradient X", dynamic.get(1).name());
         assertEquals("Gradient Z", dynamic.get(2).name());
-        assertEquals("RX Gate", dynamic.get(3).name());
 
         double expectedLarmor = GAMMA * 0.0154 / (2 * Math.PI);
         assertEquals(expectedLarmor, rf.carrierHz(), 1.0);

@@ -51,8 +51,7 @@ class AutoLayoutTest {
         var components = List.<CircuitComponent>of(
             new CircuitComponent.VoltageSource(new ComponentId("s"), "S",
                 AmplitudeKind.REAL, 0, 0, 1, 0),
-            new CircuitComponent.Coil(new ComponentId("c"), "C", null, 0, 0),
-            new CircuitComponent.Ground(new ComponentId("g"), "GND")
+            new CircuitComponent.Coil(new ComponentId("c"), "C", null, 0, 0)
         );
         var layoutA = AutoLayout.arrange(components, List.of());
         var layoutB = AutoLayout.arrange(components, List.of());

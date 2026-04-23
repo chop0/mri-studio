@@ -45,15 +45,12 @@ class SequenceStarterLibraryTest {
             "RF Coil", new ProjectNodeId("ef-rf"), 0, 0);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
             "Gx Coil", new ProjectNodeId("ef-gx"), 0, 0);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd-0"), "GND");
         var wires = List.of(
-            new Wire("w-rf-out", new ComponentTerminal(rfSrc.id(), "out"), new ComponentTerminal(rfCoil.id(), "a")),
-            new Wire("w-rf-g",   new ComponentTerminal(rfCoil.id(), "b"), new ComponentTerminal(gnd.id(), "a")),
-            new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "a")),
-            new Wire("w-gx-g",   new ComponentTerminal(gxCoil.id(), "b"), new ComponentTerminal(gnd.id(), "a"))
+            new Wire("w-rf-out", new ComponentTerminal(rfSrc.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),
+            new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in"))
         );
         return new CircuitDocument(CIRCUIT_ID, "Test Circuit",
-            List.of(rfSrc, gxSrc, rfCoil, gxCoil, gnd), wires, CircuitLayout.empty());
+            List.of(rfSrc, gxSrc, rfCoil, gxCoil), wires, CircuitLayout.empty());
     }
 
     private static CircuitDocument circuitWithoutRf() {
@@ -61,13 +58,11 @@ class SequenceStarterLibraryTest {
             "Gradient X", AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
             "Gx Coil", new ProjectNodeId("ef-gx"), 0, 0);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd-0"), "GND");
         var wires = List.of(
-            new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "a")),
-            new Wire("w-gx-g",   new ComponentTerminal(gxCoil.id(), "b"), new ComponentTerminal(gnd.id(), "a"))
+            new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in"))
         );
         return new CircuitDocument(CIRCUIT_ID, "No-RF Circuit",
-            List.of(gxSrc, gxCoil, gnd), wires, CircuitLayout.empty());
+            List.of(gxSrc, gxCoil), wires, CircuitLayout.empty());
     }
 
     private static SequenceStarter starter(String id) {

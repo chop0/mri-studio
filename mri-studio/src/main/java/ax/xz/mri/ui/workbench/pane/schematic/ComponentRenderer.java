@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.workbench.pane.schematic;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
-import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.circuit.ComponentPosition;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -11,9 +11,8 @@ import javafx.scene.text.TextAlignment;
  * Stateless renderer that draws circuit components on a JavaFX canvas.
  *
  * <p>Every component is drawn centered at a given world position using only
- * primitive shapes (no image assets). The colour palette is tuned for a
- * light-background schematic; selected components get a halo, hovered
- * components a subtle ring.
+ * primitive shapes (no image assets). Selected components get a halo;
+ * hovered components a subtle ring.
  */
 public final class ComponentRenderer {
     private static final Color INK = Color.web("#1f2933");
@@ -27,10 +26,12 @@ public final class ComponentRenderer {
 
     private ComponentRenderer() {}
 
-    public static void draw(GraphicsContext g, CircuitComponent component, double x, double y,
+    public static void draw(GraphicsContext g, CircuitComponent component, ComponentPosition pos,
                             boolean selected, boolean hovered) {
         g.save();
-        g.translate(x, y);
+        g.translate(pos.x(), pos.y());
+        if (pos.rotationQuarters() != 0) g.rotate(pos.rotationQuarters() * 90.0);
+        if (pos.mirrored()) g.scale(-1, 1);
 
         var geom = ComponentGeometry.of(component);
         if (selected) drawSelection(g, geom);
@@ -41,10 +42,12 @@ public final class ComponentRenderer {
             case CircuitComponent.SwitchComponent s -> drawSwitch(g, s);
             case CircuitComponent.Coil c -> drawCoil(g, c);
             case CircuitComponent.Probe p -> drawProbe(g, p);
-            case CircuitComponent.Ground ignored -> drawGround(g);
-            case CircuitComponent.Resistor r -> drawResistor(g, r);
-            case CircuitComponent.Capacitor c -> drawCapacitor(g, c);
-            case CircuitComponent.Inductor l -> drawInductor(g, l);
+            case CircuitComponent.Resistor r -> drawResistor(g, r.name());
+            case CircuitComponent.Capacitor c -> drawCapacitor(g, c.name());
+            case CircuitComponent.Inductor l -> drawInductor(g, l.name());
+            case CircuitComponent.ShuntResistor r -> drawShunt(g, r.name(), "R");
+            case CircuitComponent.ShuntCapacitor c -> drawShunt(g, c.name(), "C");
+            case CircuitComponent.ShuntInductor l -> drawShunt(g, l.name(), "L");
             case CircuitComponent.IdealTransformer t -> drawTransformer(g, t);
         }
 
@@ -88,56 +91,47 @@ public final class ComponentRenderer {
             case STATIC -> Color.web("#475569");
             default -> ACCENT;
         };
-        // Single output lead exits on the right.
+        // Main output lead on the right.
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(22, 0, 45, 0);
-        // Body: circle
+        // active tap on the bottom (dashed to distinguish from power output).
+        g.setStroke(accent.deriveColor(0, 1, 1, 0.6));
+        g.setLineDashes(3, 2);
+        g.strokeLine(0, 22, 0, 35);
+        g.setLineDashes();
+        // Body circle.
         g.setFill(Color.WHITE);
         g.fillOval(-22, -22, 44, 44);
         g.setStroke(accent);
         g.setLineWidth(1.6);
         g.strokeOval(-22, -22, 44, 44);
-        // Glyph inside
+        // Glyph inside — ASCII only.
         g.setFill(accent);
         g.setFont(Font.font("System", 11));
         g.setTextAlign(TextAlignment.CENTER);
         String glyph = switch (v.kind()) {
-            case QUADRATURE -> "I/Q";
+            case QUADRATURE -> "IQ";
             case GATE -> "G";
             case REAL -> "V";
-            case STATIC -> "\u2261";
+            case STATIC -> "DC";
         };
         g.fillText(glyph, 0, 4);
-        // Label below: one line with the DAW track / source name, one line with the amplitude kind.
-        drawLabel(g, v.name(), INK, 0, 36);
-        drawSubLabel(g, kindSubtitle(v), accent.darker(), 0, 50);
-    }
-
-    private static String kindSubtitle(CircuitComponent.VoltageSource v) {
-        return switch (v.kind()) {
-            case QUADRATURE -> "I/Q \u2022 " + (long) v.carrierHz() + " Hz";
-            case REAL -> "real \u00b1" + v.maxAmplitude();
-            case STATIC -> "static " + v.maxAmplitude();
-            case GATE -> "gate";
-        };
+        // Just the source name — the kind/amplitude lives in the inspector.
+        drawLabel(g, v.name(), INK, 0, -30);
     }
 
     private static void drawSwitch(GraphicsContext g, CircuitComponent.SwitchComponent s) {
-        // Main wires
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -18, 0);
         g.strokeLine(18, 0, 45, 0);
-        // Tilted blade
         g.setStroke(GATE_ACCENT);
         g.setLineWidth(2);
         g.strokeLine(-18, 0, 14, -14);
-        // Contact dots
         g.setFill(INK);
         g.fillOval(-20, -2, 4, 4);
         g.fillOval(16, -2, 4, 4);
-        // Ctl lead
         g.setStroke(GATE_ACCENT.deriveColor(0, 1, 1, 0.7));
         g.setLineDashes(3, 2);
         g.strokeLine(0, 14, 0, 35);
@@ -149,23 +143,21 @@ public final class ComponentRenderer {
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -26, 0);
-        g.strokeLine(26, 0, 45, 0);
-        // Four arcs forming the coil
         g.setStroke(COIL_ACCENT);
         g.setLineWidth(1.8);
         for (int i = 0; i < 4; i++) {
             double cx = -18 + i * 12;
             g.strokeArc(cx - 6, -6, 12, 12, 0, 180, javafx.scene.shape.ArcType.OPEN);
         }
-        drawLabel(g, c.name(), INK, 0, 20);
+        // Ground tail on the right so it's visually clear the other side is ground.
+        drawGroundTail(g, 26);
+        drawLabel(g, c.name(), INK, 0, 24);
     }
 
     private static void drawProbe(GraphicsContext g, CircuitComponent.Probe p) {
-        // Single input lead enters on the left.
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -18, 0);
-        // Body: rectangle with triangle inside
         g.setFill(Color.WHITE);
         g.fillRoundRect(-18, -16, 36, 32, 4, 4);
         g.setStroke(PROBE_ACCENT);
@@ -176,41 +168,28 @@ public final class ComponentRenderer {
         drawLabel(g, p.name(), INK, 0, 28);
     }
 
-    private static void drawGround(GraphicsContext g) {
-        g.setStroke(INK);
-        g.setLineWidth(1.4);
-        // Vertical lead
-        g.strokeLine(0, -20, 0, -6);
-        // Three horizontal bars of decreasing width
-        g.strokeLine(-14, -6, 14, -6);
-        g.strokeLine(-10, 0, 10, 0);
-        g.strokeLine(-6, 6, 6, 6);
-    }
-
-    private static void drawResistor(GraphicsContext g, CircuitComponent.Resistor r) {
+    private static void drawResistor(GraphicsContext g, String label) {
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -26, 0);
         g.strokeLine(26, 0, 45, 0);
-        // Zigzag
         double[] xs = new double[]{-26, -20, -12, -4, 4, 12, 20, 26};
         double[] ys = new double[]{0, -8, 8, -8, 8, -8, 8, 0};
         g.strokePolyline(xs, ys, xs.length);
-        drawLabel(g, r.name(), INK, 0, 20);
+        drawLabel(g, label, INK, 0, 20);
     }
 
-    private static void drawCapacitor(GraphicsContext g, CircuitComponent.Capacitor c) {
+    private static void drawCapacitor(GraphicsContext g, String label) {
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -6, 0);
         g.strokeLine(6, 0, 45, 0);
-        // Two plates
         g.strokeLine(-6, -14, -6, 14);
         g.strokeLine(6, -14, 6, 14);
-        drawLabel(g, c.name(), INK, 0, 24);
+        drawLabel(g, label, INK, 0, 24);
     }
 
-    private static void drawInductor(GraphicsContext g, CircuitComponent.Inductor l) {
+    private static void drawInductor(GraphicsContext g, String label) {
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(-45, 0, -26, 0);
@@ -219,19 +198,34 @@ public final class ComponentRenderer {
             double cx = -18 + i * 12;
             g.strokeArc(cx - 6, -6, 12, 12, 0, 180, javafx.scene.shape.ArcType.OPEN);
         }
-        drawLabel(g, l.name(), INK, 0, 20);
+        drawLabel(g, label, INK, 0, 20);
+    }
+
+    /** Shunt passive: one input lead on the left, the element, then an implicit ground. */
+    private static void drawShunt(GraphicsContext g, String name, String glyph) {
+        g.setStroke(INK);
+        g.setLineWidth(1.4);
+        g.strokeLine(-45, 0, -14, 0);
+        // Tiny body — a boxed letter R/L/C — then a ground tail.
+        g.setFill(Color.WHITE);
+        g.fillRoundRect(-14, -10, 28, 20, 4, 4);
+        g.setStroke(INK);
+        g.strokeRoundRect(-14, -10, 28, 20, 4, 4);
+        g.setFill(INK);
+        g.setFont(Font.font("System", 11));
+        g.setTextAlign(TextAlignment.CENTER);
+        g.fillText(glyph, 0, 4);
+        drawGroundTail(g, 14);
+        drawLabel(g, name, INK, 0, 28);
     }
 
     private static void drawTransformer(GraphicsContext g, CircuitComponent.IdealTransformer t) {
         g.setStroke(INK);
         g.setLineWidth(1.4);
-        // Primary side
         g.strokeLine(-50, -20, -26, -20);
         g.strokeLine(-50, 20, -26, 20);
-        // Secondary side
         g.strokeLine(26, -20, 50, -20);
         g.strokeLine(26, 20, 50, 20);
-        // Cores
         for (int i = 0; i < 3; i++) {
             double cy = -14 + i * 14;
             g.strokeArc(-28, cy - 6, 12, 12, 90, 180, javafx.scene.shape.ArcType.OPEN);
@@ -240,16 +234,20 @@ public final class ComponentRenderer {
         drawLabel(g, t.name(), INK, 0, 42);
     }
 
+    /** A short lead plus three ground bars, at the given x offset from the component centre. */
+    private static void drawGroundTail(GraphicsContext g, double xStart) {
+        g.setStroke(INK);
+        g.setLineWidth(1.4);
+        g.strokeLine(xStart, 0, xStart + 14, 0);
+        double gx = xStart + 14;
+        g.strokeLine(gx, -7, gx, 7);
+        g.strokeLine(gx + 4, -5, gx + 4, 5);
+        g.strokeLine(gx + 8, -3, gx + 8, 3);
+    }
+
     private static void drawLabel(GraphicsContext g, String text, Color color, double x, double y) {
         g.setFill(color);
         g.setFont(Font.font("System", 11));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x, y);
-    }
-
-    private static void drawSubLabel(GraphicsContext g, String text, Color color, double x, double y) {
-        g.setFill(color);
-        g.setFont(Font.font("System", 9));
         g.setTextAlign(TextAlignment.CENTER);
         g.fillText(text, x, y);
     }

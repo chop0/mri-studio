@@ -2,14 +2,11 @@ package ax.xz.mri.model.circuit.starter;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.Coil;
-import ax.xz.mri.model.circuit.CircuitComponent.Ground;
 import ax.xz.mri.model.circuit.CircuitComponent.Probe;
 import ax.xz.mri.model.circuit.CircuitComponent.SwitchComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
 import ax.xz.mri.model.circuit.CircuitDocument;
-import ax.xz.mri.model.circuit.CircuitLayout;
 import ax.xz.mri.model.circuit.ComponentId;
-import ax.xz.mri.model.circuit.ComponentPosition;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.simulation.AmplitudeKind;
@@ -40,34 +37,31 @@ public final class CircuitStarterLibrary {
 
     public static CircuitStarter defaultStarter() { return STARTERS.get(1); }
 
-    // ──────────────────────────────────────────────────────────────────────────
     // Empty
-    // ──────────────────────────────────────────────────────────────────────────
 
     private static final class EmptyStarter implements CircuitStarter {
         @Override public String id() { return "empty"; }
         @Override public String name() { return "Empty"; }
-        @Override public String description() { return "Just a ground — build from scratch."; }
+        @Override public String description() { return "Blank schematic - build from scratch."; }
         @Override public CircuitDocument build(ProjectNodeId id, String name, ProjectRepository repository) {
             return CircuitDocument.empty(id, name);
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
     // Low-field MRI
-    // ──────────────────────────────────────────────────────────────────────────
 
     /**
-     * Standard low-field ¹H MRI setup: B0 static source + coil, RF quadrature
-     * source + coil, two gradient sources + coils, one RX gate source, and
-     * one primary probe wired through a switch to the RF coil so it only
-     * observes when the RX gate is high.
+     * Standard low-field 1H MRI setup: B0 static source + coil, RF quadrature
+     * source + coil, two gradient sources + coils, and one primary probe
+     * wired through a T/R switch to the RF coil. The switch is gated by the
+     * RF source's {@code active} port, so receive is automatically muted while
+     * any RF clip is driving - no hand-authored RX gate track needed.
      */
     private static final class LowFieldMriStarter implements CircuitStarter {
         @Override public String id() { return "low-field-mri"; }
-        @Override public String name() { return "Low-field \u00b9H MRI"; }
+        @Override public String name() { return "Low-field 1H MRI"; }
         @Override public String description() {
-            return "B0 + RF + Gx + Gz + RX probe wired through a T/R switch driven by an RX gate.";
+            return "B0 + RF + Gx + Gz + RX probe through a T/R switch driven by RF.active.";
         }
 
         @Override
@@ -89,59 +83,50 @@ public final class CircuitStarterLibrary {
                 AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
             var gzSrc = new VoltageSource(new ComponentId("src-gz"), "Gradient Z",
                 AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
-            var rxGate = new VoltageSource(new ComponentId("src-rxgate"), "RX Gate",
-                AmplitudeKind.GATE, 0, 0, 1, 0);
 
             var b0Coil = new Coil(new ComponentId("coil-b0"), "B0 Coil", b0Eigen.id(), 0, 0);
             var rfCoil = new Coil(new ComponentId("coil-rf"), "RF Coil", rfEigen.id(), 0, 0);
             var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
-            var rxSwitch = new SwitchComponent(new ComponentId("sw-rx"), "RX Switch", 0.5, 1e9, 0.5);
+            // RX switch: closes when RF is NOT active (invert the active ctl),
+            // so the probe only observes during receive windows.
+            var rxSwitch = new SwitchComponent(new ComponentId("sw-rx"), "RX Switch",
+                0.5, 1e9, 0.5, /* invertCtl = */ true);
             var probe = new Probe(new ComponentId("probe-rx"), "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
-            var gnd = new Ground(new ComponentId("gnd-0"), "GND");
 
             var components = List.<CircuitComponent>of(
-                b0Src, rfSrc, gxSrc, gzSrc, rxGate,
+                b0Src, rfSrc, gxSrc, gzSrc,
                 b0Coil, rfCoil, gxCoil, gzCoil,
-                rxSwitch, probe, gnd);
+                rxSwitch, probe);
 
             var wires = new ArrayList<Wire>();
-            wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "a"));
-            wires.add(wire("w-b0-gnd",   b0Coil.id(), "b", gnd.id(), "a"));
+            wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "in"));
+            wires.add(wire("w-rf-drive", rfSrc.id(), "out", rfCoil.id(), "in"));
+            wires.add(wire("w-gx-drive", gxSrc.id(), "out", gxCoil.id(), "in"));
+            wires.add(wire("w-gz-drive", gzSrc.id(), "out", gzCoil.id(), "in"));
 
-            wires.add(wire("w-rf-drive", rfSrc.id(), "out", rfCoil.id(), "a"));
-            wires.add(wire("w-rf-gnd",   rfCoil.id(), "b", gnd.id(), "a"));
-
-            wires.add(wire("w-gx-drive", gxSrc.id(), "out", gxCoil.id(), "a"));
-            wires.add(wire("w-gx-gnd",   gxCoil.id(), "b", gnd.id(), "a"));
-
-            wires.add(wire("w-gz-drive", gzSrc.id(), "out", gzCoil.id(), "a"));
-            wires.add(wire("w-gz-gnd",   gzCoil.id(), "b", gnd.id(), "a"));
-
-            // RX path: probe (in) ← RX switch ← RF coil (a). RF coil (b) is on ground.
+            // RX path: probe.in <- RX switch <- RF coil. Switch ctl is wired to
+            // RF.active with invertCtl = true, so the probe only observes when
+            // no RF clip is driving.
             wires.add(wire("w-rx-probe", probe.id(), "in", rxSwitch.id(), "a"));
-            wires.add(wire("w-rx-in",    rxSwitch.id(), "b", rfCoil.id(), "a"));
-            // Gate drives the switch's ctl.
-            wires.add(wire("w-rxgate-ctl", rxGate.id(), "out", rxSwitch.id(), "ctl"));
+            wires.add(wire("w-rx-coil",  rxSwitch.id(), "b", rfCoil.id(), "in"));
+            wires.add(wire("w-rxgate-ctl", rfSrc.id(), "active", rxSwitch.id(), "ctl"));
 
-            var layout = AutoLayout.arrange(components, wires);
+            var layout = LowFieldLayout.arrange(
+                List.of(b0Src, rfSrc, gxSrc, gzSrc),
+                List.of(b0Coil, rfCoil, gxCoil, gzCoil),
+                rxSwitch, probe);
 
             return new CircuitDocument(id, name, components, wires, layout);
         }
     }
-
-    // ──────────────────────────────────────────────────────────────────────────
 
     private static ax.xz.mri.project.EigenfieldDocument ensureEigenfield(
         ProjectRepository repo, String name, String starterId
     ) {
         var s = EigenfieldStarterLibrary.byId(starterId).orElseThrow();
         return ObjectFactory.findOrCreateEigenfield(repo, name, s.description(), s.source(), s.units(), s.defaultMagnitude());
-    }
-
-    private static ProjectNodeId ensureEigenfieldId(ProjectRepository repo, String name, String starterId) {
-        return ensureEigenfield(repo, name, starterId).id();
     }
 
     private static Wire wire(String id, ComponentId a, String pa, ComponentId b, String pb) {

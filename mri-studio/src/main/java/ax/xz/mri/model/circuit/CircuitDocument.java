@@ -142,24 +142,18 @@ public record CircuitDocument(
     }
 
     public static CircuitDocument empty(ProjectNodeId id, String name) {
-        var ground = new CircuitComponent.Ground(new ComponentId("gnd-0"), "GND");
-        return new CircuitDocument(id, name, List.of(ground), List.of(),
-            CircuitLayout.empty().with(new ComponentPosition(ground.id(), 500, 500, 0)));
+        return new CircuitDocument(id, name, List.of(), List.of(), CircuitLayout.empty());
     }
 
     private static void validate(List<CircuitComponent> components, List<Wire> wires) {
         var ids = new HashSet<ComponentId>();
         var names = new HashSet<String>();
         var portsByComponent = new HashMap<ComponentId, List<String>>();
-        boolean hasGround = false;
         for (var c : components) {
             if (!ids.add(c.id())) throw new IllegalArgumentException("Duplicate component id: " + c.id());
             if (!names.add(c.name())) throw new IllegalArgumentException("Duplicate component name: " + c.name());
             portsByComponent.put(c.id(), c.ports());
-            if (c instanceof CircuitComponent.Ground) hasGround = true;
         }
-        if (!components.isEmpty() && !hasGround)
-            throw new IllegalArgumentException("Circuit must contain a ground reference");
 
         var wireIds = new HashSet<String>();
         for (var w : wires) {

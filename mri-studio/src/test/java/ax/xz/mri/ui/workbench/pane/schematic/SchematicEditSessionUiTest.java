@@ -15,18 +15,12 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Interaction-level tests for {@link CircuitEditSession}.
- *
- * <p>The UI renders this session; these tests exercise every mutation the
- * canvas and inspector can trigger so UI regressions are caught without a
- * running JavaFX scene.
- */
+/** Interaction-level tests for {@link CircuitEditSession}. */
 class SchematicEditSessionUiTest {
 
     @Test
     void deleteSelectionRemovesComponentsAndIncidentWires() {
-        var session = new CircuitEditSession(lowCircuit());
+        var session = new CircuitEditSession(simpleCircuit());
         var coilId = new ComponentId("coil");
         session.selectedComponents.add(coilId);
         session.deleteSelection();
@@ -38,7 +32,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void moveComponentUpdatesLayout() {
-        var session = new CircuitEditSession(lowCircuit());
+        var session = new CircuitEditSession(simpleCircuit());
         var coilId = new ComponentId("coil");
         session.moveComponent(coilId, 500, 800);
         var pos = session.doc().layout().positionOf(coilId).orElseThrow();
@@ -47,16 +41,50 @@ class SchematicEditSessionUiTest {
     }
 
     @Test
+    void rotateSelectionBumpsRotationQuarters() {
+        var session = new CircuitEditSession(simpleCircuit());
+        session.selectedComponents.add(new ComponentId("coil"));
+        session.rotateSelection();
+        var pos = session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow();
+        assertEquals(1, pos.rotationQuarters());
+        session.rotateSelection();
+        session.rotateSelection();
+        session.rotateSelection();
+        pos = session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow();
+        assertEquals(0, pos.rotationQuarters(), "four rotations return to canonical");
+    }
+
+    @Test
+    void mirrorSelectionTogglesFlag() {
+        var session = new CircuitEditSession(simpleCircuit());
+        session.selectedComponents.add(new ComponentId("coil"));
+        session.mirrorSelection();
+        assertTrue(session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow().mirrored());
+        session.mirrorSelection();
+        assertFalse(session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow().mirrored());
+    }
+
+    @Test
+    void addComponentAutoRenamesToAvoidCollision() {
+        var session = new CircuitEditSession(simpleCircuit());
+        var duplicate = new CircuitComponent.Coil(new ComponentId("coil-2"), "Coil", null, 0, 0);
+        session.addComponent(duplicate, new ComponentPosition(duplicate.id(), 400, 400, 0));
+        var names = session.doc().components().stream().map(CircuitComponent::name).toList();
+        assertTrue(names.contains("Coil"));
+        assertTrue(names.contains("Coil 2"), "second 'Coil' should become 'Coil 2' on add");
+    }
+
+    @Test
     void addWireBumpsRevisionAndRejectsDuplicates() {
-        // Start from a blank document so we can reliably add a fresh wire.
         var blank = CircuitDocument.empty(new ProjectNodeId("blank"), "Blank");
         var session = new CircuitEditSession(blank);
-        var gndId = blank.components().get(0).id();
-        var extraGround = new CircuitComponent.Ground(new ComponentId("gnd-2"), "GND-2");
-        session.addComponent(extraGround, new ComponentPosition(extraGround.id(), 100, 100, 0));
+        var coil1 = new CircuitComponent.Coil(new ComponentId("c1"), "C1", null, 0, 0);
+        var coil2 = new CircuitComponent.Coil(new ComponentId("c2"), "C2", null, 0, 0);
+        session.addComponent(coil1, new ComponentPosition(coil1.id(), 100, 100, 0));
+        session.addComponent(coil2, new ComponentPosition(coil2.id(), 300, 100, 0));
         int rev = session.revision.get();
-        var a = new ComponentTerminal(gndId, "a");
-        var b = new ComponentTerminal(extraGround.id(), "a");
+        var a = new ComponentTerminal(coil1.id(), "in");
+        var b = new ComponentTerminal(coil2.id(), "in");
         session.addWire(a, b);
         assertEquals(rev + 1, session.revision.get(), "wire add bumps revision");
         assertTrue(session.isWireBetween(a, b));
@@ -64,7 +92,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void duplicateSelectionClonesComponentsWithFreshIdsAndWires() {
-        var session = new CircuitEditSession(lowCircuit());
+        var session = new CircuitEditSession(simpleCircuit());
         var srcId = new ComponentId("src");
         var coilId = new ComponentId("coil");
         session.selectedComponents.addAll(List.of(srcId, coilId));
@@ -72,19 +100,15 @@ class SchematicEditSessionUiTest {
         int beforeComponents = session.doc().components().size();
         int beforeWires = session.doc().wires().size();
         session.duplicateSelection(40, 0);
-        int afterComponents = session.doc().components().size();
-        int afterWires = session.doc().wires().size();
-
-        assertEquals(beforeComponents + 2, afterComponents, "two new components");
-        // The src-coil wire between selected pair must be duplicated too.
-        assertEquals(beforeWires + 1, afterWires, "src-coil wire cloned; ground wires untouched");
-        assertEquals(2, session.selectedComponents.size(), "clones become new selection");
+        assertEquals(beforeComponents + 2, session.doc().components().size());
+        assertEquals(beforeWires + 1, session.doc().wires().size());
+        assertEquals(2, session.selectedComponents.size());
         assertFalse(session.selectedComponents.contains(srcId));
     }
 
     @Test
     void replaceComponentPreservesSelection() {
-        var session = new CircuitEditSession(lowCircuit());
+        var session = new CircuitEditSession(simpleCircuit());
         var srcId = new ComponentId("src");
         session.selectedComponents.add(srcId);
         var src = (CircuitComponent.VoltageSource) session.componentAt(srcId);
@@ -94,20 +118,17 @@ class SchematicEditSessionUiTest {
         assertTrue(session.selectedComponents.contains(srcId));
     }
 
-    private static CircuitDocument lowCircuit() {
+    private static CircuitDocument simpleCircuit() {
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
-        var gnd = new CircuitComponent.Ground(new ComponentId("gnd"), "GND");
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var wires = List.of(
-            new Wire("w-drive", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "a")),
-            new Wire("w-coil-gnd", new ComponentTerminal(coil.id(), "b"), new ComponentTerminal(gnd.id(), "a"))
+            new Wire("w-drive", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"))
         );
         var layout = CircuitLayout.empty()
             .with(new ComponentPosition(src.id(), 100, 100, 0))
-            .with(new ComponentPosition(coil.id(), 300, 100, 0))
-            .with(new ComponentPosition(gnd.id(), 500, 100, 0));
+            .with(new ComponentPosition(coil.id(), 300, 100, 0));
         return new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(src, coil, gnd), wires, layout);
+            List.of(src, coil), wires, layout);
     }
 }

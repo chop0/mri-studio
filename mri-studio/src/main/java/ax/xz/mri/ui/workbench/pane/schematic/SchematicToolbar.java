@@ -47,9 +47,9 @@ public final class SchematicToolbar extends HBox {
         canvas.primaryModeProperty().addListener((obs, o, n) -> syncToggle(modeGroup, n));
         syncToggle(modeGroup, canvas.primaryMode());
 
-        var zoomOut = toolButton("\u2212", "Zoom out (Ctrl-)");
+        var zoomOut = toolButton("-", "Zoom out (Ctrl+-)");
         zoomOut.setOnAction(e -> canvas.zoomBy(1.0 / 1.2));
-        var zoomIn = toolButton("+", "Zoom in (Ctrl+)");
+        var zoomIn = toolButton("+", "Zoom in (Ctrl++)");
         zoomIn.setOnAction(e -> canvas.zoomBy(1.2));
         var fit = toolButton("Fit", "Fit to view (Ctrl+F)");
         fit.setOnAction(e -> canvas.fitToView());
@@ -60,7 +60,7 @@ public final class SchematicToolbar extends HBox {
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         var shortcuts = new javafx.scene.control.Label(
-            "V Select  \u00b7  H Pan  \u00b7  W Wire  \u00b7  Del Remove  \u00b7  \u2318C/\u2318V Copy/Paste");
+            "V Select / H Pan / W Wire    Del Remove    Ctrl+C Copy / Ctrl+V Paste / Ctrl+D Duplicate    Ctrl+R Rotate / Ctrl+E Mirror");
         shortcuts.getStyleClass().add("schematic-toolbar-hint");
 
         getChildren().addAll(
