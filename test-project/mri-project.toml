@@ -1,4 +1,0 @@
-schema = 1
-name = "test-project"
-layout_file = ".mri-studio/layout.json"
-ui_state_file = ".mri-studio/ui-state.json"

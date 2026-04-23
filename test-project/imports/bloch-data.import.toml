@@ -1,5 +1,0 @@
-schema = 1
-id = "import-d8c681f7-a0c8-3290-8013-e05787f85cf2"
-name = "bloch_data"
-source = "/Users/alec/PycharmProjects/mri/bloch_data.json"
-reload_mode = "MANUAL"
