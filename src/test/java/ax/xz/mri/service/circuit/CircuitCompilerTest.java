@@ -9,6 +9,7 @@ import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.service.circuit.mna.MnaNetwork;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -16,9 +17,9 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Topology-resolution tests for {@link CircuitCompiler}. Sources and probes
- * are single-terminal; coils are single-terminal (implicit ground on the
- * return).
+ * Compiles a CircuitDocument and checks that the resulting MnaNetwork
+ * carries the expected stamps. The actual numerical solve is exercised in
+ * MnaSolverTest.
  */
 class CircuitCompilerTest {
 
@@ -26,51 +27,50 @@ class CircuitCompilerTest {
     private static final double[] Z = {-10, 10};
 
     @Test
-    void multipleSourcesResolveToTheirOwnCoils() {
-        var b0Src = voltageSource("src-b0", "B0", AmplitudeKind.STATIC, 1.5);
-        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
-        var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", null, 0, 0);
-        var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", null, 0, 0);
-
+    void simpleSourceDrivingCoilProducesOneOutBranchAndOneCoilBranch() {
+        var src = voltageSource("src", "RF", AmplitudeKind.REAL, 1);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var wires = List.of(
-            wire("w-b0", b0Src.id(), "out", b0Coil.id(), "in"),
-            wire("w-rf", rfSrc.id(), "out", rfCoil.id(), "in")
+            wire("w", src.id(), "out", coil.id(), "in")
         );
-        var circuit = new CircuitDocument(new ProjectNodeId("c-0"), "c",
-            List.of(b0Src, rfSrc, b0Coil, rfCoil), wires, CircuitLayout.empty());
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(src, coil), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
-        assertEquals(2, compiled.drives().size(), "Both sources resolve");
-        assertEquals(0, compiled.drives().get(0).coilIndex());
-        assertEquals(1, compiled.drives().get(1).coilIndex());
-        for (var link : compiled.drives()) assertTrue(link.forwardPolarity());
+        var mna = compiled.mna();
+        // Two branches per source (out + active) + one per coil = 3 total.
+        assertEquals(3, mna.branchCount());
+        assertEquals(0, mna.sourceOutBranch()[0]);
+        assertEquals(1, mna.sourceActiveBranch()[0]);
+        assertEquals(2, mna.coilBranch()[0]);
+        // Source-active port node is distinct from source-out.
+        assertNotEquals(mna.branchNodeA()[0], mna.branchNodeA()[1]);
+        // Default series resistance kicks in for R=0 L=0 coils.
+        assertEquals(1.0, mna.branchR()[mna.coilBranch()[0]], 1e-12);
     }
 
     @Test
-    void switchOnDrivePath_appearsInTopologyLink() {
+    void switchCtlWiredToSourceOutBindsToFromSourceOut() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
         var gate = voltageSource("src-gate", "Gate", AmplitudeKind.GATE, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
-
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in"),
             wire("w3", gate.id(), "out", sw.id(), "ctl")
         );
-        var circuit = new CircuitDocument(new ProjectNodeId("c-1"), "c",
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, gate, sw, coil), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
-        assertEquals(1, compiled.drives().size());
-        var rfLink = compiled.drives().get(0);
-        assertEquals(1, rfLink.switchIndices().size(), "switch on path");
-        assertEquals(1, compiled.switches().get(0).ctlSourceIndex(), "ctl resolves to gate source");
-        assertFalse(compiled.switches().get(0).ctlViaActive());
+        assertEquals(1, compiled.mna().switchCount());
+        var ctl = compiled.mna().switchCtl()[0];
+        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceOut.class, ctl);
     }
 
     @Test
-    void switchCtlViaSourceActivePort_isDetected() {
+    void switchCtlWiredToSourceActiveBindsToFromSourceActive() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
@@ -79,50 +79,98 @@ class CircuitCompilerTest {
             wire("w2", sw.id(), "b", coil.id(), "in"),
             wire("w3", rfSrc.id(), "active", sw.id(), "ctl")
         );
-        var circuit = new CircuitDocument(new ProjectNodeId("c-2"), "c",
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, sw, coil), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
-        assertEquals(0, compiled.switches().get(0).ctlSourceIndex());
-        assertTrue(compiled.switches().get(0).ctlViaActive(),
-            "ctl wired to a source's 'active' port routes via the active signal");
+
+        var ctl = compiled.mna().switchCtl()[0];
+        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceActive.class, ctl);
     }
 
     @Test
-    void floatingSwitchControl_resolvesAsPermanentlyOpen() {
-        var src = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 1);
+    void floatingSwitchControlResolvesAsAlwaysOpen() {
+        var src = voltageSource("src", "RF", AmplitudeKind.REAL, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var wires = List.of(
             wire("w1", src.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in")
         );
-        var circuit = new CircuitDocument(new ProjectNodeId("c-3"), "c",
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, sw, coil), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
-        assertEquals(-1, compiled.switches().get(0).ctlSourceIndex());
+
+        var ctl = compiled.mna().switchCtl()[0];
+        assertInstanceOf(MnaNetwork.CtlBinding.AlwaysOpen.class, ctl);
     }
 
     @Test
-    void probeThroughSwitchResolvesAsObserveLink() {
+    void multiplexerExpandsIntoTwoOppositePolaritySwitchStamps() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
-        var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
-
+        var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux", 0.5, 1e9, 0.5);
         var wires = List.of(
-            wire("w1", rfSrc.id(), "out", coil.id(), "in"),
-            wire("w2", probe.id(), "in", sw.id(), "a"),
-            wire("w3", sw.id(), "b", coil.id(), "in"),
-            wire("w4", rfSrc.id(), "active", sw.id(), "ctl")
+            wire("w1", rfSrc.id(), "out", mux.id(), "a"),
+            wire("w2", probe.id(), "in", mux.id(), "b"),
+            wire("w3", mux.id(), "common", coil.id(), "in"),
+            wire("w4", rfSrc.id(), "active", mux.id(), "ctl")
         );
-        var circuit = new CircuitDocument(new ProjectNodeId("c-4"), "c",
-            List.of(rfSrc, coil, sw, probe), wires, CircuitLayout.empty());
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(rfSrc, coil, probe, mux), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
-        assertEquals(1, compiled.observes().size(), "probe produces one observe link");
-        var obs = compiled.observes().get(0);
-        assertEquals(0, obs.coilIndex());
-        assertEquals(1, obs.switchIndices().size());
+        // One mux → two switch stamps.
+        assertEquals(2, compiled.mna().switchCount());
+        assertFalse(compiled.mna().switchInvert()[0]);
+        assertTrue(compiled.mna().switchInvert()[1]);
+        // Both share the same ctl binding.
+        var ctl0 = compiled.mna().switchCtl()[0];
+        var ctl1 = compiled.mna().switchCtl()[1];
+        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceActive.class, ctl0);
+        assertEquals(ctl0, ctl1);
+    }
+
+    @Test
+    void shuntResistorStampsOneResistorToGround() {
+        var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var rShunt = new CircuitComponent.ShuntResistor(new ComponentId("rshunt"), "Rp", 100);
+        var wires = List.of(
+            wire("w1", src.id(), "out", coil.id(), "in"),
+            wire("w2", rShunt.id(), "in", coil.id(), "in")
+        );
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(src, coil, rShunt), wires, CircuitLayout.empty());
+        var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
+
+        assertEquals(1, compiled.mna().resistorCount());
+        assertEquals(-1, compiled.mna().resistorB()[0], "shunt returns to ground");
+        assertEquals(1.0 / 100, compiled.mna().resistorConductance()[0], 1e-12);
+    }
+
+    @Test
+    void passiveInductorGetsItsOwnBranch() {
+        var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var l = new CircuitComponent.Inductor(new ComponentId("l"), "L", 1e-6);
+        var wires = List.of(
+            wire("w1", src.id(), "out", l.id(), "a"),
+            wire("w2", l.id(), "b", coil.id(), "in")
+        );
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(src, coil, l), wires, CircuitLayout.empty());
+        var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
+
+        boolean foundPassive = false;
+        for (int b = 0; b < compiled.mna().branchCount(); b++) {
+            if (compiled.mna().branchKind()[b] == MnaNetwork.VBranchKind.PASSIVE_INDUCTOR) {
+                foundPassive = true;
+                assertEquals(1e-6, compiled.mna().branchL()[b], 1e-15);
+                assertEquals(0.0, compiled.mna().branchR()[b], 1e-15);
+            }
+        }
+        assertTrue(foundPassive, "passive inductor should produce a PASSIVE_INDUCTOR branch");
     }
 
     private static CircuitComponent.VoltageSource voltageSource(

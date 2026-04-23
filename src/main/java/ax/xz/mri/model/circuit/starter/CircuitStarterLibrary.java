@@ -90,8 +90,10 @@ public final class CircuitStarterLibrary {
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
             // T/R mux: common -> RF coil, a -> RF source, b -> probe, ctl -> RF.active.
+            // closed resistance deliberately tiny so the mux doesn't form a
+            // noticeable voltage divider against the 1 Ω default coil R.
             var trMux = new Multiplexer(new ComponentId("mux-tr"), "T/R Mux",
-                0.5, 1e9, 0.5);
+                1e-6, 1e9, 0.5);
             // Probe demodulates at the Larmor carrier so the reported signal
             // is baseband relative to the RF drive.
             var probe = new Probe(new ComponentId("probe-rx"), "Primary RX",

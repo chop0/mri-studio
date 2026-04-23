@@ -1,109 +1,43 @@
 package ax.xz.mri.service.circuit;
 
-import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.service.circuit.mna.MnaSolver;
 
 /**
- * Per-step helper: given a {@link CompiledCircuit} and a pulse step's raw
- * control array, compute the effective {@code (I, Q)} drive on each coil and
- * the gating factor each observe link needs.
+ * Convenience facade over {@link MnaSolver} that preserves the
+ * {@code coilDriveI/Q} API the Bloch simulator expects. Each call to
+ * {@link #evaluate} solves the MNA system for one pulse step and exposes:
+ * per-coil {@code (I, Q)} currents (the "drive" coefficients the Bloch
+ * integrator multiplies with each coil's eigenfield) and per-probe
+ * {@code (I, Q)} node voltages (the raw observed signal, before
+ * downconversion at the probe's carrier).
  *
- * <p>A single {@code CircuitStepEvaluator} is instantiated once per
- * simulation and reused across every step; it owns small scratch arrays
- * sized by the circuit's source / switch / coil counts.
+ * <p>The Bloch integrator doesn't need probe voltages — those are the
+ * {@link ax.xz.mri.service.simulation.SignalTraceComputer}'s concern — but
+ * since they fall out of the same solve we surface them here for free.
  */
 public final class CircuitStepEvaluator {
-    private final CompiledCircuit compiled;
-    private final double[] sourceValues;
-    private final boolean[] switchClosed;
-    private final double[] coilDriveI;
-    private final double[] coilDriveQ;
+    private final MnaSolver solver;
+    private final MnaSolver.StepOut out;
 
-    public CircuitStepEvaluator(CompiledCircuit compiled) {
-        this.compiled = compiled;
-        this.sourceValues = new double[compiled.sources().size()];
-        this.switchClosed = new boolean[compiled.switches().size()];
-        this.coilDriveI = new double[compiled.coils().size()];
-        this.coilDriveQ = new double[compiled.coils().size()];
+    public CircuitStepEvaluator(CompiledCircuit circuit) {
+        this.solver = new MnaSolver(circuit.mna(), circuit);
+        this.out = new MnaSolver.StepOut(circuit.coils().size(), circuit.probes().size());
     }
 
     /**
-     * Populate the per-coil drive arrays for this step. {@code tSeconds} is
-     * used to rotate off-resonance QUADRATURE sources into the rotating frame;
-     * {@code omegaSimRadPerSec} is the rotating-frame reference frequency
-     * ({@code γ·B0ref}).
+     * Solve the circuit for one step. {@code emfReal} and {@code emfImag} may
+     * be null for a transmit-only solve (no reciprocity feedback).
      */
-    public void evaluate(double[] controls, double tSeconds, double omegaSimRadPerSec) {
-        for (int i = 0; i < sourceValues.length; i++) {
-            var src = compiled.sources().get(i);
-            sourceValues[i] = switch (src.kind()) {
-                case STATIC -> src.staticAmplitude();
-                case REAL, GATE -> controls[src.channelOffset()];
-                // QUADRATURE returns the I-like magnitude for threshold logic;
-                // actual (I, Q) handled inside the drive-link loop below.
-                case QUADRATURE -> Math.hypot(controls[src.channelOffset()], controls[src.channelOffset() + 1]);
-            };
-        }
-        for (int i = 0; i < switchClosed.length; i++) {
-            var sw = compiled.switches().get(i);
-            boolean raw;
-            if (sw.ctlSourceIndex() < 0) {
-                raw = false;
-            } else if (sw.ctlViaActive()) {
-                var src = compiled.sources().get(sw.ctlSourceIndex());
-                raw = sourceActive(src, controls);
-            } else {
-                double ctl = sourceValues[sw.ctlSourceIndex()];
-                raw = ctl >= sw.thresholdVolts();
-            }
-            switchClosed[i] = sw.invertCtl() ? !raw : raw;
-        }
-        java.util.Arrays.fill(coilDriveI, 0);
-        java.util.Arrays.fill(coilDriveQ, 0);
-        for (var link : compiled.drives()) {
-            if (!allClosed(link.switchIndices())) continue;
-            var src = compiled.sources().get(link.endpointIndex());
-            double sign = link.forwardPolarity() ? 1.0 : -1.0;
-            if (src.kind() == AmplitudeKind.QUADRATURE) {
-                double i = controls[src.channelOffset()];
-                double q = controls[src.channelOffset() + 1];
-                double deltaOmega = 2 * Math.PI * src.carrierHz() - omegaSimRadPerSec;
-                if (Math.abs(deltaOmega) > 1e-9) {
-                    double phase = deltaOmega * tSeconds;
-                    double c = Math.cos(phase), s = Math.sin(phase);
-                    double ir = i * c - q * s;
-                    double qr = i * s + q * c;
-                    i = ir;
-                    q = qr;
-                }
-                coilDriveI[link.coilIndex()] += sign * i;
-                coilDriveQ[link.coilIndex()] += sign * q;
-            } else if (src.kind() == AmplitudeKind.REAL) {
-                coilDriveI[link.coilIndex()] += sign * controls[src.channelOffset()];
-            }
-            // STATIC sources are folded into staticBz at bake time; the per-step
-            // coil-drive path must not re-apply them.
-            // GATE sources don't appear in drives (compiler filtered them out).
-        }
+    public void evaluate(double[] controls, double dt, double[] emfReal, double[] emfImag,
+                         double tSeconds, double omegaSimRadPerSec) {
+        solver.step(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec, out);
     }
 
-    public double coilDriveI(int coilIndex) { return coilDriveI[coilIndex]; }
-    public double coilDriveQ(int coilIndex) { return coilDriveQ[coilIndex]; }
-    public boolean switchClosed(int switchIndex) { return switchClosed[switchIndex]; }
+    public void resetHistory() { solver.resetHistory(); }
 
-    /** Whether an observe or drive link is live this step — product of its switch closures. */
-    public boolean allClosed(java.util.List<Integer> switchIndices) {
-        for (int idx : switchIndices) if (!switchClosed[idx]) return false;
-        return true;
-    }
+    public double coilDriveI(int coilIndex) { return out.coilIReal()[coilIndex]; }
+    public double coilDriveQ(int coilIndex) { return out.coilIImag()[coilIndex]; }
 
-    /** Any of the source's control channels is non-zero this step. */
-    public static boolean sourceActive(CompiledCircuit.CompiledSource src, double[] controls) {
-        int count = src.channelCount();
-        int offset = src.channelOffset();
-        for (int i = 0; i < count; i++) {
-            if (controls[offset + i] != 0.0) return true;
-        }
-        // STATIC sources are always "active" in the sense that their staticAmplitude flows.
-        return src.kind() == ax.xz.mri.model.simulation.AmplitudeKind.STATIC && src.staticAmplitude() != 0.0;
-    }
+    public double probeVoltageReal(int probeIndex) { return out.probeVReal()[probeIndex]; }
+    public double probeVoltageImag(int probeIndex) { return out.probeVImag()[probeIndex]; }
 }

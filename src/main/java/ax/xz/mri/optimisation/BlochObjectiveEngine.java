@@ -41,14 +41,19 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         var my = geometry.my0().clone();
         var mz = geometry.mz0().clone();
         var evaluator = new CircuitStepEvaluator(circuit);
-        double omegaSim = geometry.gamma() * 0; // reference B0 is baked into staticBz; omegaSim not reconstructable here, caller may pass 0
+        double omegaSim = geometry.omegaSim();
         double timeMicros = 0.0;
         double tSeconds = 0.0;
 
+        int nCoils = circuit.coils().size();
+        double[] sCoilRePrev = new double[nCoils];
+        double[] sCoilImPrev = new double[nCoils];
+        double[] emfRe = new double[nCoils];
+        double[] emfIm = new double[nCoils];
+
         var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
         if (captureSignal) {
-            var initial = probeSignal(geometry, primaryIdx, mx, my, evaluator);
-            signalPoints.add(new SignalTrace.Point(0.0, initial[0], initial[1]));
+            signalPoints.add(new SignalTrace.Point(0.0, 0.0, 0.0));
         }
 
         double jIn = 0.0;
@@ -71,10 +76,12 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 var step = segment.steps().get(stepIndex);
                 double dt = spec.dt();
                 totalDt += dt;
-                evaluator.evaluate(step.controls(), tSeconds, omegaSim);
+                // Reciprocity coupling integrals from current M → EMF feedback.
+                computeEmfs(geometry, mx, my, dt, sCoilRePrev, sCoilImPrev, emfRe, emfIm);
+                evaluator.evaluate(step.controls(), dt, emfRe, emfIm, tSeconds, omegaSim);
                 applyStep(geometry, evaluator, dt, mx, my, mz);
                 double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                double[] signal = probeSignal(geometry, primaryIdx, mx, my, evaluator);
+                double[] signal = probeSignal(geometry, primaryIdx, evaluator);
                 double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                 double sxOut = weightedSum(geometry.wOut(), mx);
                 double syOut = weightedSum(geometry.wOut(), my);
@@ -232,35 +239,38 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return sum;
     }
 
-    /** Complex signal observed by the primary probe, gated by switch states. */
-    protected static double[] probeSignal(ProblemGeometry geometry, int probeIndex,
-                                          double[] mx, double[] my, CircuitStepEvaluator evaluator) {
-        if (probeIndex < 0) return new double[]{0, 0};
-        var circuit = geometry.circuit();
-        var probe = circuit.probes().get(probeIndex);
-        int nCoils = circuit.coils().size();
+    /**
+     * Populate {@code emfRe}/{@code emfIm} from the step's coupling-integral
+     * change. Differentiating {@code Σ (Ex·M_perp − jEy·M_perp) dV} produces
+     * the instantaneous EMF that stamps into the coil branches of the MNA.
+     */
+    protected static void computeEmfs(ProblemGeometry geometry, double[] mx, double[] my,
+                                      double dt, double[] sRePrev, double[] sImPrev,
+                                      double[] emfRe, double[] emfIm) {
+        int nCoils = geometry.circuit().coils().size();
         int nPoints = geometry.pointCount();
-        double[] coilRe = new double[nCoils];
-        double[] coilIm = new double[nCoils];
         for (int c = 0; c < nCoils; c++) {
             double re = 0, im = 0;
+            double[] ex = geometry.coilExFlat()[c];
+            double[] ey = geometry.coilEyFlat()[c];
             for (int p = 0; p < nPoints; p++) {
-                double ex = geometry.coilExFlat()[c][p];
-                double ey = geometry.coilEyFlat()[c][p];
-                re += ex * mx[p] + ey * my[p];
-                im += ex * my[p] - ey * mx[p];
+                re += ex[p] * mx[p] + ey[p] * my[p];
+                im += ex[p] * my[p] - ey[p] * mx[p];
             }
-            coilRe[c] = re;
-            coilIm[c] = im;
+            emfRe[c] = -(re - sRePrev[c]) / dt;
+            emfIm[c] = -(im - sImPrev[c]) / dt;
+            sRePrev[c] = re;
+            sImPrev[c] = im;
         }
-        double sr = 0, si = 0;
-        for (var link : circuit.observes()) {
-            if (link.endpointIndex() != probeIndex) continue;
-            if (!evaluator.allClosed(link.switchIndices())) continue;
-            double sign = link.forwardPolarity() ? 1.0 : -1.0;
-            sr += sign * coilRe[link.coilIndex()];
-            si += sign * coilIm[link.coilIndex()];
-        }
+    }
+
+    /** Complex signal observed by the probe, read directly from the MNA solve's node voltage. */
+    protected static double[] probeSignal(ProblemGeometry geometry, int probeIndex,
+                                          CircuitStepEvaluator evaluator) {
+        if (probeIndex < 0) return new double[]{0, 0};
+        var probe = geometry.circuit().probes().get(probeIndex);
+        double sr = evaluator.probeVoltageReal(probeIndex);
+        double si = evaluator.probeVoltageImag(probeIndex);
         double rad = probe.demodPhaseDeg() * Math.PI / 180.0;
         double c = Math.cos(rad);
         double s = Math.sin(rad);

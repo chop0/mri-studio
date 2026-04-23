@@ -2,33 +2,31 @@ package ax.xz.mri.service.circuit;
 
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.service.circuit.mna.MnaNetwork;
 
 import java.util.List;
 
 /**
  * Post-compile, simulator-ready view of a {@link ax.xz.mri.model.circuit.CircuitDocument}.
  *
- * <p>The compiler union-finds terminals across wires to resolve the graph
- * once, then pre-computes, for every coil, which source drives it through
- * which switches and which probes observe it through which switches. The
- * simulator replays that resolved topology each step — a tree-walk, not a
- * full nodal-analysis solve.
+ * <p>The compiler resolves the graph once and produces:
+ * <ul>
+ *   <li>Parallel lists describing sources, coils, probes, and switches — their
+ *       user-facing metadata (names, carrier, gain, etc.).</li>
+ *   <li>An {@link MnaNetwork} that drives per-step Modified Nodal Analysis in
+ *       {@link ax.xz.mri.service.circuit.mna.MnaSolver}: resistor / capacitor /
+ *       switch / voltage-branch stamps, plus node / branch index tables.</li>
+ * </ul>
  *
- * <p>Passive lumped components ({@link CompiledPassive resistors, capacitors,
- * inductors}) are stored as data but are currently metadata-only: the walker
- * honours ideal source-coil-probe links. A future MNA milestone will honour
- * matching networks, ring-down, and mutual inductance.
+ * <p>The simulator never re-walks the graph; it just reads the MNA network
+ * each step.
  */
 public record CompiledCircuit(
     List<CompiledSource> sources,
     List<CompiledSwitch> switches,
     List<CompiledCoil> coils,
     List<CompiledProbe> probes,
-    List<TopologyLink> drives,
-    List<TopologyLink> observes,
-    List<CompiledPassive> resistors,
-    List<CompiledPassive> capacitors,
-    List<CompiledPassive> inductors,
+    MnaNetwork mna,
     int totalChannelCount
 ) {
     public CompiledCircuit {
@@ -36,11 +34,6 @@ public record CompiledCircuit(
         switches = List.copyOf(switches == null ? List.of() : switches);
         coils = List.copyOf(coils == null ? List.of() : coils);
         probes = List.copyOf(probes == null ? List.of() : probes);
-        drives = List.copyOf(drives == null ? List.of() : drives);
-        observes = List.copyOf(observes == null ? List.of() : observes);
-        resistors = List.copyOf(resistors == null ? List.of() : resistors);
-        capacitors = List.copyOf(capacitors == null ? List.of() : capacitors);
-        inductors = List.copyOf(inductors == null ? List.of() : inductors);
     }
 
     /**
@@ -61,25 +54,18 @@ public record CompiledCircuit(
     }
 
     /**
-     * A switch. {@link #ctlSourceIndex()} is the index into
-     * {@link CompiledCircuit#sources()} of the source whose value drives the
-     * switch's {@code ctl} port — or {@code -1} if the ctl is floating (in
-     * which case the switch is treated as permanently open).
-     *
-     * <p>When {@link #ctlViaActive()} is {@code true}, the ctl was wired to
-     * the source's {@code active} port rather than its {@code out} port, so
-     * the switch closes whenever any clip is currently driving the source
-     * (instead of reading the raw voltage).
+     * A switch. The runtime {@link ax.xz.mri.service.circuit.mna.MnaSolver}
+     * reads the corresponding {@link MnaNetwork} entry to figure out its ctl
+     * binding and invert flag; this record exists purely to hold user-visible
+     * metadata (id, name, and the thresholds for inspection).
      */
     public record CompiledSwitch(
         ComponentId id,
         String name,
-        int ctlSourceIndex,
-        boolean ctlViaActive,
-        boolean invertCtl,
         double closedOhms,
         double openOhms,
-        double thresholdVolts
+        double thresholdVolts,
+        boolean invertCtl
     ) {}
 
     /**
@@ -104,32 +90,5 @@ public record CompiledCircuit(
         double carrierHz,
         double demodPhaseDeg,
         double loadImpedanceOhms
-    ) {}
-
-    /**
-     * A resolved path either from a source to a coil ({@link CompiledCircuit#drives})
-     * or from a coil to a probe ({@link CompiledCircuit#observes}). The path
-     * is live only when every switch in {@link #switchIndices()} reads as closed.
-     *
-     * <p>{@link #forwardPolarity()} captures whether the path's {@code (+)}
-     * end (source {@code a} or probe {@code a}) lines up with the coil's
-     * {@code a} port; when it's {@code false} the driven current (or observed
-     * EMF) is inverted.
-     */
-    public record TopologyLink(
-        int endpointIndex,
-        int coilIndex,
-        List<Integer> switchIndices,
-        boolean forwardPolarity
-    ) {
-        public TopologyLink {
-            switchIndices = List.copyOf(switchIndices == null ? List.of() : switchIndices);
-        }
-    }
-
-    public record CompiledPassive(
-        ComponentId id,
-        String name,
-        double value
     ) {}
 }

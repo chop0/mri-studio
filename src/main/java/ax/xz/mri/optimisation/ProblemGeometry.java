@@ -23,11 +23,15 @@ public record ProblemGeometry(
     double[][] coilEzFlat,
     CompiledCircuit circuit,
     double gamma,
+    double b0Ref,
     double t1,
     double t2,
     int nr,
     int nz
 ) {
+    public double omegaSim() { return gamma * b0Ref; }
+
+
     public ProblemGeometry {
         if (circuit == null) throw new IllegalArgumentException("ProblemGeometry.circuit must not be null");
         int count = staticBz.length;

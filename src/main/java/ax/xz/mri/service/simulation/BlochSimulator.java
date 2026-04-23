@@ -6,10 +6,9 @@ import ax.xz.mri.model.field.FieldPoint;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
-import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
-import ax.xz.mri.service.circuit.CompiledCircuit;
+import ax.xz.mri.service.circuit.CircuitStepEvaluator;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -124,15 +123,24 @@ public final class BlochSimulator {
         double[][] coilQ = new double[stepCount][nCoils];
         double omegaSim = field.gamma * field.b0Ref;
 
+        // Transmit-only pre-pass: solve the MNA once per step with no
+        // reciprocity EMF feedback, and cache the resulting coil currents.
+        // Receive (probe voltages + EMF coupling back into the solve) happens
+        // later in SignalTraceComputer where magnetisation state is known.
+        var evaluator = compiled == null ? null : new CircuitStepEvaluator(compiled);
+
         for (int segmentIndex = 0; segmentIndex < field.segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
             var segment = field.segments.get(segmentIndex);
             double dt = segment.dt();
             double e2 = Math.exp(-dt / field.t2);
             double e1 = Math.exp(-dt / field.t1);
             for (var step : pulse.get(segmentIndex).steps()) {
-                if (compiled != null) {
-                    computeCoilDrives(compiled, step.controls(), timeSeconds, omegaSim,
-                        coilI[kernelIndex], coilQ[kernelIndex]);
+                if (evaluator != null) {
+                    evaluator.evaluate(step.controls(), dt, null, null, timeSeconds, omegaSim);
+                    for (int c = 0; c < nCoils; c++) {
+                        coilI[kernelIndex][c] = evaluator.coilDriveI(c);
+                        coilQ[kernelIndex][c] = evaluator.coilDriveQ(c);
+                    }
                 }
                 kernels[kernelIndex] = new StepKernel(step, dt, e1, e2, timeSeconds);
                 timeMicros += dt * 1e6;
@@ -141,67 +149,6 @@ public final class BlochSimulator {
             }
         }
         return new CompiledPulse(field, kernels, stateTimesMicros, coilI, coilQ);
-    }
-
-    /** Compute per-coil (I, Q) drive for this step (no allocations in the hot loop). */
-    private static void computeCoilDrives(CompiledCircuit compiled, double[] controls, double tSeconds,
-                                          double omegaSim, double[] outI, double[] outQ) {
-        java.util.Arrays.fill(outI, 0);
-        java.util.Arrays.fill(outQ, 0);
-        // Resolve switch states.
-        int nSwitches = compiled.switches().size();
-        boolean[] closed = new boolean[nSwitches];
-        for (int i = 0; i < nSwitches; i++) {
-            var sw = compiled.switches().get(i);
-            boolean raw;
-            if (sw.ctlSourceIndex() < 0) {
-                raw = false;
-            } else {
-                var ctl = compiled.sources().get(sw.ctlSourceIndex());
-                if (sw.ctlViaActive()) {
-                    raw = ax.xz.mri.service.circuit.CircuitStepEvaluator.sourceActive(ctl, controls);
-                } else {
-                    double v = switch (ctl.kind()) {
-                        case STATIC -> ctl.staticAmplitude();
-                        case REAL, GATE -> controls[ctl.channelOffset()];
-                        case QUADRATURE -> Math.hypot(controls[ctl.channelOffset()], controls[ctl.channelOffset() + 1]);
-                    };
-                    raw = v >= sw.thresholdVolts();
-                }
-            }
-            closed[i] = sw.invertCtl() ? !raw : raw;
-        }
-        for (var link : compiled.drives()) {
-            if (!allClosed(link.switchIndices(), closed)) continue;
-            var src = compiled.sources().get(link.endpointIndex());
-            double sign = link.forwardPolarity() ? 1.0 : -1.0;
-            if (src.kind() == AmplitudeKind.QUADRATURE) {
-                double i = controls[src.channelOffset()];
-                double q = controls[src.channelOffset() + 1];
-                double deltaOmega = 2 * Math.PI * src.carrierHz() - omegaSim;
-                if (Math.abs(deltaOmega) > 1e-9) {
-                    double phase = deltaOmega * tSeconds;
-                    double c = Math.cos(phase), s = Math.sin(phase);
-                    double ir = i * c - q * s;
-                    double qr = i * s + q * c;
-                    i = ir;
-                    q = qr;
-                }
-                outI[link.coilIndex()] += sign * i;
-                outQ[link.coilIndex()] += sign * q;
-            } else if (src.kind() == AmplitudeKind.REAL) {
-                outI[link.coilIndex()] += sign * controls[src.channelOffset()];
-            }
-            // STATIC sources are folded into FieldMap.staticBz at bake time
-            // (BlochDataFactory.applyStaticContributions) — the per-step path
-            // must not apply them again, or the spin sees double the intended
-            // Bz and the rotating frame no longer aligns with Larmor.
-        }
-    }
-
-    private static boolean allClosed(List<Integer> indices, boolean[] closed) {
-        for (int i : indices) if (!closed[i]) return false;
-        return true;
     }
 
     private static Trajectory simulateFull(PointContext context) {

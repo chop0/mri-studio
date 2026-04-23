@@ -245,9 +245,9 @@ public final class SchematicPane extends BorderPane {
             newId("src"), uniqueName("V"),
             ax.xz.mri.model.simulation.AmplitudeKind.REAL, 0, 0, 1, 0), hit);
         addMenu(menu, "Switch", () -> new CircuitComponent.SwitchComponent(
-            newId("sw"), uniqueName("SW"), 0.5, 1e9, 0.5), hit);
+            newId("sw"), uniqueName("SW"), 1e-6, 1e9, 0.5), hit);
         addMenu(menu, "Multiplexer", () -> new CircuitComponent.Multiplexer(
-            newId("mux"), uniqueName("Mux"), 0.5, 1e9, 0.5), hit);
+            newId("mux"), uniqueName("Mux"), 1e-6, 1e9, 0.5), hit);
         addMenu(menu, "Coil", () -> new CircuitComponent.Coil(
             newId("coil"), uniqueName("Coil"), null, 0, 0), hit);
         addMenu(menu, "Probe", () -> new CircuitComponent.Probe(

@@ -21,16 +21,22 @@ import java.util.Map;
  *
  * <p>Each step:
  * <ol>
- *   <li>{@link CircuitStepEvaluator} resolves this step's switch closures and
- *       per-coil complex drive amplitudes (I, Q).</li>
- *   <li>At every grid point the total rotating-frame B is assembled as
- *       {@code staticBz · ẑ + Σ_c (I_c·E_c − jQ_c·E_c)} (each coil's
- *       eigenfield being its unit-current B-field pattern), then a Rodrigues
- *       rotation + T1/T2 decay advances M by one dt.</li>
- *   <li>For each observe link {@code (probe, coil, switches[])} the live
- *       probe value is the reciprocity integral
- *       {@code Σ_p (Ex − jEy)·(Mx + jMy)}, summed across every coil observed
- *       through the probe, gated by the switch states on the path.</li>
+ *   <li>Compute the reciprocity coupling integrals
+ *       {@code S_c = Σ_p (Ex·Mx + Ey·My) dV} (and imaginary analogue) for
+ *       every coil from the magnetisation state at the start of the step.
+ *       Differentiate against the previous step's integrals to turn the
+ *       coupling into an instantaneous EMF — that's what drives current
+ *       through the receive network.</li>
+ *   <li>Solve the MNA system with those coil EMFs stamped into the coil
+ *       branches, plus whatever source activity the pulse step commands.
+ *       The solver resolves switch / mux state, passives, and returns
+ *       per-coil currents {@code I_c} and per-probe node voltages
+ *       {@code V_p} (both as complex {@code (I, Q)} pairs).</li>
+ *   <li>Use the coil currents to update magnetisation via Rodrigues
+ *       rotation + exponential T1/T2 decay at every grid point.</li>
+ *   <li>Emit the downconverted probe voltage — mix the complex node voltage
+ *       by the probe's carrier, rotate by its demod phase, scale by gain —
+ *       as a {@link SignalTrace.Point} on its own trace.</li>
  * </ol>
  */
 public final class SignalTraceComputer {
@@ -66,6 +72,7 @@ public final class SignalTraceComputer {
         }
 
         int nProbes = circuit.probes().size();
+        int nCoils = circuit.coils().size();
         var traces = new ArrayList<List<Point>>(nProbes);
         double[] cosPhase = new double[nProbes];
         double[] sinPhase = new double[nProbes];
@@ -77,9 +84,7 @@ public final class SignalTraceComputer {
             sinPhase[k] = Math.sin(rad);
         }
 
-        int nCoils = circuit.coils().size();
         var evaluator = new CircuitStepEvaluator(circuit);
-        double t = 0;
         double omegaSim = f.gamma * f.b0Ref;
 
         // Each probe downconverts at its carrier: the simulator's rotating-
@@ -92,19 +97,46 @@ public final class SignalTraceComputer {
             deltaOmega[k] = ch == 0.0 ? 0.0 : omegaSim - 2 * Math.PI * ch;
         }
 
+        // Reciprocity coupling integrals and per-step EMFs.
+        double[] sCoilRePrev = new double[nCoils];
+        double[] sCoilImPrev = new double[nCoils];
+        double[] emfRe = new double[nCoils];
+        double[] emfIm = new double[nCoils];
+
+        double t = 0;
+
         for (int si = 0; si < f.segments.size() && si < pulse.size(); si++) {
             var seg = f.segments.get(si);
             var steps = pulse.get(si).steps();
-            double e2 = Math.exp(-seg.dt() / f.t2);
-            double e1 = Math.exp(-seg.dt() / f.t1);
+            double dt = seg.dt();
+            double e2 = Math.exp(-dt / f.t2);
+            double e1 = Math.exp(-dt / f.t1);
 
             for (var step : steps) {
-                evaluator.evaluate(step.controls(), t, omegaSim);
+                // 1. Reciprocity coupling from M at the START of this step.
+                double[] sCoilRe = new double[nCoils];
+                double[] sCoilIm = new double[nCoils];
+                for (int c = 0; c < nCoils; c++) {
+                    double re = 0, im = 0;
+                    for (int p = 0; p < np; p++) {
+                        var fp = pts.get(p);
+                        re += fp.coilEx()[c] * mx[p] + fp.coilEy()[c] * my[p];
+                        im += fp.coilEx()[c] * my[p] - fp.coilEy()[c] * mx[p];
+                    }
+                    sCoilRe[c] = re;
+                    sCoilIm[c] = im;
+                    // Instantaneous EMF: −dΦ/dt ≈ −(S − S_prev)/dt.
+                    emfRe[c] = -(re - sCoilRePrev[c]) / dt;
+                    emfIm[c] = -(im - sCoilImPrev[c]) / dt;
+                }
 
+                // 2. Solve the circuit with EMF feedback.
+                evaluator.evaluate(step.controls(), dt, emfRe, emfIm, t, omegaSim);
+
+                // 3. Integrate Bloch using the solver's coil currents.
                 for (int p = 0; p < np; p++) {
                     var fp = pts.get(p);
-                    double bx = 0, by = 0;
-                    double bz = fp.staticBz();
+                    double bx = 0, by = 0, bz = fp.staticBz();
                     for (int c = 0; c < nCoils; c++) {
                         double I = evaluator.coilDriveI(c);
                         double Q = evaluator.coilDriveQ(c);
@@ -113,11 +145,10 @@ public final class SignalTraceComputer {
                         by += I * ey + Q * ex;
                         bz += I * ez;
                     }
-
                     double bPerp2 = bx * bx + by * by;
                     if (bPerp2 < 1e-30) {
                         double om = f.gamma * bz;
-                        double th = om * seg.dt();
+                        double th = om * dt;
                         double c = Math.cos(th), s = Math.sin(th);
                         double nmx = (mx[p] * c - my[p] * s) * e2;
                         double nmy = (mx[p] * s + my[p] * c) * e2;
@@ -126,7 +157,7 @@ public final class SignalTraceComputer {
                         mz[p] = 1 + (mz[p] - 1) * e1;
                     } else {
                         double bm = Math.sqrt(bx * bx + by * by + bz * bz + 1e-60);
-                        double th = f.gamma * bm * seg.dt();
+                        double th = f.gamma * bm * dt;
                         double nx = bx / bm, ny = by / bm, nz = bz / bm;
                         double c = Math.cos(th), s = Math.sin(th), oc = 1 - c;
                         double nd = nx * mx[p] + ny * my[p] + nz * mz[p];
@@ -139,32 +170,13 @@ public final class SignalTraceComputer {
                     }
                 }
 
-                t += seg.dt();
+                t += dt;
                 double tUs = Math.round(t * 1e7) / 10.0;
 
-                var coilRe = new double[nCoils];
-                var coilIm = new double[nCoils];
-                for (int c = 0; c < nCoils; c++) {
-                    double re = 0, im = 0;
-                    for (int p = 0; p < np; p++) {
-                        var fp = pts.get(p);
-                        re += fp.coilEx()[c] * mx[p] + fp.coilEy()[c] * my[p];
-                        im += fp.coilEx()[c] * my[p] - fp.coilEy()[c] * mx[p];
-                    }
-                    coilRe[c] = re;
-                    coilIm[c] = im;
-                }
-
+                // 4. Emit per-probe complex voltage, downconverted at the probe's carrier.
                 for (int pk = 0; pk < nProbes; pk++) {
-                    double sr = 0, si2 = 0;
-                    for (var link : circuit.observes()) {
-                        if (link.endpointIndex() != pk) continue;
-                        if (!evaluator.allClosed(link.switchIndices())) continue;
-                        double sign = link.forwardPolarity() ? 1.0 : -1.0;
-                        sr += sign * coilRe[link.coilIndex()];
-                        si2 += sign * coilIm[link.coilIndex()];
-                    }
-                    // Downconversion: rotate by (omegaSim - omegaC)·t.
+                    double sr = evaluator.probeVoltageReal(pk);
+                    double si2 = evaluator.probeVoltageImag(pk);
                     if (deltaOmega[pk] != 0.0) {
                         double phase = deltaOmega[pk] * t;
                         double cd = Math.cos(phase), sd = Math.sin(phase);
@@ -178,6 +190,9 @@ public final class SignalTraceComputer {
                     double phasedI = (sr * sinPhase[pk] + si2 * cosPhase[pk]) * probe.gain();
                     traces.get(pk).add(new Point(tUs, phasedR, phasedI));
                 }
+
+                System.arraycopy(sCoilRe, 0, sCoilRePrev, 0, nCoils);
+                System.arraycopy(sCoilIm, 0, sCoilImPrev, 0, nCoils);
             }
         }
 

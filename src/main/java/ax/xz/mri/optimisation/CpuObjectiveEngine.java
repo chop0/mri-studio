@@ -99,6 +99,6 @@ public class CpuObjectiveEngine extends BlochObjectiveEngine {
 
         return new ProblemGeometry(mx0, my0, mz0, staticBz, wOut,
             exFlat, eyFlat, ezFlat, field.circuit,
-            field.gamma, field.t1, field.t2, nr, nz);
+            field.gamma, field.b0Ref, field.t1, field.t2, nr, nz);
     }
 }
