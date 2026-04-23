@@ -65,6 +65,9 @@ public final class CircuitCompiler {
         var coilIndexById = new HashMap<ComponentId, Integer>();
         var switchIndexById = new HashMap<ComponentId, Integer>();
         var probeIndexById = new HashMap<ComponentId, Integer>();
+        // Per-side CompiledSwitch indices for each multiplexer.
+        var muxSwitchA = new HashMap<ComponentId, Integer>();
+        var muxSwitchB = new HashMap<ComponentId, Integer>();
 
         int channelCursor = 0;
         for (var component : circuit.components()) {
@@ -82,6 +85,21 @@ public final class CircuitCompiler {
                         s.id(), s.name(), -1, false, s.invertCtl(),
                         s.closedOhms(), s.openOhms(), s.thresholdVolts()));
                 }
+                case CircuitComponent.Multiplexer m -> {
+                    // Decompose into two pseudo-switches: a↔common (non-inverted)
+                    // and b↔common (inverted). The walker will select the right
+                    // side by looking up muxSwitchA/B when it enters the mux.
+                    int aIdx = switches.size();
+                    muxSwitchA.put(m.id(), aIdx);
+                    switches.add(new CompiledSwitch(
+                        m.id(), m.name() + " (a)", -1, false, false,
+                        m.closedOhms(), m.openOhms(), m.thresholdVolts()));
+                    int bIdx = switches.size();
+                    muxSwitchB.put(m.id(), bIdx);
+                    switches.add(new CompiledSwitch(
+                        m.id(), m.name() + " (b)", -1, false, true,
+                        m.closedOhms(), m.openOhms(), m.thresholdVolts()));
+                }
                 case CircuitComponent.Coil c -> {
                     coilIndexById.put(c.id(), coils.size());
                     var sample = sampleEigenfield(c, repository, rMm, zMm);
@@ -94,7 +112,7 @@ public final class CircuitCompiler {
                     probeIndexById.put(p.id(), probes.size());
                     probes.add(new CompiledProbe(
                         p.id(), p.name(),
-                        p.gain(), p.demodPhaseDeg(), p.loadImpedanceOhms()));
+                        p.gain(), p.carrierHz(), p.demodPhaseDeg(), p.loadImpedanceOhms()));
                 }
                 case CircuitComponent.Resistor r ->
                     resistors.add(new CompiledPassive(r.id(), r.name(), r.resistanceOhms()));
@@ -113,25 +131,23 @@ public final class CircuitCompiler {
             }
         }
 
-        // Resolve switch ctl: look for any source whose "out" or "active" port
-        // shares the ctl's net.
+        // Resolve every switch/mux's ctl by locating a source whose "out" or
+        // "active" port shares the ctl terminal's net.
         for (var component : circuit.components()) {
-            if (!(component instanceof CircuitComponent.SwitchComponent s)) continue;
-            int ctlNode = nodeOf.get(new ComponentTerminal(s.id(), "ctl"));
-            int ctlSourceIdx = -1;
-            boolean viaActive = false;
-            for (var other : circuit.components()) {
-                if (!(other instanceof CircuitComponent.VoltageSource src)) continue;
-                int outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
-                int activeNode = nodeOf.get(new ComponentTerminal(src.id(), "active"));
-                if (outNode == ctlNode) { ctlSourceIdx = sourceIndexById.get(src.id()); viaActive = false; break; }
-                if (activeNode == ctlNode) { ctlSourceIdx = sourceIndexById.get(src.id()); viaActive = true; break; }
+            switch (component) {
+                case CircuitComponent.SwitchComponent s ->
+                    resolveCtl(switches, switchIndexById.get(s.id()),
+                        circuit, nodeOf, sourceIndexById,
+                        new ComponentTerminal(s.id(), "ctl"));
+                case CircuitComponent.Multiplexer m -> {
+                    var ctl = new ComponentTerminal(m.id(), "ctl");
+                    resolveCtl(switches, muxSwitchA.get(m.id()),
+                        circuit, nodeOf, sourceIndexById, ctl);
+                    resolveCtl(switches, muxSwitchB.get(m.id()),
+                        circuit, nodeOf, sourceIndexById, ctl);
+                }
+                default -> { /* nothing to resolve */ }
             }
-            int idx = switchIndexById.get(s.id());
-            var existing = switches.get(idx);
-            switches.set(idx, new CompiledSwitch(
-                existing.id(), existing.name(), ctlSourceIdx, viaActive, existing.invertCtl(),
-                existing.closedOhms(), existing.openOhms(), existing.thresholdVolts()));
         }
 
         // Drives: walk from each source's "out" to a coil.
@@ -140,6 +156,7 @@ public final class CircuitCompiler {
             var src = sources.get(srcIdx);
             if (src.kind() == ax.xz.mri.model.simulation.AmplitudeKind.GATE) continue;
             var link = walkSingleToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
+                muxSwitchA, muxSwitchB,
                 new ComponentTerminal(src.id(), "out"), srcIdx);
             if (link != null) drives.add(link);
         }
@@ -149,6 +166,7 @@ public final class CircuitCompiler {
         for (int probeIdx = 0; probeIdx < probes.size(); probeIdx++) {
             var probe = probes.get(probeIdx);
             var link = walkSingleToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
+                muxSwitchA, muxSwitchB,
                 new ComponentTerminal(probe.id(), "in"), probeIdx);
             if (link != null) observes.add(link);
         }
@@ -159,30 +177,34 @@ public final class CircuitCompiler {
 
     /**
      * Walk from a single-terminal endpoint (source.out or probe.in) to a coil,
-     * passing through zero or more switches. Polarity is always forward: coils
-     * are single-terminal, current flows in, returns through implicit ground.
+     * passing through zero or more switches / multiplexers. Polarity is always
+     * forward: coils are single-terminal, current flows in, returns through
+     * implicit ground.
      */
     private static TopologyLink walkSingleToCoil(
         CircuitDocument circuit, Map<ComponentTerminal, Integer> nodeOf,
         Map<ComponentId, Integer> coilIndexById, Map<ComponentId, Integer> switchIndexById,
+        Map<ComponentId, Integer> muxSwitchA, Map<ComponentId, Integer> muxSwitchB,
         ComponentTerminal startTerminal, int endpointIndex
     ) {
         var switchIdsOnPath = new ArrayList<Integer>();
         var reached = walkNetToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
+            muxSwitchA, muxSwitchB,
             nodeOf.get(startTerminal), switchIdsOnPath, new HashSet<>());
         if (reached == null) return null;
         return new TopologyLink(endpointIndex, coilIndexById.get(reached), switchIdsOnPath, true);
     }
 
     /**
-     * BFS from a starting node through switches. Returns the first coil's
-     * component id reachable through the net (single-terminal coil has one
-     * "in" port, so reachedPort is always "in"). Switches on the path are
-     * recorded so the simulator can gate the link.
+     * BFS from a starting node through switches and multiplexers. Returns the
+     * first coil's id reachable through the net. Switches (including the two
+     * pseudo-switches a multiplexer decomposes into) on the path are recorded
+     * so the simulator can gate the link.
      */
     private static ComponentId walkNetToCoil(
         CircuitDocument circuit, Map<ComponentTerminal, Integer> nodeOf,
         Map<ComponentId, Integer> coilIndexById, Map<ComponentId, Integer> switchIndexById,
+        Map<ComponentId, Integer> muxSwitchA, Map<ComponentId, Integer> muxSwitchB,
         int startNode, List<Integer> outSwitchIds, java.util.Set<Integer> visited
     ) {
         if (!visited.add(startNode)) return null;
@@ -198,12 +220,62 @@ public final class CircuitCompiler {
                     int swIdx = switchIndexById.get(sw.id());
                     if (!outSwitchIds.contains(swIdx)) outSwitchIds.add(swIdx);
                     var deeper = walkNetToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
-                        otherNode, outSwitchIds, visited);
+                        muxSwitchA, muxSwitchB, otherNode, outSwitchIds, visited);
                     if (deeper != null) return deeper;
+                }
+                if (component instanceof CircuitComponent.Multiplexer m) {
+                    // a <-> common when ctl high; b <-> common when ctl low.
+                    // Entering at "a" or "b" traverses to "common" via the
+                    // respective pseudo-switch. Entering at "common" fans out
+                    // through both sides — whichever reaches a coil first wins.
+                    if (port.equals("a") || port.equals("b")) {
+                        int muxIdx = port.equals("a") ? muxSwitchA.get(m.id()) : muxSwitchB.get(m.id());
+                        int otherNode = nodeOf.get(new ComponentTerminal(m.id(), "common"));
+                        var snapshot = new ArrayList<>(outSwitchIds);
+                        if (!outSwitchIds.contains(muxIdx)) outSwitchIds.add(muxIdx);
+                        var deeper = walkNetToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
+                            muxSwitchA, muxSwitchB, otherNode, outSwitchIds, visited);
+                        if (deeper != null) return deeper;
+                        outSwitchIds.clear();
+                        outSwitchIds.addAll(snapshot);
+                    } else if (port.equals("common")) {
+                        for (String side : new String[]{"a", "b"}) {
+                            int muxIdx = side.equals("a") ? muxSwitchA.get(m.id()) : muxSwitchB.get(m.id());
+                            int otherNode = nodeOf.get(new ComponentTerminal(m.id(), side));
+                            var snapshot = new ArrayList<>(outSwitchIds);
+                            if (!outSwitchIds.contains(muxIdx)) outSwitchIds.add(muxIdx);
+                            var deeper = walkNetToCoil(circuit, nodeOf, coilIndexById, switchIndexById,
+                                muxSwitchA, muxSwitchB, otherNode, outSwitchIds, visited);
+                            if (deeper != null) return deeper;
+                            outSwitchIds.clear();
+                            outSwitchIds.addAll(snapshot);
+                        }
+                    }
                 }
             }
         }
         return null;
+    }
+
+    private static void resolveCtl(
+        List<CompiledSwitch> switches, int switchIdx,
+        CircuitDocument circuit, Map<ComponentTerminal, Integer> nodeOf,
+        Map<ComponentId, Integer> sourceIndexById, ComponentTerminal ctl
+    ) {
+        int ctlNode = nodeOf.get(ctl);
+        int ctlSourceIdx = -1;
+        boolean viaActive = false;
+        for (var other : circuit.components()) {
+            if (!(other instanceof CircuitComponent.VoltageSource src)) continue;
+            int outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
+            int activeNode = nodeOf.get(new ComponentTerminal(src.id(), "active"));
+            if (outNode == ctlNode) { ctlSourceIdx = sourceIndexById.get(src.id()); viaActive = false; break; }
+            if (activeNode == ctlNode) { ctlSourceIdx = sourceIndexById.get(src.id()); viaActive = true; break; }
+        }
+        var existing = switches.get(switchIdx);
+        switches.set(switchIdx, new CompiledSwitch(
+            existing.id(), existing.name(), ctlSourceIdx, viaActive, existing.invertCtl(),
+            existing.closedOhms(), existing.openOhms(), existing.thresholdVolts()));
     }
 
     private static int find(int[] parent, int i) {

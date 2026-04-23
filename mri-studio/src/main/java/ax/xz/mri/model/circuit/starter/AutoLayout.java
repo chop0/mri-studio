@@ -60,6 +60,7 @@ public final class AutoLayout {
         return switch (component) {
             case CircuitComponent.VoltageSource v -> 0;
             case CircuitComponent.SwitchComponent s -> 1;
+            case CircuitComponent.Multiplexer m -> 1;
             case CircuitComponent.Resistor r -> 1;
             case CircuitComponent.Capacitor c -> 1;
             case CircuitComponent.Inductor l -> 1;

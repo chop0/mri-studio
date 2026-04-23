@@ -64,6 +64,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private final SimulationConfigDocument document;
     private final ConfigStore store;
     private SimulationConfig savedConfig;
+    private ax.xz.mri.model.circuit.CircuitDocument savedCircuit;
 
     private final Deque<SimulationConfig> undoStack = new ArrayDeque<>();
     private final Deque<SimulationConfig> redoStack = new ArrayDeque<>();
@@ -110,22 +111,39 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
     public void setOnTitleChanged(Runnable listener) { this.onTitleChanged = listener; }
 
-    public boolean isDirty() { return !Objects.equals(store.getConfig(), savedConfig); }
+    public boolean isDirty() {
+        if (!Objects.equals(store.getConfig(), savedConfig)) return true;
+        if (circuitSession != null) {
+            var live = circuitSession.doc();
+            if (live != null && !live.id().value().equals("circuit-placeholder")
+                    && !Objects.equals(live, savedCircuit)) return true;
+        }
+        return false;
+    }
 
     public void save() {
-        var next = store.getConfig();
-        if (Objects.equals(next, savedConfig)) return;
         var repo = paneContext.session().project.repository.get();
-        var simConfig = document.withConfig(next);
-        repo.addSimConfig(simConfig);
-        savedConfig = next;
-        if (circuitSession != null && circuitSession.doc() != null
-                && !circuitSession.doc().id().value().equals("circuit-placeholder")) {
-            if (repo.circuit(circuitSession.doc().id()) != null) {
-                repo.updateCircuit(circuitSession.doc());
+        var next = store.getConfig();
+        boolean configChanged = !Objects.equals(next, savedConfig);
+        boolean circuitChanged = circuitSession != null
+            && circuitSession.doc() != null
+            && !circuitSession.doc().id().value().equals("circuit-placeholder")
+            && !Objects.equals(circuitSession.doc(), savedCircuit);
+        if (!configChanged && !circuitChanged) return;
+
+        if (configChanged) {
+            var simConfig = document.withConfig(next);
+            repo.addSimConfig(simConfig);
+            savedConfig = next;
+        }
+        if (circuitChanged) {
+            var liveCircuit = circuitSession.doc();
+            if (repo.circuit(liveCircuit.id()) != null) {
+                repo.updateCircuit(liveCircuit);
             } else {
-                repo.addCircuit(circuitSession.doc());
+                repo.addCircuit(liveCircuit);
             }
+            savedCircuit = liveCircuit;
         }
         paneContext.session().project.explorer.refresh();
         paneContext.session().project.saveProjectQuietly();
@@ -135,6 +153,10 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
     public void revert() {
         store.setConfig(savedConfig);
+        if (circuitSession != null && savedCircuit != null
+                && !Objects.equals(circuitSession.doc(), savedCircuit)) {
+            circuitSession.loadDocument(savedCircuit);
+        }
         refreshDirty();
     }
 
@@ -413,19 +435,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             doc = CircuitDocument.empty(new ProjectNodeId("circuit-placeholder"), "(no circuit)");
         }
         circuitSession = new CircuitEditSession(doc);
-        // Persist edits back into the repository on every mutation.
-        circuitSession.current.addListener((obs, oldDoc, newDoc) -> {
-            if (newDoc == null) return;
-            if (newDoc.id().value().equals("circuit-placeholder")) return;
-            var currentRepo = paneContext.session().project.repository.get();
-            if (currentRepo.circuit(newDoc.id()) != null) {
-                currentRepo.updateCircuit(newDoc);
-            } else {
-                currentRepo.addCircuit(newDoc);
-            }
-            paneContext.session().project.saveProjectQuietly();
-            paneContext.session().project.explorer.refresh();
-        });
+        savedCircuit = doc;
+        // Schematic edits flip the dirty pill on; the user commits via Save.
+        circuitSession.current.addListener((obs, oldDoc, newDoc) -> refreshDirty());
 
         return new SchematicPane(circuitSession,
             () -> paneContext.session().project.repository.get(),

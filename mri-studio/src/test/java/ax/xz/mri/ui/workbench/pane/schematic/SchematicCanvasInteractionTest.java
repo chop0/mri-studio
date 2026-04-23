@@ -106,14 +106,29 @@ class SchematicCanvasInteractionTest {
             var session = new CircuitEditSession(lowCircuit());
             var pane = new SchematicPane(session, () -> null, id -> {});
             var stage = new Stage();
-            stage.setScene(new Scene(new BorderPane(pane), 400, 300));
+            var scene = new Scene(new BorderPane(pane), 400, 300);
+            stage.setScene(scene);
             stage.show();
             try {
-                pane.fireEvent(keyEvent(KeyCode.H, false, false));
+                // The scene-level key filter only routes when the mouse is over the pane.
+                // Dispatch a mouse-moved event through the scene first so the pane
+                // records a cursor position inside its bounds.
+                scene.getRoot().applyCss();
+                scene.getRoot().layout();
+                var bounds = pane.localToScene(pane.getBoundsInLocal());
+                double mx = bounds.getMinX() + bounds.getWidth() / 2;
+                double my = bounds.getMinY() + bounds.getHeight() / 2;
+                var mouseMove = new javafx.scene.input.MouseEvent(
+                    javafx.scene.input.MouseEvent.MOUSE_MOVED, mx, my, mx, my,
+                    javafx.scene.input.MouseButton.NONE, 0,
+                    false, false, false, false, false, false, false, false, false, false, null);
+                scene.getRoot().fireEvent(mouseMove);
+
+                scene.getRoot().fireEvent(keyEvent(KeyCode.H, false, false));
                 assertEquals(SchematicCanvas.PrimaryMode.PAN, pane.canvas().primaryMode());
-                pane.fireEvent(keyEvent(KeyCode.V, false, false));
+                scene.getRoot().fireEvent(keyEvent(KeyCode.V, false, false));
                 assertEquals(SchematicCanvas.PrimaryMode.SELECT, pane.canvas().primaryMode());
-                pane.fireEvent(keyEvent(KeyCode.W, false, false));
+                scene.getRoot().fireEvent(keyEvent(KeyCode.W, false, false));
                 assertEquals(SchematicCanvas.PrimaryMode.WIRE, pane.canvas().primaryMode());
             } finally {
                 stage.close();

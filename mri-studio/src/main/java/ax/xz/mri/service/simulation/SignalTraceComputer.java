@@ -82,6 +82,16 @@ public final class SignalTraceComputer {
         double t = 0;
         double omegaSim = f.gamma * f.b0Ref;
 
+        // Each probe downconverts at its carrier: the simulator's rotating-
+        // frame signal is re-expressed in the probe's frame via
+        // exp(j·(omegaSim − omegaC)·t). carrierHz == 0 means "report the raw
+        // rotating-frame value" (no extra mixing).
+        double[] deltaOmega = new double[nProbes];
+        for (int k = 0; k < nProbes; k++) {
+            double ch = circuit.probes().get(k).carrierHz();
+            deltaOmega[k] = ch == 0.0 ? 0.0 : omegaSim - 2 * Math.PI * ch;
+        }
+
         for (int si = 0; si < f.segments.size() && si < pulse.size(); si++) {
             var seg = f.segments.get(si);
             var steps = pulse.get(si).steps();
@@ -153,6 +163,15 @@ public final class SignalTraceComputer {
                         double sign = link.forwardPolarity() ? 1.0 : -1.0;
                         sr += sign * coilRe[link.coilIndex()];
                         si2 += sign * coilIm[link.coilIndex()];
+                    }
+                    // Downconversion: rotate by (omegaSim - omegaC)·t.
+                    if (deltaOmega[pk] != 0.0) {
+                        double phase = deltaOmega[pk] * t;
+                        double cd = Math.cos(phase), sd = Math.sin(phase);
+                        double r2 = sr * cd - si2 * sd;
+                        double i2 = sr * sd + si2 * cd;
+                        sr = r2;
+                        si2 = i2;
                     }
                     var probe = circuit.probes().get(pk);
                     double phasedR = (sr * cosPhase[pk] - si2 * sinPhase[pk]) * probe.gain();

@@ -149,6 +149,9 @@ public final class SchematicCanvas extends Canvas {
         zoomAround(factor, getWidth() / 2, getHeight() / 2);
     }
 
+    public void undo() { session.undo(); }
+    public void redo() { session.redo(); }
+
     public void resetZoom() {
         scale = 1.0;
         offsetX = 0;
@@ -539,6 +542,15 @@ public final class SchematicCanvas extends Canvas {
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.E) {
             session.mirrorSelection();
+            return true;
+        }
+        if (e.isShortcutDown() && e.getCode() == KeyCode.Z) {
+            if (e.isShiftDown()) session.redo();
+            else session.undo();
+            return true;
+        }
+        if (e.isShortcutDown() && e.getCode() == KeyCode.Y) {
+            session.redo();
             return true;
         }
         if (e.isShortcutDown() && (e.getCode() == KeyCode.PLUS || e.getCode() == KeyCode.EQUALS)) {

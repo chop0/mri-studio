@@ -2,8 +2,8 @@ package ax.xz.mri.model.circuit.starter;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.Coil;
+import ax.xz.mri.model.circuit.CircuitComponent.Multiplexer;
 import ax.xz.mri.model.circuit.CircuitComponent.Probe;
-import ax.xz.mri.model.circuit.CircuitComponent.SwitchComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.ComponentId;
@@ -52,16 +52,16 @@ public final class CircuitStarterLibrary {
 
     /**
      * Standard low-field 1H MRI setup: B0 static source + coil, RF quadrature
-     * source + coil, two gradient sources + coils, and one primary probe
-     * wired through a T/R switch to the RF coil. The switch is gated by the
-     * RF source's {@code active} port, so receive is automatically muted while
-     * any RF clip is driving - no hand-authored RX gate track needed.
+     * source + coil, two gradient sources + coils, and one primary probe wired
+     * through a T/R multiplexer. The mux routes the RF source to the RF coil
+     * during TX (RF.active high) and the coil to the probe during RX, so the
+     * transmitter never drives the probe's front end directly.
      */
     private static final class LowFieldMriStarter implements CircuitStarter {
         @Override public String id() { return "low-field-mri"; }
         @Override public String name() { return "Low-field 1H MRI"; }
         @Override public String description() {
-            return "B0 + RF + Gx + Gz + RX probe through a T/R switch driven by RF.active.";
+            return "B0 + RF + Gx + Gz + RX probe through a T/R multiplexer gated by RF.active.";
         }
 
         @Override
@@ -89,34 +89,34 @@ public final class CircuitStarterLibrary {
             var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
-            // RX switch: closes when RF is NOT active (invert the active ctl),
-            // so the probe only observes during receive windows.
-            var rxSwitch = new SwitchComponent(new ComponentId("sw-rx"), "RX Switch",
-                0.5, 1e9, 0.5, /* invertCtl = */ true);
-            var probe = new Probe(new ComponentId("probe-rx"), "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
+            // T/R mux: common -> RF coil, a -> RF source, b -> probe, ctl -> RF.active.
+            var trMux = new Multiplexer(new ComponentId("mux-tr"), "T/R Mux",
+                0.5, 1e9, 0.5);
+            // Probe demodulates at the Larmor carrier so the reported signal
+            // is baseband relative to the RF drive.
+            var probe = new Probe(new ComponentId("probe-rx"), "Primary RX",
+                1.0, larmorHz, 0.0, Double.POSITIVE_INFINITY);
 
             var components = List.<CircuitComponent>of(
                 b0Src, rfSrc, gxSrc, gzSrc,
                 b0Coil, rfCoil, gxCoil, gzCoil,
-                rxSwitch, probe);
+                trMux, probe);
 
             var wires = new ArrayList<Wire>();
             wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "in"));
-            wires.add(wire("w-rf-drive", rfSrc.id(), "out", rfCoil.id(), "in"));
             wires.add(wire("w-gx-drive", gxSrc.id(), "out", gxCoil.id(), "in"));
             wires.add(wire("w-gz-drive", gzSrc.id(), "out", gzCoil.id(), "in"));
 
-            // RX path: probe.in <- RX switch <- RF coil. Switch ctl is wired to
-            // RF.active with invertCtl = true, so the probe only observes when
-            // no RF clip is driving.
-            wires.add(wire("w-rx-probe", probe.id(), "in", rxSwitch.id(), "a"));
-            wires.add(wire("w-rx-coil",  rxSwitch.id(), "b", rfCoil.id(), "in"));
-            wires.add(wire("w-rxgate-ctl", rfSrc.id(), "active", rxSwitch.id(), "ctl"));
+            // T/R routing.
+            wires.add(wire("w-rf-mux",    rfSrc.id(), "out", trMux.id(), "a"));
+            wires.add(wire("w-probe-mux", probe.id(), "in",  trMux.id(), "b"));
+            wires.add(wire("w-mux-coil",  trMux.id(), "common", rfCoil.id(), "in"));
+            wires.add(wire("w-mux-ctl",   rfSrc.id(), "active", trMux.id(), "ctl"));
 
             var layout = LowFieldLayout.arrange(
                 List.of(b0Src, rfSrc, gxSrc, gzSrc),
                 List.of(b0Coil, rfCoil, gxCoil, gzCoil),
-                rxSwitch, probe);
+                trMux, probe);
 
             return new CircuitDocument(id, name, components, wires, layout);
         }

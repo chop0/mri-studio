@@ -70,6 +70,7 @@ public final class ComponentInspector extends VBox {
         switch (component) {
             case CircuitComponent.VoltageSource v -> populateVoltageSource(v);
             case CircuitComponent.SwitchComponent s -> populateSwitch(s);
+            case CircuitComponent.Multiplexer m -> populateMultiplexer(m);
             case CircuitComponent.Coil c -> populateCoil(c);
             case CircuitComponent.Probe p -> populateProbe(p);
             case CircuitComponent.Resistor r -> populateScalar("Resistance (ohms)", r.resistanceOhms(),
@@ -104,6 +105,22 @@ public final class ComponentInspector extends VBox {
         getChildren().add(doubleField("Max amplitude", v.maxAmplitude(), d -> session.replaceComponent(v.withMaxAmplitude(d))));
         getChildren().add(doubleField("Output R (ohms)", v.outputImpedanceOhms(),
             d -> session.replaceComponent(v.withOutputImpedanceOhms(d))));
+    }
+
+    private void populateMultiplexer(CircuitComponent.Multiplexer m) {
+        var help = new Label(
+            "SPDT routing: common connects to 'a' when ctl is high, " +
+            "to 'b' when ctl is low. Wire ctl to a source's 'active' port " +
+            "for automatic T/R switching.");
+        help.setWrapText(true);
+        help.getStyleClass().add("schematic-inspector-hint");
+        getChildren().add(help);
+        getChildren().add(doubleField("Closed (ohms)", m.closedOhms(), d -> session.replaceComponent(
+            new CircuitComponent.Multiplexer(m.id(), m.name(), d, m.openOhms(), m.thresholdVolts()))));
+        getChildren().add(doubleField("Open (ohms)", m.openOhms(), d -> session.replaceComponent(
+            new CircuitComponent.Multiplexer(m.id(), m.name(), m.closedOhms(), d, m.thresholdVolts()))));
+        getChildren().add(doubleField("Threshold V", m.thresholdVolts(), d -> session.replaceComponent(
+            new CircuitComponent.Multiplexer(m.id(), m.name(), m.closedOhms(), m.openOhms(), d))));
     }
 
     private void populateSwitch(CircuitComponent.SwitchComponent s) {
@@ -186,6 +203,8 @@ public final class ComponentInspector extends VBox {
         traceRow.getChildren().addAll(traceLabel, traceName);
         getChildren().add(traceRow);
         getChildren().add(doubleField("Gain", p.gain(), d -> session.replaceComponent(p.withGain(d))));
+        getChildren().add(doubleField("Carrier (Hz)", p.carrierHz(),
+            d -> session.replaceComponent(p.withCarrierHz(d))));
         getChildren().add(doubleField("Phase (deg)", p.demodPhaseDeg(),
             d -> session.replaceComponent(p.withDemodPhaseDeg(d))));
         getChildren().add(doubleField("Load (ohms)", p.loadImpedanceOhms(),
@@ -254,6 +273,7 @@ public final class ComponentInspector extends VBox {
         return switch (component) {
             case CircuitComponent.VoltageSource v -> "Voltage source";
             case CircuitComponent.SwitchComponent s -> "Switch";
+            case CircuitComponent.Multiplexer m -> "Multiplexer";
             case CircuitComponent.Coil c -> "Coil";
             case CircuitComponent.Probe p -> "Probe";
             case CircuitComponent.Resistor r -> "Resistor (series)";

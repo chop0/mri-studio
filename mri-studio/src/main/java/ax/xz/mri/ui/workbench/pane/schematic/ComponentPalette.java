@@ -35,10 +35,13 @@ public final class ComponentPalette extends VBox {
         addButton("Gate source", "0/1 digital signal",
             onPick, () -> newSource(AmplitudeKind.GATE, "Gate"));
 
-        addSection("Switch");
+        addSection("Routing");
         addButton("Switch", "Gated pass-through",
             onPick, () -> new CircuitComponent.SwitchComponent(
                 newId("sw"), "Switch", 0.5, 1e9, 0.5));
+        addButton("Multiplexer", "SPDT: a-to-common when ctl high, b-to-common when low",
+            onPick, () -> new CircuitComponent.Multiplexer(
+                newId("mux"), "Mux", 0.5, 1e9, 0.5));
 
         addSection("Coils + probes");
         addButton("Coil", "Bridges circuit and FOV",

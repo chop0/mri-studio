@@ -101,6 +101,7 @@ public record CompiledCircuit(
         ComponentId id,
         String name,
         double gain,
+        double carrierHz,
         double demodPhaseDeg,
         double loadImpedanceOhms
     ) {}

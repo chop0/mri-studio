@@ -179,7 +179,7 @@ public final class TestBlochDataFactory {
             new CompiledCoil(gzCoilId, "Gz Coil", 0, 0, gzEx, gzEy, gzEz)
         );
         var probes = List.of(
-            new CompiledProbe(probeId, "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY)
+            new CompiledProbe(probeId, "Primary RX", 1.0, 0.0, 0.0, Double.POSITIVE_INFINITY)
         );
         var drives = List.of(
             new TopologyLink(0, 0, List.of(), true),

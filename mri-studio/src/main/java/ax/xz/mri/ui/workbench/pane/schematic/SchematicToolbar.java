@@ -47,6 +47,11 @@ public final class SchematicToolbar extends HBox {
         canvas.primaryModeProperty().addListener((obs, o, n) -> syncToggle(modeGroup, n));
         syncToggle(modeGroup, canvas.primaryMode());
 
+        var undo = toolButton("Undo", "Undo (Ctrl+Z)");
+        undo.setOnAction(e -> canvas.undo());
+        var redo = toolButton("Redo", "Redo (Ctrl+Shift+Z)");
+        redo.setOnAction(e -> canvas.redo());
+
         var zoomOut = toolButton("-", "Zoom out (Ctrl+-)");
         zoomOut.setOnAction(e -> canvas.zoomBy(1.0 / 1.2));
         var zoomIn = toolButton("+", "Zoom in (Ctrl++)");
@@ -60,11 +65,13 @@ public final class SchematicToolbar extends HBox {
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         var shortcuts = new javafx.scene.control.Label(
-            "V Select / H Pan / W Wire    Del Remove    Ctrl+C Copy / Ctrl+V Paste / Ctrl+D Duplicate    Ctrl+R Rotate / Ctrl+E Mirror");
+            "V/H/W modes   Del remove   Ctrl+C/V/D copy/paste/dup   Ctrl+R/E rotate/mirror   Ctrl+Z/Shift+Z undo/redo");
         shortcuts.getStyleClass().add("schematic-toolbar-hint");
 
         getChildren().addAll(
             select, pan, wire,
+            new Separator(javafx.geometry.Orientation.VERTICAL),
+            undo, redo,
             new Separator(javafx.geometry.Orientation.VERTICAL),
             zoomOut, zoomIn, fit, reset,
             spacer,

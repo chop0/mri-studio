@@ -27,15 +27,16 @@ final class LowFieldLayout {
 
     /**
      * Arrange the 10 components of the low-field MRI starter. The voltage
-     * sources and coils are row-aligned; the RX path extends rightward on
-     * the RF row.
+     * sources and coils are row-aligned; the T/R mux sits between the RF
+     * source and the RF coil on the RF row; the probe sits below it on a
+     * dedicated probe row.
      *
      * @param sources order [b0, rf, gx, gz]
      * @param coils   order [b0Coil, rfCoil, gxCoil, gzCoil]
      */
     static CircuitLayout arrange(List<CircuitComponent.VoltageSource> sources,
                                   List<CircuitComponent.Coil> coils,
-                                  CircuitComponent.SwitchComponent rxSwitch,
+                                  CircuitComponent.Multiplexer mux,
                                   CircuitComponent.Probe probe) {
         var layout = CircuitLayout.empty();
         for (int i = 0; i < 4; i++) {
@@ -45,9 +46,11 @@ final class LowFieldLayout {
                 .with(new ComponentPosition(coils.get(i).id(), COIL_X, y, 0));
         }
         double rfY = FIRST_ROW_Y + ROW_SPACING;
-        layout = layout
-            .with(new ComponentPosition(rxSwitch.id(), SWITCH_X, rfY, 0))
-            .with(new ComponentPosition(probe.id(), PROBE_X, rfY, 0));
+        // Mux between RF source and RF coil; probe sits just below it so its
+        // "in" terminal wraps naturally up to the mux's "b" port.
+        double muxX = (SRC_X + COIL_X) / 2.0;
+        layout = layout.with(new ComponentPosition(mux.id(), muxX, rfY, 0));
+        layout = layout.with(new ComponentPosition(probe.id(), muxX + 20, rfY + 80, 0));
         return layout;
     }
 }

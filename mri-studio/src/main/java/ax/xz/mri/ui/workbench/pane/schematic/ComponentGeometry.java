@@ -37,6 +37,12 @@ public record ComponentGeometry(double width, double height, List<Terminal> term
                 new Terminal("b", 45, 0),
                 new Terminal("ctl", 0, 35)
             ));
+            case CircuitComponent.Multiplexer ignored -> new ComponentGeometry(110, 90, List.of(
+                new Terminal("a", -55, -20),
+                new Terminal("b", -55, 20),
+                new Terminal("common", 55, 0),
+                new Terminal("ctl", 0, 45)
+            ));
             case CircuitComponent.Coil ignored -> SINGLE_TERMINAL_IN;
             case CircuitComponent.Probe ignored -> SINGLE_TERMINAL_IN;
             case CircuitComponent.Resistor ignored -> TWO_TERMINAL_HORIZONTAL;

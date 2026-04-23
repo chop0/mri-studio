@@ -38,6 +38,11 @@ public final class SchematicPane extends BorderPane {
     private final Supplier<ProjectRepository> repositorySupplier;
     private final Consumer<ProjectNodeId> onJumpToEigenfield;
 
+    private double lastSceneMouseX = Double.NaN;
+    private double lastSceneMouseY = Double.NaN;
+    private javafx.event.EventHandler<KeyEvent> sceneKeyFilter;
+    private javafx.event.EventHandler<javafx.scene.input.MouseEvent> sceneMouseFilter;
+
     public SchematicPane(CircuitEditSession session,
                          Supplier<ProjectRepository> repositorySupplier,
                          Consumer<ProjectNodeId> onJumpToEigenfield) {
@@ -74,9 +79,28 @@ public final class SchematicPane extends BorderPane {
         setCenter(centre);
         setRight(inspectorScroll);
 
-        // Scene-level filter: keyboard shortcuts work whenever the pointer is
-        // over the schematic pane, no focus wrestling.
-        addEventFilter(KeyEvent.KEY_PRESSED, this::onKey);
+        // Scene-level filters: the mouse filter tracks cursor position in scene
+        // coordinates (so the key filter can tell whether the cursor is over
+        // the schematic); the key filter routes shortcut events to the canvas
+        // regardless of which descendant has focus.
+        sceneProperty().addListener((obs, oldScene, newScene) -> {
+            if (oldScene != null) {
+                if (sceneKeyFilter != null) oldScene.removeEventFilter(KeyEvent.KEY_PRESSED, sceneKeyFilter);
+                if (sceneMouseFilter != null) oldScene.removeEventFilter(javafx.scene.input.MouseEvent.MOUSE_MOVED, sceneMouseFilter);
+            }
+            if (newScene != null) {
+                sceneKeyFilter = this::onKey;
+                newScene.addEventFilter(KeyEvent.KEY_PRESSED, sceneKeyFilter);
+                sceneMouseFilter = e -> {
+                    lastSceneMouseX = e.getSceneX();
+                    lastSceneMouseY = e.getSceneY();
+                };
+                newScene.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_MOVED, sceneMouseFilter);
+            } else {
+                sceneKeyFilter = null;
+                sceneMouseFilter = null;
+            }
+        });
 
         canvas.setContextMenuRequested((hit, req) -> showContextMenu(hit, req));
         canvas.setOnComponentActivated(id -> {
@@ -104,20 +128,40 @@ public final class SchematicPane extends BorderPane {
     public SchematicCanvas canvas() { return canvas; }
 
     public void replaceDocument(CircuitDocument document) {
-        session.replaceDocument(document);
+        session.loadDocument(document);
     }
 
-    /** Route key events (pressed anywhere over this pane) into the canvas or mode hotkeys. */
+    /**
+     * Scene-level key filter. Fires when the pointer is over the schematic
+     * pane — always, regardless of where focus is (canvas, palette, inspector
+     * text field, whatever). Text-input controls keep their own Ctrl+Z/C/V
+     * for text editing: we skip the filter when focus is in one AND no
+     * shortcut-independent schematic action would otherwise fire.
+     */
     private void onKey(KeyEvent e) {
         if (e.isConsumed()) return;
-        if (e.getTarget() instanceof javafx.scene.control.TextInputControl) return;
-        // Mode hotkeys first — single-letter, no modifier.
+        if (!isPointerOverPane()) return;
+        boolean inTextField = e.getTarget() instanceof javafx.scene.control.TextInputControl;
         if (!e.isShortcutDown() && !e.isAltDown() && !e.isMetaDown()) {
+            // Single-letter mode hotkeys collide with typing, so skip them when
+            // a text field is focused.
+            if (inTextField) return;
             if (e.getCode() == KeyCode.V) { canvas.setPrimaryMode(SchematicCanvas.PrimaryMode.SELECT); e.consume(); return; }
             if (e.getCode() == KeyCode.H) { canvas.setPrimaryMode(SchematicCanvas.PrimaryMode.PAN); e.consume(); return; }
             if (e.getCode() == KeyCode.W) { canvas.setPrimaryMode(SchematicCanvas.PrimaryMode.WIRE); e.consume(); return; }
+            if (canvas.handleKey(e)) e.consume();
+            return;
         }
+        // Ctrl-shortcuts (or Ctrl+letter) always go to the canvas — even when
+        // focus is in a text field, so Ctrl+Z undoes the schematic edit rather
+        // than a stray text change inside the inspector.
         if (canvas.handleKey(e)) e.consume();
+    }
+
+    private boolean isPointerOverPane() {
+        if (Double.isNaN(lastSceneMouseX)) return false;
+        var bounds = localToScene(getBoundsInLocal());
+        return bounds.contains(lastSceneMouseX, lastSceneMouseY);
     }
 
     private HBox buildStatusBar() {
@@ -202,6 +246,8 @@ public final class SchematicPane extends BorderPane {
             ax.xz.mri.model.simulation.AmplitudeKind.REAL, 0, 0, 1, 0), hit);
         addMenu(menu, "Switch", () -> new CircuitComponent.SwitchComponent(
             newId("sw"), uniqueName("SW"), 0.5, 1e9, 0.5), hit);
+        addMenu(menu, "Multiplexer", () -> new CircuitComponent.Multiplexer(
+            newId("mux"), uniqueName("Mux"), 0.5, 1e9, 0.5), hit);
         addMenu(menu, "Coil", () -> new CircuitComponent.Coil(
             newId("coil"), uniqueName("Coil"), null, 0, 0), hit);
         addMenu(menu, "Probe", () -> new CircuitComponent.Probe(

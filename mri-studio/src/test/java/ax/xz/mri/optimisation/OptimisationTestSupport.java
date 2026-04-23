@@ -63,7 +63,7 @@ public final class OptimisationTestSupport {
             new CompiledCoil(new ComponentId("coil-gx"), "Gx Coil", 0, 0, zeros, zeros, zeros),
             new CompiledCoil(new ComponentId("coil-gz"), "Gz Coil", 0, 0, zeros, zeros, zeros)
         );
-        var probes = List.of(new CompiledProbe(probeId, "Primary RX", rxWeight, 0.0, Double.POSITIVE_INFINITY));
+        var probes = List.of(new CompiledProbe(probeId, "Primary RX", rxWeight, 0.0, 0.0, Double.POSITIVE_INFINITY));
         var drives = List.of(
             new TopologyLink(0, 0, List.of(), true),
             new TopologyLink(1, 1, List.of(), true),

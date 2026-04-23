@@ -40,6 +40,7 @@ public final class ComponentRenderer {
         switch (component) {
             case CircuitComponent.VoltageSource v -> drawVoltageSource(g, v);
             case CircuitComponent.SwitchComponent s -> drawSwitch(g, s);
+            case CircuitComponent.Multiplexer m -> drawMultiplexer(g, m);
             case CircuitComponent.Coil c -> drawCoil(g, c);
             case CircuitComponent.Probe p -> drawProbe(g, p);
             case CircuitComponent.Resistor r -> drawResistor(g, r.name());
@@ -119,6 +120,37 @@ public final class ComponentRenderer {
         g.fillText(glyph, 0, 4);
         // Just the source name — the kind/amplitude lives in the inspector.
         drawLabel(g, v.name(), INK, 0, -30);
+    }
+
+    private static void drawMultiplexer(GraphicsContext g, CircuitComponent.Multiplexer m) {
+        // Trapezoidal mux body with the two inputs (a, b) on the left narrow
+        // side and common on the right wide side. ctl lead drops from the bottom.
+        g.setStroke(INK);
+        g.setLineWidth(1.4);
+        g.strokeLine(-55, -20, -40, -20);
+        g.strokeLine(-55, 20, -40, 20);
+        g.strokeLine(40, 0, 55, 0);
+        g.setFill(Color.WHITE);
+        double[] bx = {-40, 40, 40, -40};
+        double[] by = {-28, -14, 14, 28};
+        g.fillPolygon(bx, by, 4);
+        g.setStroke(GATE_ACCENT);
+        g.setLineWidth(1.6);
+        g.strokePolygon(bx, by, 4);
+        // Port labels inside.
+        g.setFill(INK);
+        g.setFont(Font.font("System", 9));
+        g.setTextAlign(TextAlignment.LEFT);
+        g.fillText("a", -36, -17);
+        g.fillText("b", -36, 23);
+        g.setTextAlign(TextAlignment.RIGHT);
+        g.fillText("c", 36, 3);
+        // ctl dashed lead.
+        g.setStroke(GATE_ACCENT.deriveColor(0, 1, 1, 0.7));
+        g.setLineDashes(3, 2);
+        g.strokeLine(0, 24, 0, 45);
+        g.setLineDashes();
+        drawLabel(g, m.name(), INK, 0, -34);
     }
 
     private static void drawSwitch(GraphicsContext g, CircuitComponent.SwitchComponent s) {

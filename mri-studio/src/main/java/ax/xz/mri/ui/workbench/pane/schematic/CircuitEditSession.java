@@ -31,11 +31,16 @@ import java.util.function.UnaryOperator;
  * owning separate sources of truth.
  */
 public final class CircuitEditSession {
+    private static final int MAX_UNDO = 100;
+
     public final ObjectProperty<CircuitDocument> current = new SimpleObjectProperty<>();
     public final IntegerProperty revision = new SimpleIntegerProperty(0);
     public final ObservableSet<ComponentId> selectedComponents = FXCollections.observableSet(new LinkedHashSet<>());
     public final ObservableSet<String> selectedWires = FXCollections.observableSet(new LinkedHashSet<>());
     public final StringProperty statusMessage = new SimpleStringProperty("");
+
+    private final java.util.Deque<CircuitDocument> undoStack = new java.util.ArrayDeque<>();
+    private final java.util.Deque<CircuitDocument> redoStack = new java.util.ArrayDeque<>();
 
     public CircuitEditSession(CircuitDocument document) {
         current.set(document);
@@ -43,21 +48,71 @@ public final class CircuitEditSession {
 
     public CircuitDocument doc() { return current.get(); }
 
+    public boolean canUndo() { return !undoStack.isEmpty(); }
+    public boolean canRedo() { return !redoStack.isEmpty(); }
+
     public void apply(UnaryOperator<CircuitDocument> delta) {
-        var next = delta.apply(doc());
-        if (next != null && !next.equals(doc())) {
+        var snapshot = doc();
+        var next = delta.apply(snapshot);
+        if (next != null && !next.equals(snapshot)) {
+            pushUndo(snapshot);
             current.set(next);
             revision.set(revision.get() + 1);
         }
     }
 
+    /**
+     * Replace the whole document in-place as a user edit. Pushes an undo
+     * snapshot so the change is reversible, same as a single
+     * {@link #apply(UnaryOperator)}. Used by batch operations like
+     * {@link #deleteSelection()} that rebuild the document in one step.
+     */
     public void replaceDocument(CircuitDocument next) {
-        if (!next.equals(doc())) {
+        var snapshot = doc();
+        if (!next.equals(snapshot)) {
+            pushUndo(snapshot);
             current.set(next);
-            selectedComponents.clear();
-            selectedWires.clear();
             revision.set(revision.get() + 1);
         }
+    }
+
+    /**
+     * External load — blow away undo history and install the document as the
+     * new baseline. Use this on project open, never for user edits.
+     */
+    public void loadDocument(CircuitDocument next) {
+        undoStack.clear();
+        redoStack.clear();
+        current.set(next);
+        selectedComponents.clear();
+        selectedWires.clear();
+        revision.set(revision.get() + 1);
+    }
+
+    public void undo() {
+        if (undoStack.isEmpty()) return;
+        var snapshot = undoStack.pop();
+        redoStack.push(doc());
+        current.set(snapshot);
+        selectedComponents.clear();
+        selectedWires.clear();
+        revision.set(revision.get() + 1);
+    }
+
+    public void redo() {
+        if (redoStack.isEmpty()) return;
+        var snapshot = redoStack.pop();
+        undoStack.push(doc());
+        current.set(snapshot);
+        selectedComponents.clear();
+        selectedWires.clear();
+        revision.set(revision.get() + 1);
+    }
+
+    private void pushUndo(CircuitDocument previous) {
+        undoStack.push(previous);
+        while (undoStack.size() > MAX_UNDO) undoStack.removeLast();
+        redoStack.clear();
     }
 
     public void selectOnly(ComponentId id) {
@@ -227,10 +282,12 @@ public final class CircuitEditSession {
                 v.minAmplitude(), v.maxAmplitude(), v.outputImpedanceOhms());
             case CircuitComponent.SwitchComponent s -> new CircuitComponent.SwitchComponent(
                 newId, s.name(), s.closedOhms(), s.openOhms(), s.thresholdVolts(), s.invertCtl());
+            case CircuitComponent.Multiplexer m -> new CircuitComponent.Multiplexer(
+                newId, m.name(), m.closedOhms(), m.openOhms(), m.thresholdVolts());
             case CircuitComponent.Coil c -> new CircuitComponent.Coil(
                 newId, c.name(), c.eigenfieldId(), c.selfInductanceHenry(), c.seriesResistanceOhms());
             case CircuitComponent.Probe p -> new CircuitComponent.Probe(
-                newId, p.name(), p.gain(), p.demodPhaseDeg(), p.loadImpedanceOhms());
+                newId, p.name(), p.gain(), p.carrierHz(), p.demodPhaseDeg(), p.loadImpedanceOhms());
             case CircuitComponent.Resistor r -> new CircuitComponent.Resistor(newId, r.name(), r.resistanceOhms());
             case CircuitComponent.Capacitor c -> new CircuitComponent.Capacitor(newId, c.name(), c.capacitanceFarads());
             case CircuitComponent.Inductor l -> new CircuitComponent.Inductor(newId, l.name(), l.inductanceHenry());

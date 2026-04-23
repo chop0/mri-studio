@@ -24,6 +24,7 @@ import java.util.List;
 @JsonSubTypes({
     @JsonSubTypes.Type(value = CircuitComponent.VoltageSource.class, name = "voltage_source"),
     @JsonSubTypes.Type(value = CircuitComponent.SwitchComponent.class, name = "switch"),
+    @JsonSubTypes.Type(value = CircuitComponent.Multiplexer.class, name = "multiplexer"),
     @JsonSubTypes.Type(value = CircuitComponent.Coil.class, name = "coil"),
     @JsonSubTypes.Type(value = CircuitComponent.Probe.class, name = "probe"),
     @JsonSubTypes.Type(value = CircuitComponent.Resistor.class, name = "resistor"),
@@ -158,6 +159,39 @@ public sealed interface CircuitComponent {
         }
     }
 
+    // ─── Multiplexer ──────────────────────────────────────────────────────────
+
+    /**
+     * Single-pole double-throw routing element. {@code common} connects to
+     * {@code a} when {@code ctl} is high (≥ {@link #thresholdVolts()}) and to
+     * {@code b} when it is low. The classic T/R use case: wire the RF source
+     * to {@code a}, the probe to {@code b}, the coil to {@code common}, and
+     * {@code ctl} to the RF source's {@code active} port — RF drives the coil
+     * during TX; the probe observes it during RX. One component does what two
+     * opposite-polarity switches would do.
+     */
+    record Multiplexer(
+        ComponentId id,
+        String name,
+        @JsonProperty("closed_ohms") double closedOhms,
+        @JsonProperty("open_ohms") double openOhms,
+        @JsonProperty("threshold_volts") double thresholdVolts
+    ) implements CircuitComponent {
+        public Multiplexer {
+            if (id == null) throw new IllegalArgumentException("Multiplexer.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("Multiplexer.name must be non-blank");
+            if (!(closedOhms > 0)) throw new IllegalArgumentException("Multiplexer.closedOhms must be > 0");
+            if (!(openOhms > closedOhms)) throw new IllegalArgumentException("Multiplexer.openOhms must exceed closedOhms");
+        }
+
+        @Override public List<String> ports() { return List.of("a", "b", "common", "ctl"); }
+
+        @Override
+        public Multiplexer withName(String newName) {
+            return new Multiplexer(id, newName, closedOhms, openOhms, thresholdVolts);
+        }
+    }
+
     // ─── Coil ─────────────────────────────────────────────────────────────────
 
     /**
@@ -210,10 +244,12 @@ public sealed interface CircuitComponent {
      * A voltage measurement point (versus ground). Emits one
      * {@link ax.xz.mri.model.simulation.SignalTrace} per simulation.
      *
-     * <p>{@link #demodPhaseDeg()} rotates the reported {@code (real, imag)}
-     * complex signal by the given phase. {@link #gain()} scales the result.
-     * {@link #loadImpedanceOhms()} (default {@link Double#POSITIVE_INFINITY})
-     * is the probe's input impedance — an ideal voltmeter has infinite load.
+     * <p>The probe mixes its input down to baseband at
+     * {@link #carrierHz()}; {@code 0} means no mixing (output is the raw
+     * rotating-frame signal). {@link #demodPhaseDeg()} rotates the resulting
+     * complex signal. {@link #gain()} scales the result.
+     * {@link #loadImpedanceOhms()} is the probe's input impedance — an
+     * ideal voltmeter has {@link Double#POSITIVE_INFINITY}.
      *
      * <p>Single-terminal: the probe's input side wires into the circuit; the
      * other pole is the implicit ground.
@@ -222,6 +258,7 @@ public sealed interface CircuitComponent {
         ComponentId id,
         String name,
         double gain,
+        @JsonProperty("carrier_hz") double carrierHz,
         @JsonProperty("demod_phase_deg") double demodPhaseDeg,
         @JsonProperty("load_impedance_ohms") double loadImpedanceOhms
     ) implements CircuitComponent {
@@ -229,27 +266,37 @@ public sealed interface CircuitComponent {
             if (id == null) throw new IllegalArgumentException("Probe.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Probe.name must be non-blank");
             if (!Double.isFinite(gain)) throw new IllegalArgumentException("Probe.gain must be finite");
+            if (!Double.isFinite(carrierHz)) throw new IllegalArgumentException("Probe.carrierHz must be finite");
             if (!Double.isFinite(demodPhaseDeg)) throw new IllegalArgumentException("Probe.demodPhaseDeg must be finite");
             if (!(loadImpedanceOhms > 0)) throw new IllegalArgumentException("Probe.loadImpedanceOhms must be > 0");
+        }
+
+        /** Convenience constructor: zero carrier (raw rotating-frame signal). */
+        public Probe(ComponentId id, String name, double gain, double demodPhaseDeg, double loadImpedanceOhms) {
+            this(id, name, gain, 0.0, demodPhaseDeg, loadImpedanceOhms);
         }
 
         @Override public List<String> ports() { return List.of("in"); }
 
         @Override
         public Probe withName(String newName) {
-            return new Probe(id, newName, gain, demodPhaseDeg, loadImpedanceOhms);
+            return new Probe(id, newName, gain, carrierHz, demodPhaseDeg, loadImpedanceOhms);
         }
 
         public Probe withGain(double v) {
-            return new Probe(id, name, v, demodPhaseDeg, loadImpedanceOhms);
+            return new Probe(id, name, v, carrierHz, demodPhaseDeg, loadImpedanceOhms);
+        }
+
+        public Probe withCarrierHz(double v) {
+            return new Probe(id, name, gain, v, demodPhaseDeg, loadImpedanceOhms);
         }
 
         public Probe withDemodPhaseDeg(double v) {
-            return new Probe(id, name, gain, v, loadImpedanceOhms);
+            return new Probe(id, name, gain, carrierHz, v, loadImpedanceOhms);
         }
 
         public Probe withLoadImpedanceOhms(double v) {
-            return new Probe(id, name, gain, demodPhaseDeg, v);
+            return new Probe(id, name, gain, carrierHz, demodPhaseDeg, v);
         }
     }
 
