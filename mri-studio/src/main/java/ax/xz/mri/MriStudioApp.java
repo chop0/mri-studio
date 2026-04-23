@@ -37,8 +37,6 @@ public class MriStudioApp extends Application {
         if (!params.isEmpty()) {
             var f = new java.io.File(params.get(0));
             if (f.exists()) {
-                // A project is a directory containing mri-project.toml, or the
-                // manifest file itself. Anything else is a legacy Bloch import.
                 java.io.File manifestDir = null;
                 if (f.isDirectory() && new java.io.File(f, "mri-project.toml").exists()) {
                     manifestDir = f;
@@ -48,8 +46,6 @@ public class MriStudioApp extends Application {
                 if (manifestDir != null) {
                     try { shell.controller().openProjectDirectory(manifestDir); }
                     catch (Exception ex) { ex.printStackTrace(); }
-                } else {
-                    shell.controller().loadFile(f);
                 }
             }
         }

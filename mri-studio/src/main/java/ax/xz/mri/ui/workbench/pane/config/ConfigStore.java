@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.workbench.pane.config;
 
 import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.IntegerBinding;
@@ -43,6 +44,7 @@ public final class ConfigStore {
     public final DoubleProperty  referenceB0Tesla = new SimpleDoubleProperty();
     public final DoubleProperty  dtSeconds        = new SimpleDoubleProperty();
     public final ObservableList<FieldDefinition> fields = FXCollections.observableArrayList();
+    public final ObservableList<ReceiveCoil> receiveCoils = FXCollections.observableArrayList();
 
     // Derived bindings.
     public final DoubleBinding  larmorHz;
@@ -84,6 +86,8 @@ public final class ConfigStore {
         }));
         fields.addListener((javafx.collections.ListChangeListener<FieldDefinition>) ch ->
             rebuildFromProperties(c -> c.withFields(List.copyOf(fields))));
+        receiveCoils.addListener((javafx.collections.ListChangeListener<ReceiveCoil>) ch ->
+            rebuildFromProperties(c -> c.withReceiveCoils(List.copyOf(receiveCoils))));
 
         // External config change (undo, revert, etc.) pushes into the scalar properties.
         config.addListener((obs, oldC, newC) -> {
@@ -126,9 +130,10 @@ public final class ConfigStore {
         referenceB0Tesla.set(c.referenceB0Tesla());
         dtSeconds.set(c.dtSeconds());
         if (!listEquals(fields, c.fields())) fields.setAll(c.fields());
+        if (!listEquals(receiveCoils, c.receiveCoils())) receiveCoils.setAll(c.receiveCoils());
     }
 
-    private static boolean listEquals(List<FieldDefinition> a, List<FieldDefinition> b) {
+    private static <T> boolean listEquals(List<T> a, List<T> b) {
         if (a.size() != b.size()) return false;
         for (int i = 0; i < a.size(); i++) {
             if (!a.get(i).equals(b.get(i))) return false;

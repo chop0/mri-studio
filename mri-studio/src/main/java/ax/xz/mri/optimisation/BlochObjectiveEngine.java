@@ -4,7 +4,6 @@ import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.SignalTrace;
-import ax.xz.mri.optimisation.ProblemGeometry.DynamicFieldSamples;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,7 +44,8 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double tSeconds = 0.0;
         var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
         if (captureSignal) {
-            signalPoints.add(new SignalTrace.Point(0.0, coherentSignalMagnitude(geometry.wIn(), mx, my)));
+            var initial = coherentSignal(geometry.primaryReceiveCoil(), mx, my);
+            signalPoints.add(new SignalTrace.Point(0.0, initial[0], initial[1]));
         }
 
         double jIn = 0.0;
@@ -71,12 +71,12 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 totalDt += dt;
                 applyStep(geometry, step, dt, tSeconds, mx, my, mz, geometry.t1(), geometry.t2());
                 double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                double sx = weightedSum(geometry.wIn(), mx);
-                double sy = weightedSum(geometry.wIn(), my);
+                double[] signal = coherentSignal(geometry.primaryReceiveCoil(), mx, my);
+                double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                 double sxOut = weightedSum(geometry.wOut(), mx);
                 double syOut = weightedSum(geometry.wOut(), my);
                 double powerOutStep = weightedPower(geometry.wOut(), mx, my);
-                jIn += sigGate * (sx * sx + sy * sy);
+                jIn += sigGate * sigMag2;
                 jOut += sigGate * (sxOut * sxOut + syOut * syOut);
                 powerOut += sigGate * powerOutStep;
                 double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
@@ -103,13 +103,13 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 timeMicros += dt * 1e6;
                 tSeconds += dt;
                 if (captureSignal) {
-                    signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * coherentSignalMagnitude(geometry.wIn(), mx, my)));
+                    signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * signal[0], sigGate * signal[1]));
                 }
             }
         }
 
-        double signalRef = Math.max(geometry.sMax() * geometry.sMax(), 1.0);
-        double powerRef = Math.max(geometry.sMax(), 1.0);
+        double signalRef = Math.max(receiveCoilMaxSquared(geometry), 1.0);
+        double powerRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
         double rfTimeRef = Math.max(totalDt, 1e-12);
         double rfRef = referenceRfPower(geometry) * rfTimeRef;
         double rfPowerRef = Math.max(rfRef, 1e-30);
@@ -191,10 +191,12 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
             }
         }
 
-        double handoffWeightRef = Math.max(geometry.sMax(), 1.0);
+        double handoffWeightRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
         double handoff = 0.0;
         for (int point = 0; point < geometry.pointCount(); point++) {
-            double weight = geometry.wIn()[point] + 0.25 * geometry.wOut()[point];
+            double rx2 = geometry.primaryReceiveCoil().ex()[point] * geometry.primaryReceiveCoil().ex()[point]
+                       + geometry.primaryReceiveCoil().ey()[point] * geometry.primaryReceiveCoil().ey()[point];
+            double weight = rx2 + 0.25 * geometry.wOut()[point];
             handoff += weight * sq(prefixMx[point] - steadyMx[point])
                 + weight * sq(prefixMy[point] - steadyMy[point])
                 + weight * sq(prefixMz[point] - steadyMz[point]);
@@ -207,7 +209,8 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         var signalPoints = captureSignal ? new ArrayList<SignalTrace.Point>() : null;
         double timeMicros = 0.0;
         if (captureSignal) {
-            signalPoints.add(new SignalTrace.Point(0.0, coherentSignalMagnitude(geometry.wIn(), geometry.mx0(), geometry.my0())));
+            var initial = coherentSignal(geometry.primaryReceiveCoil(), geometry.mx0(), geometry.my0());
+            signalPoints.add(new SignalTrace.Point(0.0, initial[0], initial[1]));
         }
         double jIn = 0.0;
         double jOut = 0.0;
@@ -234,17 +237,17 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 if (segmentIndex >= prefixSegments) {
                     applyStep(geometry, step, dt, tSeconds, cycleMx, cycleMy, cycleMz, geometry.t1(), geometry.t2());
                     double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                    double sx = weightedSum(geometry.wIn(), cycleMx);
-                    double sy = weightedSum(geometry.wIn(), cycleMy);
+                    double[] signal = coherentSignal(geometry.primaryReceiveCoil(), cycleMx, cycleMy);
+                    double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                     double sxOut = weightedSum(geometry.wOut(), cycleMx);
                     double syOut = weightedSum(geometry.wOut(), cycleMy);
                     double powerOutStep = weightedPower(geometry.wOut(), cycleMx, cycleMy);
-                    jIn += sigGate * (sx * sx + sy * sy);
+                    jIn += sigGate * sigMag2;
                     jOut += sigGate * (sxOut * sxOut + syOut * syOut);
                     powerOut += sigGate * powerOutStep;
                     timeMicros += dt * 1e6;
                     if (captureSignal) {
-                        signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * coherentSignalMagnitude(geometry.wIn(), cycleMx, cycleMy)));
+                        signalPoints.add(new SignalTrace.Point(timeMicros, sigGate * signal[0], sigGate * signal[1]));
                     }
                 }
                 double[] quadNow = quadratureComponents(geometry, step, quadratureChannels);
@@ -272,8 +275,8 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
             }
         }
 
-        double signalRef = Math.max(geometry.sMax() * geometry.sMax(), 1.0);
-        double powerRef = Math.max(geometry.sMax(), 1.0);
+        double signalRef = Math.max(receiveCoilMaxSquared(geometry), 1.0);
+        double powerRef = Math.max(primaryCoilSensitivityMax(geometry), 1.0);
         double rfTimeRef = Math.max(totalDt, 1e-12);
         double rfPowerRef = Math.max(referenceRfPower(geometry) * rfTimeRef, 1e-30);
         double value = -(
@@ -304,11 +307,6 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return Math.max(low, Math.min(high, value));
     }
 
-    /**
-     * Apply one Bloch step to a flat point array.
-     *
-     * @param tSeconds current simulation time from t=0, needed for off-resonance carrier phase.
-     */
     protected static void applyStep(
         ProblemGeometry geometry,
         PulseStep step,
@@ -465,10 +463,6 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return count;
     }
 
-    /**
-     * Flattened concatenation of all QUADRATURE channels' (I, Q) pairs from this step.
-     * Used for RF-power / smoothness penalties.
-     */
     protected static double[] quadratureComponents(ProblemGeometry geometry, PulseStep step, int quadratureChannels) {
         double[] out = new double[quadratureChannels];
         int k = 0;
@@ -487,15 +481,13 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return sum;
     }
 
-    /** Reference RF power for penalty normalisation: sum of each QUADRATURE field's max² over I+Q. */
     protected static double referenceRfPower(ProblemGeometry geometry) {
-        // Fallback to 1 if there is no QUADRATURE field, so the penalty is defined but ineffective.
         double sum = 0;
         boolean any = false;
         for (var df : geometry.dynamicFields()) {
             if (!df.isQuadrature()) continue;
             any = true;
-            sum += 1.0;  // Per-field normalisation handled by objective scaling; unit per QUADRATURE pair.
+            sum += 1.0;
         }
         return any ? sum : 1.0;
     }
@@ -570,10 +562,52 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return sum;
     }
 
-    protected static double coherentSignalMagnitude(double[] weights, double[] mx, double[] my) {
-        double sx = weightedSum(weights, mx);
-        double sy = weightedSum(weights, my);
-        return Math.hypot(sx, sy);
+    /**
+     * Complex signal observed by a receive coil:
+     * {@code s = gain · e^(i·phaseDeg·π/180) · Σ (ex·mx + ey·my) + i·(ex·my − ey·mx)}.
+     * Returned as {@code [real, imag]}.
+     */
+    protected static double[] coherentSignal(ProblemGeometry.ReceiveCoilSamples coil, double[] mx, double[] my) {
+        double sr = 0, si = 0;
+        double[] ex = coil.ex();
+        double[] ey = coil.ey();
+        for (int i = 0; i < mx.length; i++) {
+            double eX = ex[i];
+            double eY = ey[i];
+            sr += eX * mx[i] + eY * my[i];
+            si += eX * my[i] - eY * mx[i];
+        }
+        double rad = coil.phaseDeg() * Math.PI / 180.0;
+        double c = Math.cos(rad);
+        double s = Math.sin(rad);
+        double phasedR = (sr * c - si * s) * coil.gain();
+        double phasedI = (sr * s + si * c) * coil.gain();
+        return new double[]{phasedR, phasedI};
+    }
+
+    /**
+     * Normalising reference for the squared signal: the upper bound of
+     * {@code |s|²} if every grid point were coherently aligned with the
+     * receive coil's local sensitivity phasor.
+     */
+    protected static double receiveCoilMaxSquared(ProblemGeometry geometry) {
+        var coil = geometry.primaryReceiveCoil();
+        double mag = 0;
+        for (int i = 0; i < coil.ex().length; i++) {
+            mag += Math.hypot(coil.ex()[i], coil.ey()[i]);
+        }
+        double scaled = coil.gain() * mag;
+        return scaled * scaled;
+    }
+
+    /** Sum of the primary coil's transverse sensitivity magnitude over the grid. */
+    protected static double primaryCoilSensitivityMax(ProblemGeometry geometry) {
+        var coil = geometry.primaryReceiveCoil();
+        double mag = 0;
+        for (int i = 0; i < coil.ex().length; i++) {
+            mag += Math.hypot(coil.ex()[i], coil.ey()[i]);
+        }
+        return coil.gain() * mag;
     }
 
     protected static double sq(double value) {

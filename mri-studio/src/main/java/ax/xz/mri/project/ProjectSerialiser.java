@@ -7,10 +7,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
-/** Simple project manifest/import-link TOML plus JSON document serialiser. */
+/** Simple project manifest TOML plus JSON document serialiser. */
 public final class ProjectSerialiser {
     private final ObjectMapper mapper = new ObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
@@ -35,32 +34,6 @@ public final class ProjectSerialiser {
             values.getOrDefault("name", "Untitled Project"),
             values.getOrDefault("layout_file", ".mri-studio/layout.json"),
             values.getOrDefault("ui_state_file", ".mri-studio/ui-state.json")
-        );
-    }
-
-    public void writeImportLink(Path path, ImportLinkDocument link) throws IOException {
-        if (path.getParent() != null) Files.createDirectories(path.getParent());
-        Files.writeString(path, """
-            schema = 1
-            id = "%s"
-            name = "%s"
-            source = "%s"
-            reload_mode = "%s"
-            """.formatted(
-            escape(link.id().value()),
-            escape(link.name()),
-            escape(link.sourcePath()),
-            escape(link.reloadMode().name())
-        ));
-    }
-
-    public ImportLinkDocument readImportLink(Path path) throws IOException {
-        var values = parseSimpleToml(path);
-        return new ImportLinkDocument(
-            new ProjectNodeId(values.get("id")),
-            values.get("name"),
-            values.get("source"),
-            ReloadMode.valueOf(values.getOrDefault("reload_mode", "MANUAL"))
         );
     }
 

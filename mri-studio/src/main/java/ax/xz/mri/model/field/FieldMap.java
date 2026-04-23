@@ -7,24 +7,21 @@ import java.util.List;
 /**
  * Runtime spatial field map consumed by the Bloch simulator.
  *
- * <p>Built by {@code BlochDataFactory} from a {@code SimulationConfig}, or by
- * {@link ImportedFieldMapAdapter} from a legacy imported {@link ImportedFieldMap}.
- * The structure is the same either way: one global rotating-frame reference
- * plus a precomputed static map plus per-dynamic-field spatial shapes.
- *
- * <h2>Decomposition</h2>
- * <p>All simulation happens in a rotating frame at angular frequency
- * {@code ω_s = γ · b0Ref}. Each field is classified at build time:
+ * <p>Built by {@code BlochDataFactory} from a
+ * {@link ax.xz.mri.model.simulation.SimulationConfig}. The simulator runs in a
+ * rotating frame at angular frequency {@code ω_s = γ · b0Ref}; each driven
+ * field is classified at build time:
  * <ul>
  *   <li><b>Static</b> fields ({@code AmplitudeKind.STATIC}) and any
  *       Bloch–Siegert / average-Hamiltonian corrections from fast fields are
- *       summed into {@link #staticBz}: the local Bz in the rotating frame
- *       (after reference subtraction), in Tesla.</li>
+ *       summed into {@link #staticBz}: the local Bz in the rotating frame.</li>
  *   <li><b>Dynamic</b> fields ({@code REAL} or {@code QUADRATURE}) have their
  *       eigenfield shape sampled on the (r, z) grid and stored in
- *       {@link #dynamicFields}. The simulator multiplies each per-step
- *       amplitude by these per-point shapes.</li>
+ *       {@link #dynamicFields}.</li>
  * </ul>
+ *
+ * <p>Receive coils are stored separately in {@link #receiveCoils} — they
+ * observe the magnetisation without contributing to the B-field integration.
  */
 public final class FieldMap {
     /** Radial grid positions (mm), length {@code nR}. */
@@ -43,8 +40,11 @@ public final class FieldMap {
      */
     public double[][] staticBz;
 
-    /** Per-field runtime maps, in pulse-channel order. */
+    /** Per-driven-field runtime maps, in pulse-channel order. */
     public List<DynamicFieldMap> dynamicFields;
+
+    /** Per-receive-coil sensitivity maps. */
+    public List<ReceiveCoilMap> receiveCoils;
 
     /** Initial magnetisation components at each grid point. Indexed {@code [r][z]}. */
     public double[][] mx0;

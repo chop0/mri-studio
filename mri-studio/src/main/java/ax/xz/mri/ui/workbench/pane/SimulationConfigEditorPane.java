@@ -2,7 +2,11 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
+import ax.xz.mri.model.simulation.dsl.ReceiveCoilStarterLibrary;
+import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SimulationConfigDocument;
@@ -95,11 +99,17 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private final Tab tissueTab = new Tab("Tissue");
     private final Tab geometryTab = new Tab("Geometry");
     private final Tab fieldsTab = new Tab("Fields");
+    private final Tab receiveCoilsTab = new Tab("Receive coils");
 
     // --- Fields tab state ---
     private TableView<FieldDefinition> fieldsTable;
     private final ObjectProperty<FieldDefinition> selectedField = new SimpleObjectProperty<>();
     private VBox fieldsDetail;
+
+    // --- Receive coils tab state ---
+    private TableView<ReceiveCoil> receiveCoilsTable;
+    private final ObjectProperty<ReceiveCoil> selectedReceiveCoil = new SimpleObjectProperty<>();
+    private VBox receiveCoilsDetail;
     private final ObservableList<String> eigenfieldNames = FXCollections.observableArrayList();
     private final LinkedHashMap<String, ProjectNodeId> eigenfieldIdByName = new LinkedHashMap<>();
 
@@ -120,6 +130,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         tissueTab.setContent(scrollWrap(buildTissueTab()));
         geometryTab.setContent(scrollWrap(buildGeometryTab()));
         fieldsTab.setContent(scrollWrap(buildFieldsTab()));
+        receiveCoilsTab.setContent(scrollWrap(buildReceiveCoilsTab()));
 
         // Persist + notify every time the authoritative config changes.
         store.config.addListener((obs, oldC, newC) -> onConfigChanged(oldC, newC));
@@ -189,8 +200,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node buildTabs() {
         tabs.getStyleClass().add("cfg-tabs");
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        for (var t : List.of(overviewTab, referenceTab, tissueTab, geometryTab, fieldsTab)) t.setClosable(false);
-        tabs.getTabs().addAll(overviewTab, referenceTab, tissueTab, geometryTab, fieldsTab);
+        for (var t : List.of(overviewTab, referenceTab, tissueTab, geometryTab, fieldsTab, receiveCoilsTab)) t.setClosable(false);
+        tabs.getTabs().addAll(overviewTab, referenceTab, tissueTab, geometryTab, fieldsTab, receiveCoilsTab);
         return tabs;
     }
 
@@ -395,7 +406,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
                                         stringBinding(store.dtSeconds, SimulationConfigEditorPane::dtUnit), false),
             bigMetric("CHANNELS",       Bindings.convert(store.totalChannels), staticText(""), false),
             bigMetric("GRID",           Bindings.createStringBinding(() -> store.nZ.get() + "\u00D7" + store.nR.get(), store.nZ, store.nR), staticText(""), false),
-            bigMetric("FIELDS",         Bindings.createStringBinding(() -> Integer.toString(store.fields.size()), store.fields), staticText(""), true)
+            bigMetric("FIELDS",         Bindings.createStringBinding(() -> Integer.toString(store.fields.size()), store.fields), staticText(""), false),
+            bigMetric("RX COILS",       Bindings.createStringBinding(() -> Integer.toString(store.receiveCoils.size()), store.receiveCoils), staticText(""), true)
         );
         box.getChildren().add(metrics);
 
@@ -454,6 +466,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         store.nZ.addListener(rebuild);
         store.nR.addListener(rebuild);
         store.fields.addListener((javafx.collections.ListChangeListener<FieldDefinition>) ch -> rebuildHealthChecks(col));
+        store.receiveCoils.addListener((javafx.collections.ListChangeListener<ReceiveCoil>) ch -> rebuildHealthChecks(col));
         rebuildHealthChecks(col);
         return col;
     }
@@ -494,6 +507,11 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         if (store.fields.isEmpty()) {
             col.getChildren().add(healthRow("warn", "No field sources defined",
                 "Add at least one static or driven field before simulating."));
+        }
+
+        if (store.receiveCoils.isEmpty()) {
+            col.getChildren().add(healthRow("warn", "No receive coils defined",
+                "Add at least one receive coil (Receive coils tab) to observe the signal."));
         }
 
         int cells = store.nZ.get() * store.nR.get();
@@ -1160,6 +1178,226 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         store.fields.add(new FieldDefinition("New Field", eigenfieldId, AmplitudeKind.REAL, 0, -1, 1));
         paneContext.session().project.explorer.refresh();
         fieldsTable.getSelectionModel().select(store.fields.size() - 1);
+    }
+
+    // ================================================================
+    // Tab: Receive coils (master-detail table)
+    // ================================================================
+
+    private Node buildReceiveCoilsTab() {
+        var box = new VBox(8);
+        box.getChildren().addAll(
+            sectionTitle("Receive coils"),
+            sectionSubtitle("Each receive coil observes the transverse magnetisation through its own eigenfield "
+                + "(spatial sensitivity). The complex voltage the coil reports is "
+                + "gain \u00B7 e^(i\u00B7phase) \u00B7 \u222B (E\u2093 - i\u00B7E\u1d67) \u00B7 (M\u2093 + i\u00B7M\u1d67) dV.")
+        );
+
+        receiveCoilsTable = buildReceiveCoilsTable();
+        receiveCoilsTable.setPrefHeight(160);
+        receiveCoilsTable.setMinHeight(100);
+
+        var addButton = new Button("+ Add receive coil");
+        addButton.getStyleClass().addAll("button", "primary");
+        addButton.setOnAction(e -> addReceiveCoil());
+        var removeButton = new Button("\u2212 Remove selected");
+        removeButton.getStyleClass().add("button");
+        removeButton.setOnAction(e -> {
+            int idx = receiveCoilsTable.getSelectionModel().getSelectedIndex();
+            if (idx >= 0) removeReceiveCoil(idx);
+        });
+        removeButton.disableProperty().bind(receiveCoilsTable.getSelectionModel().selectedItemProperty().isNull());
+
+        var toolbar = new HBox(6, addButton, removeButton);
+        toolbar.getStyleClass().add("table-action-bar");
+
+        receiveCoilsDetail = new VBox(6);
+        receiveCoilsDetail.setPadding(new javafx.geometry.Insets(8, 0, 0, 0));
+
+        receiveCoilsTable.getSelectionModel().selectedItemProperty().addListener((obs, o, n) -> {
+            selectedReceiveCoil.set(n);
+            rebuildReceiveCoilDetail();
+        });
+        store.receiveCoils.addListener((javafx.collections.ListChangeListener<ReceiveCoil>) ch -> {
+            if (!store.receiveCoils.isEmpty() && receiveCoilsTable.getSelectionModel().getSelectedItem() == null) {
+                receiveCoilsTable.getSelectionModel().selectFirst();
+            }
+            rebuildReceiveCoilDetail();
+        });
+
+        if (!store.receiveCoils.isEmpty()) receiveCoilsTable.getSelectionModel().selectFirst();
+        else rebuildReceiveCoilDetail();
+
+        box.getChildren().addAll(toolbar, receiveCoilsTable, new Separator(), receiveCoilsDetail);
+        return box;
+    }
+
+    private TableView<ReceiveCoil> buildReceiveCoilsTable() {
+        var table = new TableView<ReceiveCoil>(store.receiveCoils);
+        table.setPlaceholder(emptyState("No receive coils yet",
+            "Add one (uniform isotropic, reciprocal Helmholtz, surface loop) to observe the transverse magnetisation."));
+        table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
+
+        var nameCol = new TableColumn<ReceiveCoil, String>("Name");
+        nameCol.setCellValueFactory(cd -> new SimpleStringProperty(cd.getValue().name()));
+        var eigenCol = new TableColumn<ReceiveCoil, String>("Eigenfield");
+        eigenCol.setCellValueFactory(cd -> new SimpleStringProperty(eigenfieldNameFor(cd.getValue().eigenfieldId())));
+        var gainCol = new TableColumn<ReceiveCoil, String>("Gain");
+        gainCol.setCellValueFactory(cd -> new SimpleStringProperty(String.format("%.3g", cd.getValue().gain())));
+        var phaseCol = new TableColumn<ReceiveCoil, String>("Phase");
+        phaseCol.setCellValueFactory(cd -> new SimpleStringProperty(String.format("%.1f\u00B0", cd.getValue().phaseDeg())));
+        var primaryCol = new TableColumn<ReceiveCoil, String>("Primary");
+        primaryCol.setCellValueFactory(cd -> new SimpleStringProperty(
+            store.receiveCoils.indexOf(cd.getValue()) == 0 ? "\u2713" : ""));
+
+        nameCol.setPrefWidth(150);
+        eigenCol.setPrefWidth(180);
+        gainCol.setPrefWidth(80);
+        phaseCol.setPrefWidth(80);
+        primaryCol.setPrefWidth(70);
+        table.getColumns().addAll(nameCol, eigenCol, gainCol, phaseCol, primaryCol);
+        return table;
+    }
+
+    private void rebuildReceiveCoilDetail() {
+        if (receiveCoilsDetail == null) return;
+        receiveCoilsDetail.getChildren().clear();
+
+        var coil = selectedReceiveCoil.get();
+        int index = coil == null ? -1 : store.receiveCoils.indexOf(coil);
+        if (coil == null || index < 0) {
+            var hint = new Label("Select a receive coil to edit, or add one.");
+            hint.getStyleClass().add("cfg-empty-subtitle");
+            receiveCoilsDetail.getChildren().add(hint);
+            return;
+        }
+
+        receiveCoilsDetail.getChildren().add(sectionTitle("Edit receive coil \u2014 " + coil.name()));
+
+        var nameField = new TextField(coil.name());
+        nameField.setPrefColumnCount(18);
+        Runnable commitName = () -> {
+            int idx = store.receiveCoils.indexOf(coil);
+            if (idx < 0) return;
+            var current = store.receiveCoils.get(idx);
+            if (!current.name().equals(nameField.getText().trim()) && !nameField.getText().trim().isBlank())
+                mutateReceiveCoil(idx, current.withName(nameField.getText().trim()));
+        };
+        nameField.focusedProperty().addListener((obs, o, focused) -> { if (!focused) commitName.run(); });
+        nameField.setOnAction(e -> commitName.run());
+        receiveCoilsDetail.getChildren().add(rowControl("Name", nameField, null));
+
+        receiveCoilsDetail.getChildren().add(buildReceiveCoilEigenfieldRow(coil));
+
+        var gainNum = numberField(-1e9, 1e9, 0.1);
+        gainNum.setValue(coil.gain());
+        gainNum.valueProperty().addListener((obs, o, n) -> {
+            int idx = store.receiveCoils.indexOf(coil);
+            if (idx < 0 || n == null) return;
+            var current = store.receiveCoils.get(idx);
+            if (current.gain() != n.doubleValue())
+                mutateReceiveCoil(idx, current.withGain(n.doubleValue()));
+        });
+        receiveCoilsDetail.getChildren().add(rowControl("Gain", gainNum, null));
+
+        var phaseNum = numberField(-360, 360, 15);
+        phaseNum.setValue(coil.phaseDeg());
+        phaseNum.valueProperty().addListener((obs, o, n) -> {
+            int idx = store.receiveCoils.indexOf(coil);
+            if (idx < 0 || n == null) return;
+            var current = store.receiveCoils.get(idx);
+            if (current.phaseDeg() != n.doubleValue())
+                mutateReceiveCoil(idx, current.withPhaseDeg(n.doubleValue()));
+        });
+        receiveCoilsDetail.getChildren().add(rowControl("Phase", phaseNum, "\u00B0"));
+
+        if (index == 0) {
+            var note = new Label("This is the primary coil \u2014 its trace is what the magnitude pane shows.");
+            note.getStyleClass().add("cfg-row-hint");
+            receiveCoilsDetail.getChildren().add(note);
+        } else {
+            var makePrimary = new Button("Make primary");
+            makePrimary.getStyleClass().addAll("button", "ghost");
+            makePrimary.setOnAction(e -> {
+                var list = new java.util.ArrayList<>(store.receiveCoils);
+                list.add(0, list.remove(index));
+                store.receiveCoils.setAll(list);
+                receiveCoilsTable.getSelectionModel().select(0);
+            });
+            receiveCoilsDetail.getChildren().add(makePrimary);
+        }
+    }
+
+    private Node buildReceiveCoilEigenfieldRow(ReceiveCoil coil) {
+        var combo = new ComboBox<String>();
+        combo.setMinWidth(180);
+        combo.setItems(eigenfieldNames);
+        combo.setValue(eigenfieldNameFor(coil.eigenfieldId()));
+        combo.setOnAction(e -> {
+            int idx = store.receiveCoils.indexOf(coil);
+            if (idx < 0) return;
+            var selected = eigenfieldIdByName.get(combo.getValue());
+            if (selected != null) mutateReceiveCoil(idx, store.receiveCoils.get(idx).withEigenfieldId(selected));
+        });
+
+        var openButton = new Button("Open");
+        openButton.getStyleClass().addAll("button", "ghost");
+        openButton.setDisable(coil.eigenfieldId() == null);
+        openButton.setOnAction(e -> {
+            if (coil.eigenfieldId() != null)
+                paneContext.session().project.openNode(coil.eigenfieldId());
+        });
+
+        var newButton = new Button("New\u2026");
+        newButton.getStyleClass().addAll("button", "ghost");
+        newButton.setOnAction(e -> {
+            var stage = topStage();
+            ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(stage, paneContext.session().project)
+                .ifPresent(eigen -> {
+                    int idx = store.receiveCoils.indexOf(coil);
+                    if (idx >= 0) mutateReceiveCoil(idx, store.receiveCoils.get(idx).withEigenfieldId(eigen.id()));
+                });
+        });
+
+        var comboRow = new HBox(6, combo, openButton, newButton);
+        comboRow.setAlignment(Pos.CENTER_LEFT);
+        return rowControl("Eigenfield", comboRow, null);
+    }
+
+    private void mutateReceiveCoil(int index, ReceiveCoil updated) {
+        if (index < 0 || index >= store.receiveCoils.size()) return;
+        if (store.receiveCoils.get(index).equals(updated)) return;
+        store.receiveCoils.set(index, updated);
+        receiveCoilsTable.getSelectionModel().select(index);
+        selectedReceiveCoil.set(updated);
+        rebuildReceiveCoilDetail();
+    }
+
+    private void removeReceiveCoil(int index) {
+        if (index < 0 || index >= store.receiveCoils.size()) return;
+        store.receiveCoils.remove(index);
+        if (!store.receiveCoils.isEmpty()) {
+            int next = Math.min(index, store.receiveCoils.size() - 1);
+            receiveCoilsTable.getSelectionModel().select(next);
+        }
+    }
+
+    /**
+     * Seed a new receive coil from the default starter, creating its backing
+     * eigenfield in the project repository if it doesn't already exist.
+     */
+    private void addReceiveCoil() {
+        var starter = ReceiveCoilStarterLibrary.defaultStarter();
+        var eigenStarter = EigenfieldStarterLibrary.byId(starter.eigenfieldStarterId()).orElseThrow();
+        var repo = paneContext.session().project.repository.get();
+        var eigen = ObjectFactory.findOrCreateEigenfield(repo,
+            starter.name(), eigenStarter.description(), eigenStarter.source(),
+            eigenStarter.units(), eigenStarter.defaultMagnitude());
+        store.receiveCoils.add(new ReceiveCoil(
+            starter.name() + (store.receiveCoils.isEmpty() ? "" : " " + (store.receiveCoils.size() + 1)),
+            eigen.id(), starter.gain(), starter.phaseDeg()));
+        paneContext.session().project.explorer.refresh();
+        receiveCoilsTable.getSelectionModel().select(store.receiveCoils.size() - 1);
     }
 
     // ================================================================

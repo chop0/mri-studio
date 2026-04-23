@@ -5,10 +5,14 @@ import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
+import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
+import javafx.collections.ListChangeListener;
+import javafx.collections.ObservableList;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
@@ -51,10 +55,26 @@ public final class ClipInspectorSection {
     private final List<Consumer<SignalClip>> pullers = new ArrayList<>();
     private ClipKind builtForKind; // the shape kind last used to build the param UI
 
+    /** Observable points-of-interest; rotations are shown per entry for RF clips. May be {@code null}. */
+    private final ObservableList<IsochromatEntry> poiEntries;
+    /** Listener on {@link #poiEntries} so trajectory refreshes repaint the rotation table. */
+    private final ListChangeListener<IsochromatEntry> poiListener;
+    private Runnable poiRefresher;
+
     public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip) {
+        this(session, initialClip, null);
+    }
+
+    public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip,
+                                 ObservableList<IsochromatEntry> poiEntries) {
         this.session = session;
         this.clipId = initialClip.id();
         this.builtForKind = initialClip.shape().kind();
+        this.poiEntries = poiEntries;
+        this.poiListener = poiEntries == null ? null : change -> {
+            if (poiRefresher != null) poiRefresher.run();
+        };
+        if (poiEntries != null) poiEntries.addListener(poiListener);
         build(initialClip);
     }
 
@@ -62,6 +82,13 @@ public final class ClipInspectorSection {
 
     /** Identity of the clip this section is bound to. */
     public String clipId() { return clipId; }
+
+    /** Detach listeners attached by this section. Idempotent. */
+    public void dispose() {
+        if (poiEntries != null && poiListener != null) {
+            poiEntries.removeListener(poiListener);
+        }
+    }
 
     /**
      * Push the latest values from the session into the existing fields. If the
@@ -77,6 +104,7 @@ public final class ClipInspectorSection {
             return;
         }
         for (var p : pullers) p.accept(clip);
+        if (poiRefresher != null) poiRefresher.run();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -86,6 +114,7 @@ public final class ClipInspectorSection {
     private void build(SignalClip clip) {
         root.getChildren().clear();
         pullers.clear();
+        poiRefresher = null;
 
         root.getChildren().addAll(
             buildHeader(clip),
@@ -93,6 +122,7 @@ public final class ClipInspectorSection {
             buildTrackPicker(clip),
             buildTimingRows(clip),
             buildShapeParams(clip),
+            buildPoiRotationSection(),
             new Separator(),
             buildActionRow()
         );
@@ -407,6 +437,144 @@ public final class ClipInspectorSection {
     }
 
     private enum SineMode { FREQUENCY, CYCLES }
+
+    // ── Points-of-interest rotation table (RF clips only) ──────────────────
+
+    /**
+     * For a clip on an RF (QUADRATURE-backed) track, show the net rotation the
+     * clip applies to each currently-visible point-of-interest's magnetisation
+     * in the rotating frame. Uses the POIs' last-simulated trajectories — the
+     * values refresh whenever the trajectories update.
+     */
+    private Node buildPoiRotationSection() {
+        var box = new VBox(4);
+        if (poiEntries == null) {
+            box.setVisible(false);
+            box.setManaged(false);
+            return box;
+        }
+
+        var title = new Label("Rotations at points of interest");
+        title.getStyleClass().add("clip-inspector-section");
+        var body = new VBox(4);
+        box.getChildren().addAll(title, body);
+
+        poiRefresher = () -> refreshPoiRotations(box, title, body);
+        return box;
+    }
+
+    private void refreshPoiRotations(VBox container, Label title, VBox body) {
+        var clip = session.findClip(clipId);
+        boolean onRf = clip != null && isRfTrack(clip.trackId());
+
+        if (!onRf || poiEntries == null) {
+            container.setVisible(false);
+            container.setManaged(false);
+            body.getChildren().clear();
+            return;
+        }
+
+        container.setVisible(true);
+        container.setManaged(true);
+        body.getChildren().clear();
+
+        var visiblePois = poiEntries.stream().filter(IsochromatEntry::visible).toList();
+        if (visiblePois.isEmpty()) {
+            var msg = new Label("No visible points — add one in the Points pane to see rotations.");
+            msg.getStyleClass().add("clip-inspector-hint");
+            msg.setWrapText(true);
+            body.getChildren().add(msg);
+            return;
+        }
+
+        boolean anyTrajectory = false;
+        for (var poi : visiblePois) {
+            if (poi.trajectory() != null) { anyTrajectory = true; break; }
+        }
+        if (!anyTrajectory) {
+            var msg = new Label("Run simulation to see the rotation applied at each point.");
+            msg.getStyleClass().add("clip-inspector-hint");
+            msg.setWrapText(true);
+            body.getChildren().add(msg);
+            return;
+        }
+
+        for (var poi : visiblePois) {
+            body.getChildren().add(buildPoiRotationRow(poi, clip.startTime(), clip.endTime()));
+        }
+    }
+
+    private Node buildPoiRotationRow(IsochromatEntry poi, double clipStart, double clipEnd) {
+        var row = new VBox(2);
+        row.getStyleClass().add("clip-inspector-poi-row");
+
+        var colourDot = new Label("\u25CF");
+        colourDot.setStyle("-fx-text-fill: " + toHex(poi.colour()) + ";");
+        var nameLabel = new Label(poi.name() == null || poi.name().isBlank()
+            ? String.format("(r=%.1f, z=%.1f) mm", poi.r(), poi.z())
+            : poi.name());
+        nameLabel.getStyleClass().add("clip-inspector-poi-name");
+        var coords = new Label(String.format("r = %.1f, z = %.1f mm", poi.r(), poi.z()));
+        coords.getStyleClass().add("clip-inspector-hint");
+        var header = new HBox(6, colourDot, nameLabel);
+        header.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().addAll(header, coords);
+
+        var analysis = ClipRotationAnalysis.ofClip(poi.trajectory(), clipStart, clipEnd);
+        if (analysis == null) {
+            var msg = new Label("  (no trajectory yet)");
+            msg.getStyleClass().add("clip-inspector-hint");
+            row.getChildren().add(msg);
+            return row;
+        }
+
+        var angleLabel = new Label(String.format("  Flip %.1f\u00B0 about %s",
+            analysis.angleDegrees(),
+            formatAxis(analysis.axisX(), analysis.axisY(), analysis.axisZ())));
+        angleLabel.getStyleClass().add("clip-inspector-poi-angle");
+
+        var beforeAfter = new Label(String.format(
+            "  M: (%s) \u2192 (%s)",
+            formatMag(analysis.before().mx(), analysis.before().my(), analysis.before().mz()),
+            formatMag(analysis.after().mx(), analysis.after().my(), analysis.after().mz())));
+        beforeAfter.getStyleClass().add("clip-inspector-hint");
+
+        row.getChildren().addAll(angleLabel, beforeAfter);
+        return row;
+    }
+
+    /** True if the track's target field is a QUADRATURE (RF) channel in the active config. */
+    private boolean isRfTrack(String trackId) {
+        var track = session.findTrack(trackId);
+        if (track == null) return false;
+        var field = session.fieldForChannel(track.outputChannel());
+        return field != null && field.kind() == AmplitudeKind.QUADRATURE;
+    }
+
+    private static String formatMag(double mx, double my, double mz) {
+        return String.format("%+.2f, %+.2f, %+.2f", mx, my, mz);
+    }
+
+    /**
+     * Compact axis display. Pure basis directions (±x̂, ±ŷ, ±ẑ) render as a
+     * single glyph; arbitrary directions render as a (x, y, z) triple.
+     */
+    private static String formatAxis(double nx, double ny, double nz) {
+        double tol = 0.02;
+        double ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+        if (ax > 1 - tol && ay < tol && az < tol) return (nx > 0 ? "+x\u0302" : "\u2212x\u0302");
+        if (ay > 1 - tol && ax < tol && az < tol) return (ny > 0 ? "+y\u0302" : "\u2212y\u0302");
+        if (az > 1 - tol && ax < tol && ay < tol) return (nz > 0 ? "+z\u0302" : "\u2212z\u0302");
+        return String.format("(%+.2f, %+.2f, %+.2f)", nx, ny, nz);
+    }
+
+    private static String toHex(javafx.scene.paint.Color c) {
+        if (c == null) return "#888888";
+        return String.format("#%02X%02X%02X",
+            (int) Math.round(c.getRed() * 255),
+            (int) Math.round(c.getGreen() * 255),
+            (int) Math.round(c.getBlue() * 255));
+    }
 
     // ── Action row ──────────────────────────────────────────────────────────
 

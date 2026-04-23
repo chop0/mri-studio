@@ -2,16 +2,17 @@ package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.model.field.DynamicFieldMap;
 import ax.xz.mri.model.field.FieldMap;
+import ax.xz.mri.model.field.ReceiveCoilMap;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Builds a runtime {@link FieldMap} from a {@link SimulationConfig} and a
@@ -54,11 +55,7 @@ public final class BlochDataFactory {
     private BlochDataFactory() {}
 
     public static BlochData build(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
-        var field = buildFieldMap(config, segments, repository);
-        // Probe points (isochromats) are runtime / per-sequence concerns, not config.
-        // They're populated by IsochromatCollectionModel.resetToDefaults() from the
-        // model's own hardcoded defaults.
-        return new BlochData(field, List.of(), Map.of());
+        return new BlochData(buildFieldMap(config, segments, repository));
     }
 
     public static BlochData build(SimulationConfig config, List<Segment> segments) {
@@ -231,7 +228,34 @@ public final class BlochDataFactory {
 
         field.staticBz = staticBz;
         field.dynamicFields = List.copyOf(dynamics);
+        field.receiveCoils = buildReceiveCoilMaps(config, nR, nZ, field.rMm, field.zMm, repository);
         return field;
+    }
+
+    private static List<ReceiveCoilMap> buildReceiveCoilMaps(
+        SimulationConfig config, int nR, int nZ, double[] rMm, double[] zMm, ProjectRepository repository) {
+        var out = new ArrayList<ReceiveCoilMap>();
+        for (var coil : config.receiveCoils()) {
+            var eigen = resolveEigenfield(coil.eigenfieldId(), repository);
+            EigenfieldScript script = eigen != null ? compile(eigen.script()) : (x, y, z) -> Vec3.ZERO;
+            double defaultMagnitude = eigen != null ? eigen.defaultMagnitude() : 1.0;
+
+            double[][] ex = new double[nR][nZ];
+            double[][] ey = new double[nR][nZ];
+            double[][] ez = new double[nR][nZ];
+            sampleEigenfield(script, rMm, zMm, ex, ey, ez);
+            if (defaultMagnitude != 1.0) {
+                for (int ri = 0; ri < nR; ri++) {
+                    for (int zi = 0; zi < nZ; zi++) {
+                        ex[ri][zi] *= defaultMagnitude;
+                        ey[ri][zi] *= defaultMagnitude;
+                        ez[ri][zi] *= defaultMagnitude;
+                    }
+                }
+            }
+            out.add(new ReceiveCoilMap(coil.name(), coil.gain(), coil.phaseDeg(), ex, ey, ez));
+        }
+        return List.copyOf(out);
     }
 
     private static double representativeDt(List<Segment> segments) {
@@ -246,8 +270,12 @@ public final class BlochDataFactory {
     }
 
     private static EigenfieldDocument resolveEigenfield(FieldDefinition def, ProjectRepository repository) {
-        if (repository == null || def.eigenfieldId() == null) return null;
-        return repository.node(def.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
+        return resolveEigenfield(def.eigenfieldId(), repository);
+    }
+
+    private static EigenfieldDocument resolveEigenfield(ProjectNodeId id, ProjectRepository repository) {
+        if (repository == null || id == null) return null;
+        return repository.node(id) instanceof EigenfieldDocument ef ? ef : null;
     }
 
     private static EigenfieldScript compile(String source) {

@@ -20,7 +20,8 @@ class IsochromatCollectionModelTest {
         points.setContext(TestBlochDataFactory.sampleDocument(), TestBlochDataFactory.pulseA());
 
         points.resetToDefaults();
-        assertEquals(2, points.entries.size());
+        int defaults = points.entries.size();
+        assertTrue(defaults > 0);
         assertTrue(points.entries.stream().allMatch(entry -> entry.trajectory() != null));
 
         points.addUserPoint(1.0, 8.0, "User Point");
@@ -35,7 +36,7 @@ class IsochromatCollectionModelTest {
 
         selection.setSingle(userId);
         points.duplicateSelected();
-        assertEquals(4, points.entries.size());
+        assertEquals(defaults + 2, points.entries.size());
         var duplicate = points.entries.stream()
             .filter(entry -> entry.name().equals("User Point copy"))
             .findFirst()

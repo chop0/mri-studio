@@ -2,59 +2,36 @@ package ax.xz.mri.support;
 
 import ax.xz.mri.model.field.DynamicFieldMap;
 import ax.xz.mri.model.field.FieldMap;
+import ax.xz.mri.model.field.ReceiveCoilMap;
 import ax.xz.mri.model.scenario.BlochData;
-import ax.xz.mri.model.scenario.Scenario;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Small deterministic Bloch documents used by unit tests.
  *
- * <p>Uses the post-rewrite 4-channel layout: controls = [b1x, b1y, gx, gz],
- * rfGate separate. Each synthetic FieldMap carries three dynamic fields (RF
- * QUADRATURE, Gx REAL, Gz REAL) with hand-tuned spatial maps.
+ * <p>Channel layout: controls = [b1x, b1y, gx, gz], rfGate separate. The
+ * synthetic {@link FieldMap} carries three driven fields (RF QUADRATURE,
+ * Gx REAL, Gz REAL) plus a uniform isotropic receive coil.
  */
 public final class TestBlochDataFactory {
-    private TestBlochDataFactory() {
-    }
+    private TestBlochDataFactory() {}
 
     private static PulseStep step(double b1x, double b1y, double gx, double gz, double rfGate) {
         return new PulseStep(new double[]{b1x, b1y, gx, gz}, rfGate);
     }
 
     public static BlochData sampleDocument() {
-        return new BlochData(
-            sampleField(),
-            List.of(
-                new BlochData.IsochromatDef("Centre", "#00aa55", true),
-                new BlochData.IsochromatDef("Edge", "#2266dd", true)
-            ),
-            Map.of(
-                "Full GRAPE", new Scenario(Map.of(
-                    "0", pulseB(),
-                    "3", pulseA()
-                )),
-                "Baseline", new Scenario(Map.of(
-                    "10", pulseB(),
-                    "2", pulseA(),
-                    "1", pulseA()
-                ))
-            )
-        );
+        return new BlochData(sampleField());
     }
 
     public static BlochData brokenDocumentMissingSegments() {
         var field = sampleField();
         field.segments = null;
-        return new BlochData(
-            field,
-            List.of(new BlochData.IsochromatDef("Broken", "#aa0000", true)),
-            Map.of("Broken", new Scenario(Map.of("0", pulseA())))
-        );
+        return new BlochData(field);
     }
 
     public static List<PulseSegment> pulseA() {
@@ -84,11 +61,7 @@ public final class TestBlochDataFactory {
     }
 
     public static BlochData incoherentTransverseDocument() {
-        return new BlochData(
-            incoherentField(),
-            List.of(),
-            Map.of()
-        );
+        return new BlochData(incoherentField());
     }
 
     public static List<PulseSegment> freePrecessionPulse() {
@@ -100,7 +73,6 @@ public final class TestBlochDataFactory {
         field.rMm = new double[]{0, 15, 30};
         field.zMm = new double[]{-10, 0, 10};
         field.b0Ref = 1.5;
-        // staticBz in Tesla: legacy dBz_uT × 1e-6.
         double[][] dBzUt = {
             {0.0, 4.0, 1.5},
             {1.0, -2.0, 0.5},
@@ -121,7 +93,8 @@ public final class TestBlochDataFactory {
             new Segment(1.0e-6, 0, 2),
             new Segment(1.0e-6, 2, 0)
         );
-        field.dynamicFields = legacyDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
+        field.dynamicFields = buildDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
+        field.receiveCoils = buildIsotropicReceive(field.rMm.length, field.zMm.length);
         return field;
     }
 
@@ -152,15 +125,13 @@ public final class TestBlochDataFactory {
         field.t1 = 1.0e9;
         field.t2 = 1.0e9;
         field.sliceHalf = 0.005;
-        field.segments = List.of(
-            new Segment(1.0e-6, 1, 0)
-        );
-        field.dynamicFields = legacyDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
+        field.segments = List.of(new Segment(1.0e-6, 1, 0));
+        field.dynamicFields = buildDynamicFields(field.rMm, field.zMm, field.b0Ref, field.fovX, field.fovZ);
+        field.receiveCoils = buildIsotropicReceive(field.rMm.length, field.zMm.length);
         return field;
     }
 
-    /** Reconstruct the pre-rewrite hardcoded shapes as explicit eigenfields. */
-    private static List<DynamicFieldMap> legacyDynamicFields(double[] rMm, double[] zMm, double b0, double fovX, double fovZ) {
+    private static List<DynamicFieldMap> buildDynamicFields(double[] rMm, double[] zMm, double b0, double fovX, double fovZ) {
         int nR = rMm.length;
         int nZ = zMm.length;
         double fovXHalf = Math.max(fovX / 2, 1e-9);
@@ -184,6 +155,18 @@ public final class TestBlochDataFactory {
             new DynamicFieldMap("Gx", 2, 1, 0.0, 0.0, new double[nR][nZ], new double[nR][nZ], gxEz),
             new DynamicFieldMap("Gz", 3, 1, 0.0, 0.0, new double[nR][nZ], new double[nR][nZ], gzEz)
         );
+    }
+
+    public static List<ReceiveCoilMap> buildIsotropicReceive(int nR, int nZ) {
+        double[][] ex = new double[nR][nZ];
+        double[][] ey = new double[nR][nZ];
+        double[][] ez = new double[nR][nZ];
+        for (int ri = 0; ri < nR; ri++) {
+            for (int zi = 0; zi < nZ; zi++) {
+                ex[ri][zi] = 1.0;
+            }
+        }
+        return List.of(new ReceiveCoilMap("Primary RX", 1.0, 0.0, ex, ey, ez));
     }
 
     private static double sq(double v) { return v * v; }

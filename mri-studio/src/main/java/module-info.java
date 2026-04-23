@@ -14,11 +14,9 @@ module ax.xz.mri {
     opens ax.xz.mri.project to com.fasterxml.jackson.databind;
     opens ax.xz.mri.ui.workbench to com.fasterxml.jackson.databind;
     opens ax.xz.mri.ui.workbench.layout to com.fasterxml.jackson.databind;
-    opens ax.xz.mri.service.io to com.fasterxml.jackson.databind;
 
     exports ax.xz.mri;
     exports ax.xz.mri.model.simulation;
     exports ax.xz.mri.optimisation;
-    exports ax.xz.mri.optimisation.cli;
     exports ax.xz.mri.ui.aerofx.skin to javafx.controls;
 }

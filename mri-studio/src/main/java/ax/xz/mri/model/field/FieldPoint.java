@@ -8,17 +8,23 @@ package ax.xz.mri.model.field;
  * off-resonance. Any Bloch–Siegert / average-Hamiltonian corrections from
  * fast-oscillating fields are folded into this scalar at build time.
  *
- * <p>{@link #ex}/{@link #ey}/{@link #ez} are per-field eigenfield components
- * at this point — indexed by field number in the same order as
- * {@link FieldMap#dynamicFields}. Each array has length equal to the number
- * of dynamic fields; no static fields appear here.
+ * <p>{@link #ex}/{@link #ey}/{@link #ez} are per-driven-field eigenfield
+ * components at this point — indexed by field number in the same order as
+ * {@link FieldMap#dynamicFields}.
+ *
+ * <p>{@link #rxEx}/{@link #rxEy}/{@link #rxEz} are per-receive-coil sensitivity
+ * components at this point — indexed by coil number in the same order as
+ * {@link FieldMap#receiveCoils}.
  */
 public record FieldPoint(
-    double staticBz,    // rotating-frame static Bz (after reference subtraction + corrections), T
-    double mx0,         // initial Mx
-    double my0,         // initial My
-    double mz0,         // initial Mz
-    double[] ex,        // per-dynamic-field E_x at this point (unitless eigenfield)
-    double[] ey,        // per-dynamic-field E_y at this point
-    double[] ez         // per-dynamic-field E_z at this point
+    double staticBz,
+    double mx0,
+    double my0,
+    double mz0,
+    double[] ex,
+    double[] ey,
+    double[] ez,
+    double[] rxEx,
+    double[] rxEy,
+    double[] rxEz
 ) {}

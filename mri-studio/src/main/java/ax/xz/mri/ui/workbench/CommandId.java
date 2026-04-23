@@ -3,8 +3,6 @@ package ax.xz.mri.ui.workbench;
 /** Global and pane-scoped commands exposed by menus and pane chrome. */
 public enum CommandId {
     OPEN_PROJECT,
-    IMPORT_JSON,
-    RELOAD_FILE,
     SAVE_PROJECT,
     SAVE_PROJECT_AS,
     RESET_LAYOUT,
@@ -15,7 +13,6 @@ public enum CommandId {
     FOCUS_ACTIVE_PANE,
     RESET_POINTS,
     CLEAR_USER_POINTS,
-    PROMOTE_SNAPSHOT_TO_SEQUENCE,
     DELETE_SEQUENCE,
     NEW_SIM_CONFIG,
     NEW_EIGENFIELD,

@@ -59,14 +59,11 @@ public class StudioShell extends BorderPane {
         saveItem.setAccelerator(KeyCombination.keyCombination("Shortcut+S"));
         saveItem.setOnAction(event -> controller.saveContextual());
         fileMenu.getItems().addAll(
+            buildNewMenu(),
+            new SeparatorMenuItem(),
             menuItem("Open Project\u2026", CommandId.OPEN_PROJECT, KeyCombination.keyCombination("Shortcut+O")),
             saveItem,
             menuItem("Save Project As\u2026", CommandId.SAVE_PROJECT_AS, KeyCombination.keyCombination("Shortcut+Shift+S")),
-            new SeparatorMenuItem(),
-            menuItem("Import JSON\u2026", CommandId.IMPORT_JSON, KeyCombination.keyCombination("Shortcut+I")),
-            menuItem("Reload Import", CommandId.RELOAD_FILE, KeyCombination.keyCombination("Shortcut+R")),
-            new SeparatorMenuItem(),
-            buildNewMenu(),
             new SeparatorMenuItem(),
             new MenuItem("Exit") {{
                 setOnAction(event -> {
@@ -117,9 +114,7 @@ public class StudioShell extends BorderPane {
         var analysisMenu = new Menu("Analysis");
         analysisMenu.getItems().addAll(
             menuItem("Reset Points", CommandId.RESET_POINTS, null),
-            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS, null),
-            new SeparatorMenuItem(),
-            menuItem("Promote to Sequence", CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, null)
+            menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS, null)
         );
 
         return new MenuBar(fileMenu, viewMenu, windowMenu, analysisMenu);
@@ -130,7 +125,7 @@ public class StudioShell extends BorderPane {
         newMenu.getItems().addAll(
             menuItem("Simulation Config\u2026", CommandId.NEW_SIM_CONFIG, null),
             menuItem("Eigenfield\u2026", CommandId.NEW_EIGENFIELD, null),
-            menuItem("Sequence (empty)\u2026", CommandId.NEW_SEQUENCE, null)
+            menuItem("Sequence\u2026", CommandId.NEW_SEQUENCE, null)
         );
         return newMenu;
     }

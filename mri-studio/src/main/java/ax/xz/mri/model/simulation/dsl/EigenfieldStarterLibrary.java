@@ -88,6 +88,23 @@ public final class EigenfieldStarterLibrary {
             // Pair with a quadrature (QUADRATURE) amplitude at the Larmor carrier.
             return Vec3.of(1, 0, 0);
             """,
+            "T", 1.0),
+
+        new EigenfieldStarter(
+            "surface-loop-rx",
+            "Surface loop B\u22a5",
+            "Surface receive loop on the +x side with exponential depth falloff.",
+            """
+            // Surface loop centred at (+r0, 0, 0) facing -x. Transverse sensitivity
+            // decays exponentially with depth into the FOV and falls off radially.
+            double r0 = 0.05;
+            double depth = r0 - x;
+            double lateral = Math.hypot(y, z);
+            double depthFall = Math.exp(-Math.max(depth, 0) / r0);
+            double radialFall = Math.exp(-lateral * lateral / (r0 * r0));
+            double amp = depthFall * radialFall;
+            return Vec3.of(amp, 0, 0);
+            """,
             "T", 1.0)
     );
 

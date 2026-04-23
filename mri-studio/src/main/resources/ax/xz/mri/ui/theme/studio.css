@@ -921,6 +921,21 @@
     -fx-text-fill: -studio-text-tertiary;
     -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
 }
+.clip-inspector-poi-row {
+    -fx-padding: 4 0 4 0;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.clip-inspector-poi-name {
+    -fx-font-size: 11px;
+    -fx-font-weight: 600;
+    -fx-text-fill: -studio-text;
+}
+.clip-inspector-poi-angle {
+    -fx-font-size: 11px;
+    -fx-text-fill: -studio-text;
+    -fx-font-family: "SF Mono", "Menlo", "Consolas", monospace;
+}
 
 .inspector-title {
     -fx-font-weight: 600;

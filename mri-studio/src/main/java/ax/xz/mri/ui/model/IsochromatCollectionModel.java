@@ -75,44 +75,21 @@ public class IsochromatCollectionModel {
         }
 
         var defaults = new ArrayList<IsochromatEntry>();
-        var defs = currentData.iso();
-        if (defs == null || defs.isEmpty()) {
+        for (int i = 0; i < DEFAULT_POSITIONS.length; i++) {
+            double r = DEFAULT_POSITIONS[i][0];
+            double z = DEFAULT_POSITIONS[i][1];
             defaults.add(new IsochromatEntry(
                 nextIsoId(),
-                0,
-                0,
+                r,
+                z,
                 nextColour(),
                 true,
-                "Centre",
-                true,
+                i == 0 ? "Centre" : String.format("(%.0f, %.0f)", r, z),
+                isInSlice(z),
                 IsochromatOrigin.SCENARIO_DEFAULT,
                 false,
                 null
             ));
-        } else {
-            for (int i = 0; i < defs.size(); i++) {
-                var def = defs.get(i);
-                Color colour;
-                try {
-                    colour = Color.web(def.colour());
-                } catch (Exception ignored) {
-                    colour = nextColour();
-                }
-                double r = i < DEFAULT_POSITIONS.length ? DEFAULT_POSITIONS[i][0] : 0;
-                double z = i < DEFAULT_POSITIONS.length ? DEFAULT_POSITIONS[i][1] : 0;
-                defaults.add(new IsochromatEntry(
-                    nextIsoId(),
-                    r,
-                    z,
-                    colour,
-                    def.inSlice(),
-                    def.name(),
-                    def.inSlice(),
-                    IsochromatOrigin.SCENARIO_DEFAULT,
-                    false,
-                    null
-                ));
-            }
         }
 
         entries.setAll(defaults);

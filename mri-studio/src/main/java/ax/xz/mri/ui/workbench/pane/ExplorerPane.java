@@ -144,26 +144,6 @@ public final class ExplorerPane extends WorkbenchPane {
 
         var repo = paneContext.session().project.repository.get();
         var node = repo.node(entry.nodeId());
-        if (node != null && switch (node.kind()) {
-            case IMPORTED_CAPTURE, CAPTURE, RUN_BOOKMARK, IMPORTED_OPTIMISATION_RUN, OPTIMISATION_RUN, IMPORTED_SCENARIO -> true;
-            default -> false;
-        }) {
-            var promote = new MenuItem("Promote to Sequence");
-            promote.setOnAction(event -> {
-                paneContext.session().project.selectNode(entry.nodeId());
-                paneContext.controller().commandRegistry().execute(CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE);
-            });
-            menu.getItems().add(promote);
-        }
-
-        if (node != null && node.kind() == ProjectNodeKind.IMPORT_LINK) {
-            var reload = new MenuItem("Reload Import");
-            reload.setOnAction(event -> {
-                paneContext.session().project.selectNode(entry.nodeId());
-                paneContext.controller().commandRegistry().execute(CommandId.RELOAD_FILE);
-            });
-            menu.getItems().add(reload);
-        }
 
         if (node != null && node.kind() == ProjectNodeKind.SEQUENCE) {
             var rename = new MenuItem("Rename Sequence");
@@ -178,7 +158,7 @@ public final class ExplorerPane extends WorkbenchPane {
             menu.getItems().add(delete);
         }
 
-        if (node != null && node.kind() == ProjectNodeKind.SIMULATION) {
+        if (node != null && node.kind() == ProjectNodeKind.SIMULATION_CONFIG) {
             var rename = new MenuItem("Rename Config");
             rename.setOnAction(event -> renameSimConfig(entry.nodeId()));
             menu.getItems().add(rename);

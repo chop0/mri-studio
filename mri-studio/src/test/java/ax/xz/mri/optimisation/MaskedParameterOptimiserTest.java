@@ -5,11 +5,9 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.SignalTrace;
 import org.junit.jupiter.api.Test;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -82,7 +80,7 @@ class MaskedParameterOptimiserTest {
 
         @Override
         public SignalTrace simulateSignal(OptimisationProblem problem, List<PulseSegment> segments) {
-            return new SignalTrace(List.of(new SignalTrace.Point(0.0, 0.0)));
+            return new SignalTrace(List.of(new SignalTrace.Point(0.0, 0.0, 0.0)));
         }
     }
 }

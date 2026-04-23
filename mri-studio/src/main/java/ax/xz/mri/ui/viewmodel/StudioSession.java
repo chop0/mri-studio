@@ -38,36 +38,7 @@ public class StudioSession {
     /** The active sequence editing session, or null when not editing a sequence. */
     public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
-    /** Guard to prevent listener cascades during loadSimulationResult. */
-    private boolean loadingSimulation;
-
     public StudioSession() {
-        // When an imported capture is loaded, push its data through the standard path
-        project.activeCapture.activeCapture.addListener((obs, oldCapture, newCapture) -> {
-            if (newCapture == null || newCapture.blochData() == null) {
-                document.clearDocument();
-                updateViewportBounds(null);
-                return;
-            }
-            // Let DocumentSessionViewModel handle scenario/iteration resolution for imports
-            document.showCapture(
-                newCapture.sourceFile(),
-                newCapture.blochData(),
-                newCapture.scenarioName(),
-                newCapture.iterationKey()
-            );
-        });
-
-        // When currentPulse changes (from scenario resolution in imports), load the result.
-        // Skipped during loadSimulationResult to prevent double-init.
-        document.currentPulse.addListener((obs, oldPulse, newPulse) -> {
-            if (loadingSimulation) return;
-            var data = document.blochData.get();
-            if (data != null && newPulse != null) {
-                loadAnalysisData(data, newPulse);
-            }
-        });
-
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         reference.enabled.addListener((obs, oldValue, newValue) -> {
             refreshReferenceFrame();
@@ -93,52 +64,12 @@ public class StudioSession {
      * The order is carefully chosen: context first, then computation triggers.
      */
     public void loadSimulationResult(BlochData data, List<PulseSegment> pulse) {
-        // Guard: suppress the currentPulse listener so it doesn't double-init
-        loadingSimulation = true;
-        try {
-            // Store on document model (for panes that read these directly)
-            document.blochData.set(data);
-            document.currentPulse.set(pulse);
-        } finally {
-            loadingSimulation = false;
-        }
-
-        // Update viewport bounds without resetting the user's zoom/pan position.
-        // The full reset only happens on initial load (setDocument) and import switches.
+        document.blochData.set(data);
+        document.currentPulse.set(pulse);
         updateViewportBoundsPreservePosition(data);
-
-        // Feed the simulation engine — update context and resimulate existing points.
-        // NOTE: resimulateAll() preserves user's custom points; resetToDefaults() is
-        // only called on first data load (setDocument/import path), not on re-simulation.
-        points.setContext(data, pulse);
-        points.resimulateAll();
-
-        // Compute derived quantities (phase maps, signal trace)
-        derived.recompute(data, pulse);
-
-        // Update reference frame and geometry shading
-        refreshReferenceFrame();
-        refreshGeometryShading();
-    }
-
-    /**
-     * Load analysis data triggered by the currentPulse listener (import path).
-     * Same as loadSimulationResult but doesn't re-set document properties (already set).
-     */
-    private void loadAnalysisData(BlochData data, List<PulseSegment> pulse) {
-        updateViewportBounds(data);
         points.setContext(data, pulse);
         points.resimulateAll();
         derived.recompute(data, pulse);
-        refreshReferenceFrame();
-        refreshGeometryShading();
-    }
-
-    public void setDocument(java.io.File file, BlochData data) {
-        document.setDocument(file, data);
-        points.setContext(data, document.currentPulse.get());
-        points.resetToDefaults();
-        updateViewportBounds(data);
         refreshReferenceFrame();
         refreshGeometryShading();
     }
@@ -192,13 +123,8 @@ public class StudioSession {
      * viewport bounds — the caller restores those from the document snapshot.
      */
     public void pushDataForTabSwitch(BlochData data, java.util.List<PulseSegment> pulse) {
-        loadingSimulation = true;
-        try {
-            document.blochData.set(data);
-            document.currentPulse.set(pulse);
-        } finally {
-            loadingSimulation = false;
-        }
+        document.blochData.set(data);
+        document.currentPulse.set(pulse);
         if (data != null && pulse != null) {
             points.setContext(data, pulse);
             points.resimulateAll();
@@ -215,26 +141,6 @@ public class StudioSession {
         reference.dispose();
     }
 
-    private void updateViewportBounds(BlochData data) {
-        if (data == null || data.field() == null || data.field().segments == null) {
-            viewport.maxTime.set(1000);
-            viewport.resetToFullRange();
-            geometry.fitVisibleRange(-80, 80);
-            return;
-        }
-        double total = data.field().segments.stream()
-            .mapToDouble(segment -> segment.durationMicros())
-            .sum();
-        viewport.maxTime.set(total);
-        viewport.resetToFullRange();
-        geometry.fitVisibleRange(data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
-    }
-
-    /**
-     * Update viewport bounds from simulation data without resetting the user's zoom/pan.
-     * Used for incremental re-simulations (edits, undo/redo) where the user's viewport
-     * position should be preserved.
-     */
     private void updateViewportBoundsPreservePosition(BlochData data) {
         if (data == null || data.field() == null || data.field().segments == null) {
             viewport.setMaxTimePreservePosition(1000);

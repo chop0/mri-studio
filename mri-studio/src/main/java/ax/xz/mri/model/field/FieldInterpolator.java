@@ -3,10 +3,10 @@ package ax.xz.mri.model.field;
 /**
  * Bilinear interpolation into the spatial field map.
  *
- * <p>Produces a {@link FieldPoint} with static Bz and per-dynamic-field
- * eigenfield components at the requested (r, z). No shape formulas are
- * hardcoded — every spatial dependence comes from the user-authored
- * eigenfield scripts baked into {@link FieldMap#dynamicFields}.
+ * <p>Produces a {@link FieldPoint} with static Bz, per-dynamic-field eigenfield
+ * components, and per-receive-coil sensitivity components at the requested
+ * (r, z). No shape formulas are hardcoded — every spatial dependence comes
+ * from user-authored eigenfield scripts baked into {@link FieldMap}.
  */
 public final class FieldInterpolator {
     private FieldInterpolator() {}
@@ -23,18 +23,29 @@ public final class FieldInterpolator {
             mz0 = bilerp(f.mz0, f.rMm, f.zMm, rm, zMm);
         }
 
-        int n = f.dynamicFields == null ? 0 : f.dynamicFields.size();
-        double[] ex = new double[n];
-        double[] ey = new double[n];
-        double[] ez = new double[n];
-        for (int i = 0; i < n; i++) {
+        int nDyn = f.dynamicFields == null ? 0 : f.dynamicFields.size();
+        double[] ex = new double[nDyn];
+        double[] ey = new double[nDyn];
+        double[] ez = new double[nDyn];
+        for (int i = 0; i < nDyn; i++) {
             var df = f.dynamicFields.get(i);
             ex[i] = bilerp(df.ex, f.rMm, f.zMm, rm, zMm);
             ey[i] = bilerp(df.ey, f.rMm, f.zMm, rm, zMm);
             ez[i] = bilerp(df.ez, f.rMm, f.zMm, rm, zMm);
         }
 
-        return new FieldPoint(staticBz, mx0, my0, mz0, ex, ey, ez);
+        int nRx = f.receiveCoils == null ? 0 : f.receiveCoils.size();
+        double[] rxEx = new double[nRx];
+        double[] rxEy = new double[nRx];
+        double[] rxEz = new double[nRx];
+        for (int i = 0; i < nRx; i++) {
+            var rc = f.receiveCoils.get(i);
+            rxEx[i] = bilerp(rc.ex, f.rMm, f.zMm, rm, zMm);
+            rxEy[i] = bilerp(rc.ey, f.rMm, f.zMm, rm, zMm);
+            rxEz[i] = bilerp(rc.ez, f.rMm, f.zMm, rm, zMm);
+        }
+
+        return new FieldPoint(staticBz, mx0, my0, mz0, ex, ey, ez, rxEx, rxEy, rxEz);
     }
 
     /**

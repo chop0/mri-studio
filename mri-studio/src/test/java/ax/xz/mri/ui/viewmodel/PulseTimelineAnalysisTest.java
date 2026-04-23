@@ -14,9 +14,9 @@ class PulseTimelineAnalysisTest {
         var document = TestBlochDataFactory.sampleDocument();
         var pulse = TestBlochDataFactory.pulseA();
         var signal = new SignalTrace(List.of(
-            new SignalTrace.Point(0.0, 0.0),
-            new SignalTrace.Point(2.0, 1.0),
-            new SignalTrace.Point(4.0, 1.0)
+            new SignalTrace.Point(0.0, 0.0, 0.0),
+            new SignalTrace.Point(2.0, 1.0, 0.0),
+            new SignalTrace.Point(4.0, 1.0, 0.0)
         ));
 
         var analysis = PulseTimelineAnalysis.compute(document, pulse, signal);

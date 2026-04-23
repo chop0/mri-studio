@@ -1,9 +1,17 @@
 package ax.xz.mri.ui.wizard;
 
+import ax.xz.mri.model.sequence.SequenceStarter;
+import ax.xz.mri.model.sequence.SequenceStarterLibrary;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.BooleanBinding;
+import javafx.geometry.Insets;
+import javafx.scene.Node;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Label;
+import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 
 import java.util.Optional;
@@ -11,10 +19,14 @@ import java.util.Optional;
 /**
  * New Sequence wizard.
  *
- * <p>Asks for a name and, if multiple simulation configs exist, which one to
- * bind the sequence to. A sequence without a config has no channel layout to
- * edit, so we always produce one pre-bound to a config. Creating a sequence
- * before any config exists is rejected up front.
+ * <p>Steps: Template &rarr; [Template Config (if the template has one)]
+ * &rarr; Name &rarr; [Simulation Config (if multiple exist)]. Starters are
+ * pulled from {@link SequenceStarterLibrary} and each inspects the chosen
+ * config at build time so the seeded clips are calibrated to that config.
+ *
+ * <p>The template-config step delegates to the starter's {@link
+ * SequenceStarter#configStep()} so the Blank starter skips it while CPMG and
+ * CP surface pulse-count / echo-spacing controls.
  */
 public final class NewSequenceWizard {
     private NewSequenceWizard() {}
@@ -28,7 +40,7 @@ public final class NewSequenceWizard {
 
         if (configs.isEmpty()) {
             var alert = new Alert(Alert.AlertType.INFORMATION,
-                "Create a simulation config first — sequences are edited against a config's channel layout.");
+                "Create a simulation config first. Sequences are edited against a config's channel layout.");
             alert.setTitle("No simulation configs");
             alert.setHeaderText("A simulation config is required");
             alert.initOwner(owner);
@@ -36,14 +48,35 @@ public final class NewSequenceWizard {
             return Optional.empty();
         }
 
-        var nameStep = new NameStep("Enter a name for the sequence", "New Sequence");
+        var starterStep = new ChoiceStep<>(
+            "Template",
+            "Choose a starter for the sequence",
+            SequenceStarterLibrary.all(),
+            SequenceStarter::name,
+            SequenceStarter::description);
 
-        // Skip the picker if there's only one config — auto-bind it.
+        var templateConfigStep = new DelegatingStarterStep(starterStep);
+
+        var nameStep = new NameStep("Enter a name for the sequence", "New Sequence") {
+            @Override
+            public void onEnter() {
+                var starter = starterStep.getValue();
+                if (starter != null && (getValue().isBlank() || getValue().equals("New Sequence"))) {
+                    setValue(starter.name());
+                }
+                super.onEnter();
+            }
+        };
+
+        // Skip the config picker if there's only one - auto-bind it.
         if (configs.size() == 1) {
             var only = configs.getFirst();
             return WizardDialog.<SequenceDocument>builder("New Sequence")
+                .step(starterStep)
+                .step(templateConfigStep)
                 .step(nameStep)
-                .resultFactory(() -> project.createEmptySequence(nameStep.getValue(), only.id()))
+                .resultFactory(() -> project.createSequenceFromStarter(
+                    nameStep.getValue(), only.id(), starterStep.getValue()))
                 .build(owner)
                 .showAndWait();
         }
@@ -54,16 +87,63 @@ public final class NewSequenceWizard {
             configs,
             SimulationConfigDocument::name,
             cfg -> cfg.config() == null ? "" :
-                String.format("B\u2080 %.3f T \u00B7 %d field%s",
+                String.format("B0 %.3f T, %d field%s",
                     cfg.config().referenceB0Tesla(),
                     cfg.config().fields().size(),
                     cfg.config().fields().size() == 1 ? "" : "s"));
 
         return WizardDialog.<SequenceDocument>builder("New Sequence")
+            .step(starterStep)
+            .step(templateConfigStep)
             .step(nameStep)
             .step(configStep)
-            .resultFactory(() -> project.createEmptySequence(nameStep.getValue(), configStep.getValue().id()))
+            .resultFactory(() -> project.createSequenceFromStarter(
+                nameStep.getValue(), configStep.getValue().id(), starterStep.getValue()))
             .build(owner)
             .showAndWait();
+    }
+
+    /**
+     * Wizard step that mirrors the selected starter's own config step. Starters
+     * with no customisation (Blank) show a neutral placeholder and pass
+     * validity straight through. Mirrors
+     * {@code NewSimConfigWizard.DelegatingTemplateStep}.
+     */
+    private static final class DelegatingStarterStep implements WizardStep {
+        private final ChoiceStep<SequenceStarter> starterStep;
+        private final StackPane container = new StackPane();
+        private final Label placeholder;
+        private final BooleanBinding valid;
+
+        DelegatingStarterStep(ChoiceStep<SequenceStarter> starterStep) {
+            this.starterStep = starterStep;
+            placeholder = new Label("No options for this template.");
+            placeholder.setStyle("-fx-text-fill: #64748b;");
+            container.getChildren().add(placeholder);
+            container.setPadding(new Insets(20));
+            valid = Bindings.createBooleanBinding(() -> {
+                var starter = starterStep.getValue();
+                if (starter == null) return true;
+                var step = starter.configStep();
+                return step == null || step.validProperty().get();
+            });
+        }
+
+        @Override public String title() { return "Configure"; }
+        @Override public Node content() { return container; }
+        @Override public BooleanBinding validProperty() { return valid; }
+
+        @Override
+        public void onEnter() {
+            container.getChildren().clear();
+            var starter = starterStep.getValue();
+            var step = starter == null ? null : starter.configStep();
+            if (step == null) {
+                container.getChildren().add(placeholder);
+            } else {
+                container.getChildren().add(step.content());
+                step.onEnter();
+            }
+        }
     }
 }

@@ -1,8 +1,6 @@
 package ax.xz.mri.ui.workbench;
 
-import ax.xz.mri.project.ActiveCapture;
 import ax.xz.mri.project.EigenfieldDocument;
-import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
@@ -37,7 +35,6 @@ import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.layout.BorderPane;
 import javafx.stage.DirectoryChooser;
-import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import software.coley.bentofx.Bento;
 import software.coley.bentofx.dockable.Dockable;
@@ -185,12 +182,6 @@ public class WorkbenchController {
             new SequenceEditorProvider(document, session, this));
     }
 
-    /** Open an imported capture as a workspace tab. */
-    public void openImportTab(ProjectNodeId nodeId, ActiveCapture capture) {
-        openTab(nodeId.value(), capture.name(),
-            new ImportViewerProvider(capture, session, this));
-    }
-
     /** Open a sim config as a workspace tab. */
     public void openSimConfigTab(SimulationConfigDocument configDoc) {
         openTab(configDoc.id().value(), configDoc.name(),
@@ -217,12 +208,10 @@ public class WorkbenchController {
 
             activeTab.set(newTab);
 
-            // Push incoming data and restore state
             newTab.editor().activate(session);
             if (newTab.snapshot() != null) {
                 newTab.editor().restoreState(session, newTab.snapshot());
             } else {
-                // First activation — fit geometry to data bounds
                 var data = session.document.blochData.get();
                 if (data != null && data.field() != null && data.field().zMm != null) {
                     session.geometry.fitVisibleRange(
@@ -606,14 +595,6 @@ public class WorkbenchController {
 
     // --- File operations ---
 
-    public void importJsonChooser() {
-        var chooser = new FileChooser();
-        chooser.setTitle("Import Legacy Bloch JSON");
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("JSON", "*.json"));
-        File file = chooser.showOpenDialog(mainStage);
-        if (file != null) loadFile(file);
-    }
-
     public void openProjectChooser() {
         var chooser = new DirectoryChooser();
         chooser.setTitle("Open Project");
@@ -663,16 +644,6 @@ public class WorkbenchController {
         if (dir == null) return;
         try { session.project.saveProject(dir.toPath()); updateShellStatus(); }
         catch (Exception ex) { showError("Failed to save project", ex.getMessage()); }
-    }
-
-    public void loadFile(File file) {
-        try { session.project.openImport(file); updateShellStatus(); }
-        catch (Exception ex) { showError("Failed to load file", ex.getMessage()); }
-    }
-
-    public void reloadCurrentFile() {
-        try { session.project.reloadSelectedImport(); updateShellStatus(); }
-        catch (Exception ex) { showError("Failed to reload import", ex.getMessage()); }
     }
 
     public void dispose() {
@@ -756,11 +727,11 @@ public class WorkbenchController {
 
         // Right sidebar: Inspector, Messages, Points
         rightSidebar.addTool(new ToolSidebar.Tool("inspector",
-            "Inspector", StudioIcons.create(StudioIconKind.IMPORT), panes.get(PaneId.INSPECTOR)));
+            "Inspector", StudioIcons.create(StudioIconKind.SIMULATION), panes.get(PaneId.INSPECTOR)));
         rightSidebar.addTool(new ToolSidebar.Tool("messages",
             "Messages", StudioIcons.create(StudioIconKind.MESSAGES), panes.get(PaneId.MESSAGES)));
         rightSidebar.addTool(new ToolSidebar.Tool("points",
-            "Points", StudioIcons.create(StudioIconKind.CAPTURE), panes.get(PaneId.POINTS)));
+            "Points", StudioIcons.create(StudioIconKind.SIMULATION), panes.get(PaneId.POINTS)));
         rightSidebar.showTool("inspector"); // open by default
 
         // When an error lands in the message log, surface the Messages tool so the user sees it.
@@ -799,8 +770,6 @@ public class WorkbenchController {
 
     private void registerCommands() {
         commandRegistry.register(new PaneAction(CommandId.OPEN_PROJECT, "Open Project\u2026", this::openProjectChooser));
-        commandRegistry.register(new PaneAction(CommandId.IMPORT_JSON, "Import JSON\u2026", this::importJsonChooser));
-        commandRegistry.register(new PaneAction(CommandId.RELOAD_FILE, "Reload", this::reloadCurrentFile));
         commandRegistry.register(new PaneAction(CommandId.SAVE_PROJECT, "Save Project", this::saveProject));
         commandRegistry.register(new PaneAction(CommandId.SAVE_PROJECT_AS, "Save Project As\u2026", this::saveProjectAsChooser));
         commandRegistry.register(new PaneAction(CommandId.RESET_LAYOUT, "Reset Layout", this::resetLayout));
@@ -817,8 +786,6 @@ public class WorkbenchController {
         }));
         commandRegistry.register(new PaneAction(CommandId.RESET_POINTS, "Reset Points", session.points::resetToDefaults));
         commandRegistry.register(new PaneAction(CommandId.CLEAR_USER_POINTS, "Clear User Points", session.points::clearUserPoints));
-        commandRegistry.register(new PaneAction(CommandId.PROMOTE_SNAPSHOT_TO_SEQUENCE, "Promote to Sequence",
-            session.project::promoteActiveSnapshotToSequence));
         commandRegistry.register(new PaneAction(CommandId.DELETE_SEQUENCE, "Delete Sequence", () -> {
             var n = session.project.inspector.inspectedNodeId.get();
             if (n != null && session.project.repository.get().node(n) instanceof SequenceDocument)
@@ -857,13 +824,8 @@ public class WorkbenchController {
     }
 
     private void installWorkspaceSwitching() {
-        // Opening a sequence from the explorer → create tab
         session.project.setOnSequenceOpened(this::openSequenceTab);
-        // Opening an import/capture → create tab
-        session.project.setOnCaptureOpened(this::openImportTab);
-        // Opening a sim config → create tab
         session.project.setOnSimConfigOpened(this::openSimConfigTab);
-        // Opening an eigenfield → create tab
         session.project.setOnEigenfieldOpened(this::openEigenfieldTab);
     }
 

@@ -10,9 +10,10 @@ import java.util.List;
 /**
  * Project-owned editable sequence document.
  *
- * <p>When {@code clipSequence} is non-null the clip model is authoritative and
- * {@code segments}/{@code pulse} are baked copies for the simulator. Legacy or
- * imported sequences have {@code clipSequence == null} and use the step arrays directly.
+ * <p>{@link #clipSequence()} holds the authoring model; {@link #segments()} and
+ * {@link #pulse()} are its baked per-step arrays ready for the Bloch simulator.
+ * {@link #activeSimConfigId()} associates the sequence with the simulation
+ * config it was authored against.
  */
 public record SequenceDocument(
     ProjectNodeId id,
@@ -22,17 +23,6 @@ public record SequenceDocument(
     @JsonProperty("clip_sequence") ClipSequence clipSequence,
     @JsonProperty("active_sim_config_id") ProjectNodeId activeSimConfigId
 ) implements ProjectNode {
-    /** Legacy constructor without clip sequence or config association. */
-    public SequenceDocument(ProjectNodeId id, String name, List<Segment> segments, List<PulseSegment> pulse) {
-        this(id, name, segments, pulse, null, null);
-    }
-
-    /** Constructor without config association (legacy/imported). */
-    public SequenceDocument(ProjectNodeId id, String name, List<Segment> segments, List<PulseSegment> pulse,
-                           ClipSequence clipSequence) {
-        this(id, name, segments, pulse, clipSequence, null);
-    }
-
     public SequenceDocument {
         segments = List.copyOf(segments);
         pulse = List.copyOf(pulse);
@@ -41,10 +31,5 @@ public record SequenceDocument(
     @Override
     public ProjectNodeKind kind() {
         return ProjectNodeKind.SEQUENCE;
-    }
-
-    /** Whether this document uses the clip editing model. */
-    public boolean hasClipSequence() {
-        return clipSequence != null;
     }
 }
