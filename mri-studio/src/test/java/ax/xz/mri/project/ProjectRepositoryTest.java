@@ -1,9 +1,10 @@
 package ax.xz.mri.project;
 
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.TransmitCoil;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -36,9 +37,11 @@ class ProjectRepositoryTest {
             eigenId, "E", "desc", "return Vec3.of(1,0,0);", "T", 1.0));
 
         var rx = new ReceiveCoil("RX", eigenId, 1.0, 0.0);
+        var coil = new TransmitCoil("Drive Coil", eigenId, 0);
         var cfg = new SimulationConfig(
             1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 1e-6,
-            List.of(new FieldDefinition("Drive", eigenId, AmplitudeKind.REAL, 0, -1, 1)),
+            List.of(coil),
+            List.of(new DrivePath("Drive", "Drive Coil", AmplitudeKind.REAL, 0, -1, 1, null)),
             List.of(rx));
         var doc = new SimulationConfigDocument(new ProjectNodeId("simcfg-1"), "Cfg A", cfg);
         repo.addSimConfig(doc);

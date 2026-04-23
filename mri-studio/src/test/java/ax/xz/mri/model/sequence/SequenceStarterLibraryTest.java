@@ -1,7 +1,7 @@
 package ax.xz.mri.model.sequence;
 
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.support.FxTestSupport;
@@ -26,30 +26,29 @@ class SequenceStarterLibraryTest {
     private static final double B1_MAX = 200e-6;
 
     private static SimulationConfig withRf() {
-        var rf = new FieldDefinition(
-            "RF", new ProjectNodeId("ef-rf"), AmplitudeKind.QUADRATURE,
-            63e6, 0, B1_MAX);
-        var gx = new FieldDefinition(
-            "Gradient X", new ProjectNodeId("ef-gx"), AmplitudeKind.REAL,
-            0, -0.030, 0.030);
+        var rfCoil = new ax.xz.mri.model.simulation.TransmitCoil("RF Coil", new ProjectNodeId("ef-rf"), 0);
+        var gxCoil = new ax.xz.mri.model.simulation.TransmitCoil("Gx Coil", new ProjectNodeId("ef-gx"), 0);
+        var rf = new DrivePath("RF", "RF Coil", AmplitudeKind.QUADRATURE, 63e6, 0, B1_MAX, null);
+        var gx = new DrivePath("Gradient X", "Gx Coil", AmplitudeKind.REAL, 0, -0.030, 0.030, null);
         return new SimulationConfig(
             1000, 100, GAMMA,
             5, 40, 20,
             5, 5,
             1.5,
             1e-6,
+            List.of(rfCoil, gxCoil),
             List.of(rf, gx),
             List.of());
     }
 
     private static SimulationConfig noRf() {
-        var gx = new FieldDefinition(
-            "Gradient X", new ProjectNodeId("ef-gx"), AmplitudeKind.REAL,
-            0, -0.030, 0.030);
+        var gxCoil = new ax.xz.mri.model.simulation.TransmitCoil("Gx Coil", new ProjectNodeId("ef-gx"), 0);
+        var gx = new DrivePath("Gradient X", "Gx Coil", AmplitudeKind.REAL, 0, -0.030, 0.030, null);
         return new SimulationConfig(
             1000, 100, GAMMA,
             5, 40, 20, 5, 5,
             1.5, 1e-6,
+            List.of(gxCoil),
             List.of(gx),
             List.of());
     }
@@ -102,10 +101,10 @@ class SequenceStarterLibraryTest {
         assertEquals(5, seq.clips().size());
 
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().fieldName().equals("RF") && t.outputChannel().subIndex() == 0)
+            .filter(t -> t.outputChannel().drivePathName().equals("RF") && t.outputChannel().subIndex() == 0)
             .findFirst().orElseThrow();
         Track qTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().fieldName().equals("RF") && t.outputChannel().subIndex() == 1)
+            .filter(t -> t.outputChannel().drivePathName().equals("RF") && t.outputChannel().subIndex() == 1)
             .findFirst().orElseThrow();
 
         var sorted = seq.clips().stream()
@@ -125,7 +124,7 @@ class SequenceStarterLibraryTest {
         var seq = starter("cp").build(cfg);
 
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().fieldName().equals("RF") && t.outputChannel().subIndex() == 0)
+            .filter(t -> t.outputChannel().drivePathName().equals("RF") && t.outputChannel().subIndex() == 0)
             .findFirst().orElseThrow();
 
         for (var clip : seq.clips()) {

@@ -8,25 +8,27 @@ import java.util.List;
 /**
  * User-editable simulation environment configuration.
  *
- * <p>Defines the physical parameters needed to run a Bloch simulation:
- * tissue properties, spatial grid, reference frame, simulation time step,
- * driven field sources, and receive coils. A {@code BlochDataFactory} converts
- * this into a synthetic {@link ax.xz.mri.model.scenario.BlochData}.
+ * <h3>Shape</h3>
+ * <ul>
+ *   <li>Tissue / nucleus: {@code t1Ms}, {@code t2Ms}, {@code gamma}.</li>
+ *   <li>Spatial grid: {@code sliceHalfMm}, {@code fovZMm}, {@code fovRMm},
+ *       {@code nZ}, {@code nR}. Each eigenfield's declared
+ *       {@link FieldSymmetry} determines whether the factory samples on the
+ *       2D cylindrical or 3D Cartesian view of this grid.</li>
+ *   <li>Rotating frame: {@code referenceB0Tesla} → {@code ω_s = γ · B0ref}.</li>
+ *   <li>{@code dtSeconds}: integration step.</li>
+ *   <li>{@link TransmitCoil}s: physical coils that generate B-fields.</li>
+ *   <li>{@link DrivePath}s: named routes from the DAW timeline into coils
+ *       (or into gate lines). Drive paths with {@link AmplitudeKind#GATE} do
+ *       not reference a coil — they emit digital signals that gate other
+ *       paths or receive coils.</li>
+ *   <li>{@link ReceiveCoil}s: observers. Their
+ *       {@link ReceiveCoil#acquisitionGateName() acquisition gate} (optional)
+ *       references a gate drive path.</li>
+ * </ul>
  *
- * <p>The simulation runs in a rotating frame at angular frequency
- * {@code ω_s = γ · referenceB0Tesla}. The reference is an explicit tuning
- * parameter — there is no privileged "B0 slot" among the fields.
- *
- * <p>The time step {@code dtSeconds} is the integration step used by the Bloch
- * simulator. It governs Bloch–Siegert fast/slow classification and the Nyquist
- * limit of sampled pulse waveforms.
- *
- * <p>Each driven field source is a {@link FieldDefinition} with a physical
- * shape (eigenfield) and an amplitude schedule ({@link AmplitudeKind} at
- * {@code carrierHz}). Each receive coil is a {@link ReceiveCoil} with its own
- * eigenfield describing spatial sensitivity — the signal the coil observes is
- * the complex reciprocity integral of its eigenfield against the transverse
- * magnetisation.
+ * <p>A {@code BlochDataFactory} converts this into a runtime
+ * {@link ax.xz.mri.model.scenario.BlochData}.
  */
 public record SimulationConfig(
     @JsonProperty("t1_ms") double t1Ms,
@@ -43,15 +45,36 @@ public record SimulationConfig(
 
     @JsonProperty("dt_seconds") double dtSeconds,
 
-    List<FieldDefinition> fields,
-
+    @JsonProperty("transmit_coils") List<TransmitCoil> transmitCoils,
+    @JsonProperty("drive_paths") List<DrivePath> drivePaths,
     @JsonProperty("receive_coils") List<ReceiveCoil> receiveCoils
 ) {
     public SimulationConfig {
-        fields = fields == null ? List.of() : List.copyOf(fields);
+        transmitCoils = transmitCoils == null ? List.of() : List.copyOf(transmitCoils);
+        drivePaths = drivePaths == null ? List.of() : List.copyOf(drivePaths);
         receiveCoils = receiveCoils == null ? List.of() : List.copyOf(receiveCoils);
         if (!(dtSeconds > 0) || !Double.isFinite(dtSeconds)) {
             throw new IllegalArgumentException("dtSeconds must be a finite positive value, got " + dtSeconds);
+        }
+        validateReferences(transmitCoils, drivePaths);
+    }
+
+    private static void validateReferences(List<TransmitCoil> coils, List<DrivePath> paths) {
+        var coilNames = new java.util.HashSet<String>();
+        for (var c : coils) coilNames.add(c.name());
+        var pathNames = new java.util.HashSet<String>();
+        for (var p : paths) {
+            if (!pathNames.add(p.name()))
+                throw new IllegalArgumentException("Duplicate drive-path name: " + p.name());
+            if (!p.isGate()) {
+                if (!coilNames.contains(p.transmitCoilName()))
+                    throw new IllegalArgumentException("DrivePath '" + p.name() + "' references unknown transmit coil '" + p.transmitCoilName() + "'");
+            }
+        }
+        // Gate inputs must reference existing paths; duplicate names already rejected above.
+        for (var p : paths) {
+            if (p.gateInputName() != null && !pathNames.contains(p.gateInputName()))
+                throw new IllegalArgumentException("DrivePath '" + p.name() + "' gate-input '" + p.gateInputName() + "' is not a drive path");
         }
     }
 
@@ -73,67 +96,72 @@ public record SimulationConfig(
     @JsonIgnore
     public int totalChannelCount() {
         int total = 0;
-        for (var field : fields) total += field.channelCount();
+        for (var p : drivePaths) total += p.channelCount();
         return total;
     }
 
     public SimulationConfig withT1Ms(double v) {
         return new SimulationConfig(v, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withT2Ms(double v) {
         return new SimulationConfig(t1Ms, v, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withGamma(double v) {
         return new SimulationConfig(t1Ms, t2Ms, v, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withSliceHalfMm(double v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, v, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withFovZMm(double v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, v, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withFovRMm(double v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, v, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withNZ(int v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, v, nR,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withNR(int v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, v,
-            referenceB0Tesla, dtSeconds, fields, receiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withReferenceB0Tesla(double v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            v, dtSeconds, fields, receiveCoils);
+            v, dtSeconds, transmitCoils, drivePaths, receiveCoils);
     }
 
     public SimulationConfig withDtSeconds(double v) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, v, fields, receiveCoils);
+            referenceB0Tesla, v, transmitCoils, drivePaths, receiveCoils);
     }
 
-    public SimulationConfig withFields(List<FieldDefinition> newFields) {
+    public SimulationConfig withTransmitCoils(List<TransmitCoil> newCoils) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, newFields, receiveCoils);
+            referenceB0Tesla, dtSeconds, newCoils, drivePaths, receiveCoils);
+    }
+
+    public SimulationConfig withDrivePaths(List<DrivePath> newPaths) {
+        return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
+            referenceB0Tesla, dtSeconds, transmitCoils, newPaths, receiveCoils);
     }
 
     public SimulationConfig withReceiveCoils(List<ReceiveCoil> newReceiveCoils) {
         return new SimulationConfig(t1Ms, t2Ms, gamma, sliceHalfMm, fovZMm, fovRMm, nZ, nR,
-            referenceB0Tesla, dtSeconds, fields, newReceiveCoils);
+            referenceB0Tesla, dtSeconds, transmitCoils, drivePaths, newReceiveCoils);
     }
 }

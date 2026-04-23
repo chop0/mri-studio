@@ -1,35 +1,29 @@
 package ax.xz.mri.project;
 
+import ax.xz.mri.model.simulation.FieldSymmetry;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Project-level eigenfield definition.
  *
- * <p>An eigenfield is a named, DSL-defined 3D spatial field shape — the
- * vector field produced by a physical field source (magnet, gradient coil,
- * RF coil). The DSL source is the entire definition; there is no "preset" enum
- * and no fallback mode.
+ * <p>A named, DSL-defined spatial field shape — the vector field produced by
+ * a physical field source (magnet, gradient coil, RF coil, receive coil).
+ * The DSL source is the entire definition; there is no "preset" enum.
  *
  * <h3>Physical calibration</h3>
- * <p>Each eigenfield carries two pieces of metadata that make the field
- * calibration explicit:
  * <ul>
- *   <li>{@link #defaultMagnitude()} — the peak |Vec3| the script returns, in
- *       the eigenfield's declared units, when called with amplitude = 1.
- *       A unit-normalised script (returning {@code Vec3.of(0,0,1)} or
- *       {@code Vec3.of(0,0,z)}) uses {@code defaultMagnitude = 1}; a script
- *       that returns a peak of 5 (say, because it's not normalised) uses
- *       {@code defaultMagnitude = 5}.</li>
- *   <li>{@link #units()} — the physical units of that peak (e.g. {@code "T"},
- *       {@code "T/m"}, {@code "Hz"}). Empty means dimensionless.</li>
+ *   <li>{@link #defaultMagnitude()} — peak |Vec3| the script returns at unit
+ *       amplitude, in the declared {@link #units()}.</li>
+ *   <li>{@link #units()} — physical units of the peak (e.g. {@code "T"},
+ *       {@code "T/m"}, {@code "Hz"}). Empty for dimensionless.</li>
  * </ul>
  *
- * <p>An amplitude {@code A} applied to this eigenfield produces a peak
- * physical field of {@code A · defaultMagnitude} in {@code units}. Editors
- * use this mapping to show amplitudes with meaningful SI prefixes.
- *
- * <p>Eigenfields are shared across simulation configs — multiple configs can
- * reference the same eigenfield document by {@link ProjectNodeId}.
+ * <h3>Spatial symmetry</h3>
+ * {@link #symmetry()} tells the simulator which grid to sample the script on.
+ * Axisymmetric fields use a 2D {@code (r, z)} grid rotated around {@code z}.
+ * Cartesian 3D fields use a full 3D grid. Choosing the right mode is a
+ * significant speedup when the physics permits it.
  */
 public record EigenfieldDocument(
     ProjectNodeId id,
@@ -37,7 +31,8 @@ public record EigenfieldDocument(
     String description,
     String script,
     String units,
-    double defaultMagnitude
+    @JsonProperty("default_magnitude") double defaultMagnitude,
+    FieldSymmetry symmetry
 ) implements ProjectNode {
 
     public EigenfieldDocument {
@@ -47,6 +42,13 @@ public record EigenfieldDocument(
             throw new IllegalArgumentException("EigenfieldDocument.units must be non-null (empty is allowed for dimensionless)");
         if (!(defaultMagnitude > 0) || !Double.isFinite(defaultMagnitude))
             throw new IllegalArgumentException("EigenfieldDocument.defaultMagnitude must be finite and positive, got " + defaultMagnitude);
+        if (symmetry == null) symmetry = FieldSymmetry.AXISYMMETRIC_Z;
+    }
+
+    /** Convenience constructor that defaults {@link FieldSymmetry} to {@link FieldSymmetry#AXISYMMETRIC_Z}. */
+    public EigenfieldDocument(ProjectNodeId id, String name, String description, String script,
+                              String units, double defaultMagnitude) {
+        this(id, name, description, script, units, defaultMagnitude, FieldSymmetry.AXISYMMETRIC_Z);
     }
 
     @Override
@@ -55,28 +57,31 @@ public record EigenfieldDocument(
         return ProjectNodeKind.EIGENFIELD;
     }
 
-    /** Peak physical field produced by this eigenfield at amplitude = 1, in {@link #units()}. */
     public double physicalPeak(double amplitude) {
         return amplitude * defaultMagnitude;
     }
 
     public EigenfieldDocument withName(String newName) {
-        return new EigenfieldDocument(id, newName, description, script, units, defaultMagnitude);
+        return new EigenfieldDocument(id, newName, description, script, units, defaultMagnitude, symmetry);
     }
 
     public EigenfieldDocument withDescription(String newDescription) {
-        return new EigenfieldDocument(id, name, newDescription, script, units, defaultMagnitude);
+        return new EigenfieldDocument(id, name, newDescription, script, units, defaultMagnitude, symmetry);
     }
 
     public EigenfieldDocument withScript(String newScript) {
-        return new EigenfieldDocument(id, name, description, newScript, units, defaultMagnitude);
+        return new EigenfieldDocument(id, name, description, newScript, units, defaultMagnitude, symmetry);
     }
 
     public EigenfieldDocument withUnits(String newUnits) {
-        return new EigenfieldDocument(id, name, description, script, newUnits, defaultMagnitude);
+        return new EigenfieldDocument(id, name, description, script, newUnits, defaultMagnitude, symmetry);
     }
 
     public EigenfieldDocument withDefaultMagnitude(double newMagnitude) {
-        return new EigenfieldDocument(id, name, description, script, units, newMagnitude);
+        return new EigenfieldDocument(id, name, description, script, units, newMagnitude, symmetry);
+    }
+
+    public EigenfieldDocument withSymmetry(FieldSymmetry newSymmetry) {
+        return new EigenfieldDocument(id, name, description, script, units, defaultMagnitude, newSymmetry);
     }
 }

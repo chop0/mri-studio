@@ -90,7 +90,7 @@ public final class TimelineRenderer {
             var track = tracks.get(i);
             double top = geom.trackTop(i);
             double h = geom.trackHeight(i);
-            var field = session.fieldForChannel(track.outputChannel());
+            var field = session.pathForChannel(track.outputChannel());
             boolean orphan = field == null;
 
             // Row background — alternating, with a faint tint if orphan.
@@ -156,7 +156,7 @@ public final class TimelineRenderer {
 
         // Kind badge (I / Q / R)
         String badge = null;
-        if (field instanceof ax.xz.mri.model.simulation.FieldDefinition fd) {
+        if (field instanceof ax.xz.mri.model.simulation.DrivePath fd) {
             if (fd.kind() == AmplitudeKind.QUADRATURE) badge = track.outputChannel().subIndex() == 0 ? "I" : "Q";
             else if (fd.kind() == AmplitudeKind.REAL) badge = "R";
         }
@@ -446,7 +446,7 @@ public final class TimelineRenderer {
 
     /** Hardware limit for a channel — the peak of the field amplitude range. */
     public static double channelHardwareMax(SequenceEditSession session, SequenceChannel channel) {
-        var field = session.fieldForChannel(channel);
+        var field = session.pathForChannel(channel);
         if (field != null) {
             double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
             if (m > 0) return m;
@@ -456,7 +456,7 @@ public final class TimelineRenderer {
 
     /** Format an amplitude as a physical value with SI prefix, for axis labels. */
     public static String formatAxisValue(SequenceEditSession session, SequenceChannel channel, double amplitude) {
-        var ef = session.eigenfieldForChannel(channel);
+        var ef = session.eigenpathForChannel(channel);
         double physical = ef != null ? amplitude * ef.defaultMagnitude() : amplitude;
         String units = ef != null ? ef.units() : "";
         return formatWithUnits(physical, units);

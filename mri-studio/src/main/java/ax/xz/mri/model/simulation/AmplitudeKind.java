@@ -1,32 +1,31 @@
 package ax.xz.mri.model.simulation;
 
 /**
- * How a field's amplitude schedule is interpreted.
+ * How a {@link DrivePath}'s amplitude schedule is interpreted.
  *
- * <p>This plus the field's {@code carrierHz} fully determines how the simulator
- * couples the field's amplitude to the rotating-frame B-field integration —
- * there is no separate {@code ControlType} or {@code basebandFrequencyHz}
- * split, and no inferred "B0 slot" rule.
+ * <p>This, together with the path's {@code carrierHz}, fully determines how
+ * the simulator couples the amplitude to the rotating-frame B-field
+ * integration (for transmit paths) or to the observational layer (for gate
+ * paths). There is no inferred "B0 slot" rule — statics are just drive paths
+ * with a fixed amplitude.
  *
- * <p>Relation to pulse-sequence channels:
+ * <p>Pulse-sequence channels per step:
  * <ul>
- *   <li>{@link #STATIC} — 0 channels. Amplitude is fixed at the field's
- *       {@code maxAmplitude}; the pulse sequence has nothing to say.</li>
- *   <li>{@link #REAL} — 1 channel. One real scalar per time step, baseband
- *       at {@code carrierHz}. Typical use: gradients (carrier = 0).</li>
+ *   <li>{@link #STATIC} — 0 channels. Amplitude pinned to
+ *       {@link DrivePath#maxAmplitude()}; no timeline control.</li>
+ *   <li>{@link #REAL} — 1 channel. One real scalar per step, baseband at
+ *       {@code carrierHz}. Typical: gradients (carrier = 0).</li>
  *   <li>{@link #QUADRATURE} — 2 channels (I, Q). Complex baseband at
- *       {@code carrierHz}. Typical use: RF at Larmor.</li>
+ *       {@code carrierHz}. Typical: RF at Larmor.</li>
+ *   <li>{@link #GATE} — 1 channel. A 0/1-valued digital signal. Drives
+ *       switches and acquisition windows; does not contribute to B.</li>
  * </ul>
  */
 public enum AmplitudeKind {
-    /** Constant amplitude at {@code maxAmplitude}. No pulse-sequence channels. */
     STATIC(0),
-
-    /** Real baseband. One pulse-sequence channel. */
     REAL(1),
-
-    /** Complex baseband (I, Q). Two pulse-sequence channels. */
-    QUADRATURE(2);
+    QUADRATURE(2),
+    GATE(1);
 
     private final int channelCount;
 
@@ -34,7 +33,6 @@ public enum AmplitudeKind {
         this.channelCount = channelCount;
     }
 
-    /** Number of pulse-sequence control scalars this kind consumes per step. */
     public int channelCount() {
         return channelCount;
     }

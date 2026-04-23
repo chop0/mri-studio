@@ -54,7 +54,12 @@ public final class SignalTraceComputer {
         var mx = new double[np];
         var my = new double[np];
         var mz = new double[np];
-        for (int p = 0; p < np; p++) mz[p] = 1;
+        for (int p = 0; p < np; p++) {
+            var fp = points.get(p);
+            mx[p] = fp.mx0();
+            my[p] = fp.my0();
+            mz[p] = fp.mz0();
+        }
 
         int nCoils = receiveCoils.size();
         var traces = new ArrayList<List<Point>>(nCoils);
@@ -140,6 +145,15 @@ public final class SignalTraceComputer {
                 double tUs = Math.round(t * 1e7) / 10.0;
                 for (int k = 0; k < nCoils; k++) {
                     var coil = receiveCoils.get(k);
+                    double gate = 1.0;
+                    if (coil.acquisitionGateOffset >= 0) {
+                        double v = controls[coil.acquisitionGateOffset];
+                        gate = v > 0.5 ? 1.0 : 0.0;
+                    }
+                    if (gate == 0.0) {
+                        traces.get(k).add(new Point(tUs, 0, 0));
+                        continue;
+                    }
                     double srAcc = 0, siAcc = 0;
                     for (int p = 0; p < np; p++) {
                         var fp = points.get(p);
@@ -148,8 +162,8 @@ public final class SignalTraceComputer {
                         srAcc += eX * mx[p] + eY * my[p];
                         siAcc += eX * my[p] - eY * mx[p];
                     }
-                    double phasedR = (srAcc * cosPhase[k] - siAcc * sinPhase[k]) * coil.gain;
-                    double phasedI = (srAcc * sinPhase[k] + siAcc * cosPhase[k]) * coil.gain;
+                    double phasedR = (srAcc * cosPhase[k] - siAcc * sinPhase[k]) * coil.gain * gate;
+                    double phasedI = (srAcc * sinPhase[k] + siAcc * cosPhase[k]) * coil.gain * gate;
                     traces.get(k).add(new Point(tUs, phasedR, phasedI));
                 }
             }

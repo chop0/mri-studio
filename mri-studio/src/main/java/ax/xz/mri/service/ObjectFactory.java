@@ -1,8 +1,9 @@
 package ax.xz.mri.service;
 
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.TransmitCoil;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
@@ -10,14 +11,7 @@ import ax.xz.mri.project.ProjectRepository;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Centralised creation logic for project objects.
- *
- * <p>Has no hardcoded knowledge of specific MRI hardware. Hardware-specific
- * field and receive-coil definitions come from
- * {@link ax.xz.mri.model.simulation.SimConfigTemplate} — user-chosen templates
- * backed by starter eigenfields.
- */
+/** Centralised creation logic for project objects. */
 public final class ObjectFactory {
     private ObjectFactory() {}
 
@@ -35,7 +29,8 @@ public final class ObjectFactory {
     public static SimulationConfig buildConfig(
         PhysicsParams p,
         double referenceB0Tesla,
-        List<FieldDefinition> fields,
+        List<TransmitCoil> transmitCoils,
+        List<DrivePath> drivePaths,
         List<ReceiveCoil> receiveCoils
     ) {
         return new SimulationConfig(
@@ -44,7 +39,8 @@ public final class ObjectFactory {
             Math.max(2, p.nZ), Math.max(2, p.nR),
             referenceB0Tesla,
             p.dtSeconds,
-            fields,
+            transmitCoils,
+            drivePaths,
             receiveCoils
         );
     }

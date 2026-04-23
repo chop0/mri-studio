@@ -240,7 +240,7 @@ public final class ClipInspectorSection {
 
         // Amplitude — with physical-peak readout driven by eigenfield metadata
         var track = session.findTrack(clip.trackId());
-        var ef = track != null ? session.eigenfieldForChannel(track.outputChannel()) : null;
+        var ef = track != null ? session.eigenpathForChannel(track.outputChannel()) : null;
         String units = ef != null ? ef.units() : "";
         var amp = nf().range(-1e6, 1e6).step(0.1).scientific().unit(units.isEmpty() ? "" : units);
         amp.setValue(clip.amplitude());
@@ -547,7 +547,7 @@ public final class ClipInspectorSection {
     private boolean isRfTrack(String trackId) {
         var track = session.findTrack(trackId);
         if (track == null) return false;
-        var field = session.fieldForChannel(track.outputChannel());
+        var field = session.pathForChannel(track.outputChannel());
         return field != null && field.kind() == AmplitudeKind.QUADRATURE;
     }
 
@@ -614,8 +614,8 @@ public final class ClipInspectorSection {
     @SuppressWarnings("unused")
     private String channelLabel(SequenceChannel channel) {
         if (channel == null) return "\u2014";
-        var field = session.fieldForChannel(channel);
-        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
+        var field = session.pathForChannel(channel);
+        if (field == null) return channel.drivePathName() + "[" + channel.subIndex() + "]";
         return ax.xz.mri.model.sequence.ClipBaker.defaultTrackName(field, channel.subIndex());
     }
 

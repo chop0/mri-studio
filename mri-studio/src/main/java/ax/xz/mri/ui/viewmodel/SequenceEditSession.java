@@ -7,7 +7,7 @@ import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
@@ -128,22 +128,17 @@ public final class SequenceEditSession {
 
         var config = activeConfig.get();
         ClipSequence clipSeq = document.clipSequence();
-        if (clipSeq != null) {
-            // If the persisted sequence has no tracks (old empty docs, brand-new
-            // sequences), seed defaults from the active config so the editor
-            // isn't empty.
-            var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(config) : clipSeq.tracks();
-            tracks.setAll(loadedTracks);
-            clips.setAll(clipSeq.clips());
-            dt.set(clipSeq.dt());
-            totalDuration.set(clipSeq.totalDuration());
-        } else {
-            var converted = ClipBaker.fromLegacy(document.segments(), document.pulse(), config);
-            tracks.setAll(converted.tracks());
-            clips.setAll(converted.clips());
-            dt.set(converted.dt());
-            totalDuration.set(converted.totalDuration());
+        if (clipSeq == null) {
+            // A sequence created through the wizard always carries a clip
+            // sequence; legacy documents without one start empty with the
+            // config's default tracks.
+            clipSeq = new ClipSequence(10.0, 1000.0, ClipBaker.defaultTracksFor(config), List.of());
         }
+        var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(config) : clipSeq.tracks();
+        tracks.setAll(loadedTracks);
+        clips.setAll(clipSeq.clips());
+        dt.set(clipSeq.dt());
+        totalDuration.set(clipSeq.totalDuration());
 
         selectedClipIds.clear();
         primarySelectedClipId.set(null);
@@ -210,31 +205,37 @@ public final class SequenceEditSession {
         bumpRevision();
     }
 
-    /** Look up the {@link FieldDefinition} backing an output channel, or {@code null}. */
-    public FieldDefinition fieldForChannel(SequenceChannel channel) {
+    /** Look up the {@link DrivePath} backing an output channel, or {@code null}. */
+    public DrivePath pathForChannel(SequenceChannel channel) {
         if (channel == null) return null;
         var config = activeConfig.get();
         if (config == null) return null;
-        for (var f : config.fields()) {
-            if (f.name().equals(channel.fieldName()) && channel.subIndex() < f.kind().channelCount()) {
-                return f;
+        for (var p : config.drivePaths()) {
+            if (p.name().equals(channel.drivePathName()) && channel.subIndex() < p.kind().channelCount()) {
+                return p;
             }
         }
         return null;
     }
 
     /** Resolve the eigenfield document behind an output channel, or {@code null}. */
-    public EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
-        var field = fieldForChannel(channel);
-        if (field == null || field.eigenfieldId() == null) return null;
+    public EigenfieldDocument eigenpathForChannel(SequenceChannel channel) {
+        var path = pathForChannel(channel);
+        if (path == null || path.isGate()) return null;
+        var config = activeConfig.get();
+        if (config == null) return null;
+        var coil = config.transmitCoils().stream()
+            .filter(c -> c.name().equals(path.transmitCoilName()))
+            .findFirst().orElse(null);
+        if (coil == null) return null;
         var repo = repositorySupplier.get();
         if (repo == null) return null;
-        return repo.node(field.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
+        return repo.node(coil.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
     }
 
     /** Display units declared by the eigenfield behind a channel, or empty string. */
     public String unitsForChannel(SequenceChannel channel) {
-        var ef = eigenfieldForChannel(channel);
+        var ef = eigenpathForChannel(channel);
         return ef != null ? ef.units() : "";
     }
 
@@ -243,9 +244,9 @@ public final class SequenceEditSession {
         var cfg = activeConfig.get();
         if (cfg == null) return List.of();
         var out = new ArrayList<SequenceChannel>();
-        for (var field : cfg.fields()) {
-            int count = field.kind().channelCount();
-            for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.ofField(field.name(), sub));
+        for (var path : cfg.drivePaths()) {
+            int count = path.kind().channelCount();
+            for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.ofPath(path.name(), sub));
         }
         return List.copyOf(out);
     }
@@ -329,8 +330,8 @@ public final class SequenceEditSession {
 
     /** Best-effort default name for a new track targeting an output channel. */
     public String defaultTrackNameFor(SequenceChannel channel) {
-        var field = fieldForChannel(channel);
-        if (field == null) return channel.fieldName() + "[" + channel.subIndex() + "]";
+        var field = pathForChannel(channel);
+        if (field == null) return channel.drivePathName() + "[" + channel.subIndex() + "]";
         return ClipBaker.defaultTrackName(field, channel.subIndex());
     }
 
@@ -746,7 +747,7 @@ public final class SequenceEditSession {
      * new clips land on a visible part of the axis.
      */
     public double defaultAmplitudeForChannel(SequenceChannel channel) {
-        var field = fieldForChannel(channel);
+        var field = pathForChannel(channel);
         if (field == null) return 1.0;
         double m = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
         if (m == 0) return 1.0;

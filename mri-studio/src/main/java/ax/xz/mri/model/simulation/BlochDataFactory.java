@@ -2,6 +2,7 @@ package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.model.field.DynamicFieldMap;
 import ax.xz.mri.model.field.FieldMap;
+import ax.xz.mri.model.field.GateMap;
 import ax.xz.mri.model.field.ReceiveCoilMap;
 import ax.xz.mri.model.scenario.BlochData;
 import ax.xz.mri.model.sequence.Segment;
@@ -12,44 +13,47 @@ import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Builds a runtime {@link FieldMap} from a {@link SimulationConfig} and a
  * baked sequence's segments.
  *
- * <p>The simulator runs in a rotating frame at
- * {@code ω_s = γ · referenceB0Tesla}. Each field in the config is classified
- * and contributes as follows:
+ * <p>The simulator runs in a rotating frame at {@code ω_s = γ · referenceB0Tesla}.
+ * Each {@link DrivePath} in the config is classified against its
+ * {@link TransmitCoil}'s eigenfield:
  *
  * <ul>
- *   <li><b>{@code STATIC}</b> fields: eigenfield evaluated at each grid point,
- *       scaled by {@code maxAmplitude}, accumulated into a lab-frame static
- *       Bz map. The rotating-frame static Bz is obtained by subtracting
- *       {@code referenceB0Tesla}.</li>
- *   <li><b>{@code REAL}</b> fields at carrier 0 (typical gradients): kept as
- *       a dynamic field whose Bz-component is sampled on the grid. No
- *       transverse contribution in the rotating frame (DC transverse is
- *       Bloch–Siegert-dropped; see fast handling below).</li>
- *   <li><b>{@code QUADRATURE}</b> fields near resonance (|Δω·dt| ≪ 1): kept
- *       as a dynamic field with full (Ex, Ey, Ez) shape. The simulator
- *       applies the amplitude directly (I, Q).</li>
- *   <li><b>Fast fields</b> ({@code |Δω·dt| > threshold}): their transverse
- *       contribution is folded into {@code staticBz} as a closed-form
- *       Bloch–Siegert correction {@code γ · |B⊥|² / (4·Δω)}. The dynamic-field
- *       entry is kept with transverse components zeroed — only longitudinal
- *       amplitude still flows through to the simulator.</li>
+ *   <li><b>{@link AmplitudeKind#STATIC STATIC}</b> paths: eigenfield
+ *       evaluated once, scaled by {@code maxAmplitude}, accumulated into the
+ *       static Bz map (reference subtracted at the end).</li>
+ *   <li><b>{@link AmplitudeKind#REAL REAL}</b> paths at carrier 0 (gradients):
+ *       kept as dynamic fields; only their Bz component contributes in the
+ *       rotating frame.</li>
+ *   <li><b>{@link AmplitudeKind#QUADRATURE QUADRATURE}</b> paths near
+ *       resonance: kept as dynamic fields with full (Ex, Ey, Ez) shape.</li>
+ *   <li><b>Fast off-resonance fields</b>: transverse part folded into the
+ *       static Bz via Bloch–Siegert; only longitudinal amplitude flows.</li>
+ *   <li><b>{@link AmplitudeKind#GATE GATE}</b> paths: no B-field contribution.
+ *       They carry pulse-step control scalars that the simulator exposes as
+ *       named gate signals — other paths and receive coils can read them.</li>
  * </ul>
  *
- * <p>Strong-off-resonance configurations — where the fast field also has
- * strong driving ({@code γ · |B⊥| · dt} ≳ 1) — are physically pathological
- * and rejected at build time with a descriptive error.
+ * <h3>Grid selection</h3>
+ * Each {@link EigenfieldDocument} declares a {@link FieldSymmetry}. If every
+ * involved eigenfield is {@link FieldSymmetry#AXISYMMETRIC_Z}, the factory
+ * uses the 2D (r, z) grid: field values at azimuth 0 broadcast to every
+ * azimuth by the simulator's rotating-frame invariance. A
+ * {@link FieldSymmetry#CARTESIAN_3D} declaration reserves the right to a
+ * full (x, y, z) grid; while the 3D grid backend is not yet wired up, the
+ * factory rejects configurations that require it with a pointer to the
+ * future work so users can't silently get wrong physics out of an
+ * azimuthally-varying script.
  */
 public final class BlochDataFactory {
-    /** Conservative Nyquist-ish threshold for calling a field "slow". */
     private static final double SLOW_DELTA_OMEGA_DT = 0.1;
-
-    /** Threshold above which a fast field's driving is too strong for Bloch–Siegert. */
     private static final double STRONG_DRIVING_DT = 1.0;
 
     private BlochDataFactory() {}
@@ -63,6 +67,8 @@ public final class BlochDataFactory {
     }
 
     private static FieldMap buildFieldMap(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
+        assertAxisymmetricOrExplain(config, repository);
+
         var field = new FieldMap();
 
         int nR = Math.max(2, config.nR());
@@ -86,7 +92,6 @@ public final class BlochDataFactory {
         field.sliceHalf = config.sliceHalfMm() * 1e-3;
         field.segments = segments;
 
-        // Thermal equilibrium
         field.mx0 = new double[nR][nZ];
         field.my0 = new double[nR][nZ];
         field.mz0 = new double[nR][nZ];
@@ -96,19 +101,25 @@ public final class BlochDataFactory {
             }
         }
 
-        // Work arrays
         double[][] staticBz = new double[nR][nZ];
         var dynamics = new ArrayList<DynamicFieldMap>();
+        var gates = new ArrayList<GateMap>();
         int channelCursor = 0;
         double omegaSim = config.gamma() * config.referenceB0Tesla();
-
-        // Representative dt — the step used when reasoning about Nyquist for
-        // fast-field classification. Prefer the config's dt (authoritative); fall back
-        // to the segment-averaged dt for legacy paths that may pass mismatched data.
         double dt = config.dtSeconds() > 0 ? config.dtSeconds() : representativeDt(segments);
 
-        for (var def : config.fields()) {
-            var eigen = resolveEigenfield(def, repository);
+        Map<String, TransmitCoil> coilsByName = new HashMap<>();
+        for (var c : config.transmitCoils()) coilsByName.put(c.name(), c);
+
+        for (var path : config.drivePaths()) {
+            if (path.isGate()) {
+                gates.add(new GateMap(path.name(), channelCursor));
+                channelCursor += path.channelCount();
+                continue;
+            }
+
+            var coil = coilsByName.get(path.transmitCoilName());
+            var eigen = coil == null ? null : resolveEigenfield(coil.eigenfieldId(), repository);
             EigenfieldScript script = eigen != null ? compile(eigen.script()) : (x, y, z) -> Vec3.ZERO;
             double defaultMagnitude = eigen != null ? eigen.defaultMagnitude() : 1.0;
 
@@ -117,10 +128,6 @@ public final class BlochDataFactory {
             double[][] ez = new double[nR][nZ];
             sampleEigenfield(script, field.rMm, field.zMm, ex, ey, ez);
 
-            // Bake the eigenfield's defaultMagnitude into the sampled vectors so the
-            // downstream math (amplitude × sample) yields the physical field directly
-            // in the eigenfield's declared units. Unit-normalised scripts have
-            // defaultMagnitude = 1 and this is a no-op.
             if (defaultMagnitude != 1.0) {
                 for (int ri = 0; ri < nR; ri++) {
                     for (int zi = 0; zi < nZ; zi++) {
@@ -131,11 +138,6 @@ public final class BlochDataFactory {
                 }
             }
 
-            // The rotating-frame transformation only affects the transverse
-            // component of the eigenfield. Longitudinal components flow through
-            // at whatever rate the amplitude schedule demands, independent of
-            // any carrier offset. So classify fast/slow based on the transverse
-            // magnitude of the eigenfield, not just |Δω·dt|.
             double maxTransverse = 0;
             for (int ri = 0; ri < nR; ri++) {
                 for (int zi = 0; zi < nZ; zi++) {
@@ -146,25 +148,19 @@ public final class BlochDataFactory {
             maxTransverse = Math.sqrt(maxTransverse);
             boolean hasTransverse = maxTransverse > 1e-12;
 
-            double deltaOmega = 2 * Math.PI * def.carrierHz() - omegaSim;
+            double deltaOmega = 2 * Math.PI * path.carrierHz() - omegaSim;
             double absDeltaOmegaDt = Math.abs(deltaOmega) * dt;
 
-            switch (def.kind()) {
+            switch (path.kind()) {
                 case STATIC -> {
-                    // Always-on. Longitudinal part contributes directly to the static
-                    // lab-frame field; reference is subtracted below.
                     for (int ri = 0; ri < nR; ri++) {
                         for (int zi = 0; zi < nZ; zi++) {
-                            staticBz[ri][zi] += def.maxAmplitude() * ez[ri][zi];
+                            staticBz[ri][zi] += path.maxAmplitude() * ez[ri][zi];
                         }
                     }
-                    // Transverse part: would rotate at −ω_s in the rotating frame.
-                    // Only do the Bloch–Siegert roll-up when there IS a transverse
-                    // component to roll up. For purely longitudinal statics (the
-                    // typical B0 coil), this is a no-op.
                     if (hasTransverse && Math.abs(omegaSim) > 1e-9) {
                         double dwStatic = -omegaSim;
-                        double ampStatic = def.maxAmplitude();
+                        double ampStatic = path.maxAmplitude();
                         double amp2 = ampStatic * ampStatic;
                         for (int ri = 0; ri < nR; ri++) {
                             for (int zi = 0; zi < nZ; zi++) {
@@ -175,21 +171,16 @@ public final class BlochDataFactory {
                     }
                 }
                 case REAL, QUADRATURE -> {
-                    // Longitudinal-only (e.g. a gradient) is always slow in the rotating
-                    // frame regardless of carrier — no transverse component to oscillate.
                     boolean slow = !hasTransverse || absDeltaOmegaDt <= SLOW_DELTA_OMEGA_DT;
 
-                    // Strong-driving check applies only to the transverse component:
-                    // γ·|B⊥_max|·dt ≳ 1 means Rodrigues on transverse is untrustworthy.
-                    double maxAmp = Math.max(Math.abs(def.maxAmplitude()), Math.abs(def.minAmplitude()));
+                    double maxAmp = Math.max(Math.abs(path.maxAmplitude()), Math.abs(path.minAmplitude()));
                     double transverseDriving = config.gamma() * maxAmp * maxTransverse * dt;
                     if (!slow && transverseDriving > STRONG_DRIVING_DT) {
                         throw new IllegalStateException(
-                            "Field '" + def.name() + "' has carrier " + def.carrierHz() +
+                            "DrivePath '" + path.name() + "' has carrier " + path.carrierHz() +
                             " Hz with |Δω·dt| = " + absDeltaOmegaDt +
                             " and strong transverse driving γ·|B\u22a5|·dt = " + transverseDriving +
-                            ". This configuration cannot be simulated at the chosen sample rate; either " +
-                            "increase the step rate or change the carrier to be near ω_s/(2π) = " +
+                            ". Either increase the step rate or move the carrier near ω_s/(2π) = " +
                             (omegaSim / (2 * Math.PI)) + " Hz.");
                     }
 
@@ -197,8 +188,6 @@ public final class BlochDataFactory {
                     double[][] effEy = ey;
 
                     if (!slow) {
-                        // Fast-weak regime: fold transverse into Bloch–Siegert.
-                        // Leading correction: δBz = γ · |B⊥|² · (maxAmp)² / (4 · Δω).
                         double amp2 = maxAmp * maxAmp;
                         for (int ri = 0; ri < nR; ri++) {
                             for (int zi = 0; zi < nZ; zi++) {
@@ -210,16 +199,16 @@ public final class BlochDataFactory {
                         effEy = new double[nR][nZ];
                     }
 
-                    int count = def.channelCount();
-                    dynamics.add(new DynamicFieldMap(def.name(), channelCursor, count,
-                        def.carrierHz(), deltaOmega,
+                    int count = path.channelCount();
+                    dynamics.add(new DynamicFieldMap(path.name(), channelCursor, count,
+                        path.carrierHz(), deltaOmega,
                         effEx, effEy, ez));
                     channelCursor += count;
                 }
+                case GATE -> throw new IllegalStateException("Unreachable: gate handled earlier");
             }
         }
 
-        // Subtract the reference to put staticBz in the rotating frame.
         for (int ri = 0; ri < nR; ri++) {
             for (int zi = 0; zi < nZ; zi++) {
                 staticBz[ri][zi] -= config.referenceB0Tesla();
@@ -228,12 +217,20 @@ public final class BlochDataFactory {
 
         field.staticBz = staticBz;
         field.dynamicFields = List.copyOf(dynamics);
+        field.gates = List.copyOf(gates);
         field.receiveCoils = buildReceiveCoilMaps(config, nR, nZ, field.rMm, field.zMm, repository);
         return field;
     }
 
     private static List<ReceiveCoilMap> buildReceiveCoilMaps(
         SimulationConfig config, int nR, int nZ, double[] rMm, double[] zMm, ProjectRepository repository) {
+        var gateLookup = new HashMap<String, Integer>();
+        int cursor = 0;
+        for (var path : config.drivePaths()) {
+            if (path.isGate()) gateLookup.put(path.name(), cursor);
+            cursor += path.channelCount();
+        }
+
         var out = new ArrayList<ReceiveCoilMap>();
         for (var coil : config.receiveCoils()) {
             var eigen = resolveEigenfield(coil.eigenfieldId(), repository);
@@ -253,9 +250,33 @@ public final class BlochDataFactory {
                     }
                 }
             }
-            out.add(new ReceiveCoilMap(coil.name(), coil.gain(), coil.phaseDeg(), ex, ey, ez));
+
+            Integer gateChannel = coil.acquisitionGateName() == null ? null : gateLookup.get(coil.acquisitionGateName());
+            if (coil.acquisitionGateName() != null && gateChannel == null) {
+                throw new IllegalStateException(
+                    "ReceiveCoil '" + coil.name() + "' references unknown acquisition gate '" + coil.acquisitionGateName() + "'");
+            }
+            out.add(new ReceiveCoilMap(coil.name(), coil.gain(), coil.phaseDeg(),
+                gateChannel == null ? -1 : gateChannel, ex, ey, ez));
         }
         return List.copyOf(out);
+    }
+
+    private static void assertAxisymmetricOrExplain(SimulationConfig config, ProjectRepository repository) {
+        if (repository == null) return;
+        for (var coil : config.transmitCoils()) requireAxisymmetric(coil.eigenfieldId(), "transmit coil '" + coil.name() + "'", repository);
+        for (var coil : config.receiveCoils()) requireAxisymmetric(coil.eigenfieldId(), "receive coil '" + coil.name() + "'", repository);
+    }
+
+    private static void requireAxisymmetric(ProjectNodeId id, String ownerLabel, ProjectRepository repository) {
+        var eigen = resolveEigenfield(id, repository);
+        if (eigen == null) return;
+        if (eigen.symmetry() != FieldSymmetry.AXISYMMETRIC_Z) {
+            throw new IllegalStateException(
+                ownerLabel + " uses eigenfield '" + eigen.name() + "' declared with symmetry " +
+                eigen.symmetry() + ", which is not yet supported by the 2D (r, z) grid. " +
+                "Either change the symmetry declaration or wait for the 3D grid backend.");
+        }
     }
 
     private static double representativeDt(List<Segment> segments) {
@@ -267,10 +288,6 @@ public final class BlochDataFactory {
             count++;
         }
         return count == 0 ? 1e-6 : sum / count;
-    }
-
-    private static EigenfieldDocument resolveEigenfield(FieldDefinition def, ProjectRepository repository) {
-        return resolveEigenfield(def.eigenfieldId(), repository);
     }
 
     private static EigenfieldDocument resolveEigenfield(ProjectNodeId id, ProjectRepository repository) {
@@ -307,5 +324,4 @@ public final class BlochDataFactory {
             }
         }
     }
-
 }

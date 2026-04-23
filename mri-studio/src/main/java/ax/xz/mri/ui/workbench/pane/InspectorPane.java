@@ -262,7 +262,7 @@ public final class InspectorPane extends WorkbenchPane {
             content.getChildren().add(infoLine("B\u2080 ref", String.format("%.4f T", cfg.referenceB0Tesla())));
             content.getChildren().add(infoLine("T\u2081", String.format("%.0f ms", cfg.t1Ms())));
             content.getChildren().add(infoLine("T\u2082", String.format("%.0f ms", cfg.t2Ms())));
-            content.getChildren().add(infoLine("Fields", String.valueOf(cfg.fields().size())));
+            content.getChildren().add(infoLine("Fields", String.valueOf(cfg.drivePaths().size())));
             content.getChildren().add(infoLine("Receive coils", String.valueOf(cfg.receiveCoils().size())));
         }
         content.getChildren().add(new Separator());

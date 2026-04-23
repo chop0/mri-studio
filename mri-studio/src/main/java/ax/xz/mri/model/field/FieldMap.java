@@ -43,6 +43,9 @@ public final class FieldMap {
     /** Per-driven-field runtime maps, in pulse-channel order. */
     public List<DynamicFieldMap> dynamicFields;
 
+    /** Named gate signals (no B-field contribution) that other paths and coils can read. */
+    public List<GateMap> gates;
+
     /** Per-receive-coil sensitivity maps. */
     public List<ReceiveCoilMap> receiveCoils;
 

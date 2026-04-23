@@ -1,7 +1,7 @@
 package ax.xz.mri.model.sequence;
 
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.ui.wizard.WizardStep;
 
@@ -17,11 +17,11 @@ import java.util.Optional;
  * on the sequence document. Users are free to modify or discard any of them.
  *
  * <h3>CPMG and CP templates</h3>
- * <p>Both templates need a {@link AmplitudeKind#QUADRATURE QUADRATURE} field
- * in the config to place RF pulses on; if the config has no RF field the
+ * <p>Both templates need a {@link AmplitudeKind#QUADRATURE QUADRATURE} drive
+ * path in the config to place RF pulses on; if the config has no RF path the
  * starter emits the default tracks with no clips. The 90 degree pulse
  * duration is computed from the config's gyromagnetic ratio and the RF
- * field's {@link FieldDefinition#maxAmplitude() maxAmplitude}.
+ * path's {@link DrivePath#maxAmplitude() maxAmplitude}.
  */
 public final class SequenceStarterLibrary {
     private SequenceStarterLibrary() {}
@@ -130,18 +130,18 @@ public final class SequenceStarterLibrary {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
 
-        var rfField = firstQuadratureField(config);
-        if (rfField == null) {
+        var rfPath = firstQuadraturePath(config);
+        if (rfPath == null) {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
 
-        String iTrackId = trackIdFor(tracks, rfField.name(), 0);
-        String qTrackId = trackIdFor(tracks, rfField.name(), 1);
+        String iTrackId = trackIdFor(tracks, rfPath.name(), 0);
+        String qTrackId = trackIdFor(tracks, rfPath.name(), 1);
         if (iTrackId == null || qTrackId == null) {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
 
-        double b1Max = Math.abs(rfField.maxAmplitude());
+        double b1Max = Math.abs(rfPath.maxAmplitude());
         double gamma = Math.abs(config.gamma());
         double t90 = computeT90Micros(gamma, b1Max);
         double t180 = 2 * t90;
@@ -182,17 +182,17 @@ public final class SequenceStarterLibrary {
         return target;
     }
 
-    private static FieldDefinition firstQuadratureField(SimulationConfig config) {
-        for (var f : config.fields()) {
-            if (f.kind() == AmplitudeKind.QUADRATURE) return f;
+    private static DrivePath firstQuadraturePath(SimulationConfig config) {
+        for (var p : config.drivePaths()) {
+            if (p.kind() == AmplitudeKind.QUADRATURE) return p;
         }
         return null;
     }
 
-    private static String trackIdFor(List<Track> tracks, String fieldName, int subIndex) {
+    private static String trackIdFor(List<Track> tracks, String drivePathName, int subIndex) {
         for (var t : tracks) {
             var ch = t.outputChannel();
-            if (fieldName.equals(ch.fieldName()) && ch.subIndex() == subIndex) return t.id();
+            if (drivePathName.equals(ch.drivePathName()) && ch.subIndex() == subIndex) return t.id();
         }
         return null;
     }

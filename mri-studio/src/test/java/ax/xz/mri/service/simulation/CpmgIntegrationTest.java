@@ -5,7 +5,7 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.BlochDataFactory;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -61,18 +61,18 @@ class CpmgIntegrationTest {
         var segments = new ArrayList<Segment>();
         var pulse = new ArrayList<PulseSegment>();
 
-        // Channel layout after the template rewrite: [rf_I, rf_Q, gx, gz].
+        // Channel layout after the M2/M3 rewrite: [rf_I, rf_Q, gx, gz, rx_gate].
         segments.add(new Segment(DT, 0, n90));
-        pulse.add(filled(n90, new double[]{B1_MAX, 0, 0, 0}, 1.0));
+        pulse.add(filled(n90, new double[]{B1_MAX, 0, 0, 0, 0}, 1.0));
 
         segments.add(new Segment(DT, nTau, 0));
-        pulse.add(filled(nTau, new double[]{0, 0, 0, 0}, 0.0));
+        pulse.add(filled(nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
 
         for (int e = 0; e < nEchoes; e++) {
             segments.add(new Segment(DT, 0, n180));
-            pulse.add(filled(n180, new double[]{0, B1_MAX, 0, 0}, 1.0));
+            pulse.add(filled(n180, new double[]{0, B1_MAX, 0, 0, 0}, 1.0));
             segments.add(new Segment(DT, 2 * nTau, 0));
-            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0}, 0.0));
+            pulse.add(filled(2 * nTau, new double[]{0, 0, 0, 0, 1}, 0.0));
         }
         return new Train(segments, pulse);
     }
@@ -103,45 +103,51 @@ class CpmgIntegrationTest {
      */
     private static SimulationConfig configWithZAxisOffResonance(
             ProjectRepository repo, SimulationConfig base, String name, double dBzPerMetre) {
-        // Find the B0 field and replace its eigenfield with one that has a linear ramp.
-        var b0Field = base.fields().stream().filter(f -> f.kind() == AmplitudeKind.STATIC).findFirst().orElseThrow();
-        var b0Amplitude = b0Field.maxAmplitude();
+        // Find the B0 path + its transmit coil; swap the coil's eigenfield for
+        // one with a linear z-ramp.
+        var b0Path = base.drivePaths().stream().filter(f -> f.kind() == AmplitudeKind.STATIC).findFirst().orElseThrow();
+        var b0Amplitude = b0Path.maxAmplitude();
         double normalisedSlope = dBzPerMetre / b0Amplitude;
         String script = String.format("return Vec3.of(0, 0, 1 + %s * z);", normalisedSlope);
         var eigen = new EigenfieldDocument(
             new ProjectNodeId("ef-test-" + name), name, "test off-resonance", script, "T", 1.0);
         repo.addEigenfield(eigen);
 
-        var newFields = new ArrayList<FieldDefinition>(base.fields());
-        int idx = newFields.indexOf(b0Field);
-        newFields.set(idx, b0Field.withEigenfieldId(eigen.id()));
-        return base.withFields(newFields);
+        var newCoils = new ArrayList<ax.xz.mri.model.simulation.TransmitCoil>(base.transmitCoils());
+        int coilIdx = -1;
+        for (int i = 0; i < newCoils.size(); i++) {
+            if (newCoils.get(i).name().equals(b0Path.transmitCoilName())) { coilIdx = i; break; }
+        }
+        if (coilIdx < 0) throw new IllegalStateException("B0 path references unknown coil");
+        newCoils.set(coilIdx, newCoils.get(coilIdx).withEigenfieldId(eigen.id()));
+        return base.withTransmitCoils(newCoils);
     }
 
     @Test
-    void fullFieldDefinitionAssertionsForLowFieldTemplate() {
+    void fullDrivePathAssertionsForLowFieldTemplate() {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-check",
             SimConfigTemplate.LOW_FIELD_MRI,
             ObjectFactory.PhysicsParams.DEFAULTS);
         var config = doc.config();
 
-        FieldDefinition b0 = config.fields().stream().filter(f -> f.name().equals("B0")).findFirst().orElseThrow();
-        FieldDefinition rf = config.fields().stream().filter(f -> f.name().equals("RF")).findFirst().orElseThrow();
-        FieldDefinition gx = config.fields().stream().filter(f -> f.name().equals("Gradient X")).findFirst().orElseThrow();
-        FieldDefinition gz = config.fields().stream().filter(f -> f.name().equals("Gradient Z")).findFirst().orElseThrow();
+        DrivePath b0 = config.drivePaths().stream().filter(f -> f.name().equals("B0")).findFirst().orElseThrow();
+        DrivePath rf = config.drivePaths().stream().filter(f -> f.name().equals("RF")).findFirst().orElseThrow();
+        DrivePath gx = config.drivePaths().stream().filter(f -> f.name().equals("Gradient X")).findFirst().orElseThrow();
+        DrivePath gz = config.drivePaths().stream().filter(f -> f.name().equals("Gradient Z")).findFirst().orElseThrow();
 
         assertEquals(AmplitudeKind.STATIC, b0.kind());
         assertEquals(AmplitudeKind.QUADRATURE, rf.kind());
         assertEquals(AmplitudeKind.REAL, gx.kind());
         assertEquals(AmplitudeKind.REAL, gz.kind());
 
-        // Channel layout must match legacy [rf_I, rf_Q, gx, gz].
-        var dynamicFields = config.fields().stream()
+        // Channel layout: [rf_I, rf_Q, gx, gz, rx_gate].
+        var dynamicPaths = config.drivePaths().stream()
             .filter(f -> f.kind() != AmplitudeKind.STATIC).toList();
-        assertEquals("RF", dynamicFields.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
-        assertEquals("Gradient X", dynamicFields.get(1).name());
-        assertEquals("Gradient Z", dynamicFields.get(2).name());
+        assertEquals("RF", dynamicPaths.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
+        assertEquals("Gradient X", dynamicPaths.get(1).name());
+        assertEquals("Gradient Z", dynamicPaths.get(2).name());
+        assertEquals("RX Gate", dynamicPaths.get(3).name());
 
         double expectedLarmor = GAMMA * 0.0154 / (2 * Math.PI);
         assertEquals(expectedLarmor, rf.carrierHz(), 1.0);

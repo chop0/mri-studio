@@ -35,11 +35,12 @@ public final class ChannelPalette {
     };
 
     private static final Color UNKNOWN = Color.web("#5c6571"); // neutral slate
+    private static final Color GATE = Color.web("#d97706"); // amber — gate / T/R switch
 
     /** Colour for a channel, given the active session. */
     public static Color colourFor(SequenceEditSession session, SequenceChannel channel) {
         if (channel == null) return UNKNOWN;
-        var field = session.fieldForChannel(channel);
+        var field = session.pathForChannel(channel);
         if (field == null) return UNKNOWN;
         return colourFor(field.kind(), field.name());
     }
@@ -51,6 +52,7 @@ public final class ChannelPalette {
             case QUADRATURE -> pick(QUADRATURE_FAMILY, fieldName);
             case REAL -> pick(REAL_FAMILY, fieldName);
             case STATIC -> pick(REAL_FAMILY, fieldName); // unreachable in practice (no channels)
+            case GATE -> GATE;
         };
     }
 

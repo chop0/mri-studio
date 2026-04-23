@@ -101,7 +101,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 				new Label("B\u2080: " + String.format("%.4f T", cfg.referenceB0Tesla())),
 				new Label("T\u2081: " + String.format("%.0f ms", cfg.t1Ms())),
 				new Label("T\u2082: " + String.format("%.0f ms", cfg.t2Ms())),
-				new Label(cfg.fields().size() + " fields")
+				new Label(cfg.drivePaths().size() + " fields")
 			);
 			var activeConfigId = editSession.activeSimConfigId.get();
 			if (activeConfigId != null) {

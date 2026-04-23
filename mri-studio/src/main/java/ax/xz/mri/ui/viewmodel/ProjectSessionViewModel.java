@@ -241,9 +241,11 @@ public final class ProjectSessionViewModel {
 
     public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, ObjectFactory.PhysicsParams params) {
         var repo = repository.get();
-        var fields = template.createFields(repo);
+        var transmitCoils = template.createTransmitCoils(repo);
+        var drivePaths = template.createDrivePaths(repo);
         var receiveCoils = template.createReceiveCoils(repo);
-        var config = ObjectFactory.buildConfig(params, template.referenceB0Tesla(), fields, receiveCoils);
+        var config = ObjectFactory.buildConfig(params, template.referenceB0Tesla(),
+            transmitCoils, drivePaths, receiveCoils);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         repo.addSimConfig(doc);

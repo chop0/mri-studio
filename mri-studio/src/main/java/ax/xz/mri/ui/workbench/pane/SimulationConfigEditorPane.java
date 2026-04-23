@@ -1,9 +1,10 @@
 package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.FieldDefinition;
+import ax.xz.mri.model.simulation.DrivePath;
 import ax.xz.mri.model.simulation.ReceiveCoil;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.TransmitCoil;
 import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
 import ax.xz.mri.model.simulation.dsl.ReceiveCoilStarterLibrary;
 import ax.xz.mri.service.ObjectFactory;
@@ -102,8 +103,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private final Tab receiveCoilsTab = new Tab("Receive coils");
 
     // --- Fields tab state ---
-    private TableView<FieldDefinition> fieldsTable;
-    private final ObjectProperty<FieldDefinition> selectedField = new SimpleObjectProperty<>();
+    private TableView<DrivePath> fieldsTable;
+    private final ObjectProperty<DrivePath> selectedField = new SimpleObjectProperty<>();
     private VBox fieldsDetail;
 
     // --- Receive coils tab state ---
@@ -406,7 +407,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
                                         stringBinding(store.dtSeconds, SimulationConfigEditorPane::dtUnit), false),
             bigMetric("CHANNELS",       Bindings.convert(store.totalChannels), staticText(""), false),
             bigMetric("GRID",           Bindings.createStringBinding(() -> store.nZ.get() + "\u00D7" + store.nR.get(), store.nZ, store.nR), staticText(""), false),
-            bigMetric("FIELDS",         Bindings.createStringBinding(() -> Integer.toString(store.fields.size()), store.fields), staticText(""), false),
+            bigMetric("FIELDS",         Bindings.createStringBinding(() -> Integer.toString(store.drivePaths.size()), store.drivePaths), staticText(""), false),
             bigMetric("RX COILS",       Bindings.createStringBinding(() -> Integer.toString(store.receiveCoils.size()), store.receiveCoils), staticText(""), true)
         );
         box.getChildren().add(metrics);
@@ -465,7 +466,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         store.gamma.addListener(rebuild);
         store.nZ.addListener(rebuild);
         store.nR.addListener(rebuild);
-        store.fields.addListener((javafx.collections.ListChangeListener<FieldDefinition>) ch -> rebuildHealthChecks(col));
+        store.drivePaths.addListener((javafx.collections.ListChangeListener<DrivePath>) ch -> rebuildHealthChecks(col));
         store.receiveCoils.addListener((javafx.collections.ListChangeListener<ReceiveCoil>) ch -> rebuildHealthChecks(col));
         rebuildHealthChecks(col);
         return col;
@@ -489,7 +490,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         }
 
         double omegaSim = store.gamma.get() * store.referenceB0Tesla.get();
-        for (var f : store.fields) {
+        for (var f : store.drivePaths) {
             if (f.kind() == AmplitudeKind.QUADRATURE && f.carrierHz() > 0) {
                 double dOmegaDt = Math.abs(2 * Math.PI * f.carrierHz() - omegaSim) * dt;
                 if (dOmegaDt > 1.0) {
@@ -504,7 +505,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             }
         }
 
-        if (store.fields.isEmpty()) {
+        if (store.drivePaths.isEmpty()) {
             col.getChildren().add(healthRow("warn", "No field sources defined",
                 "Add at least one static or driven field before simulating."));
         }
@@ -839,52 +840,53 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             rebuildFieldsDetail();
         });
         // External fields list changes (undo, etc.) — restore selection by index when possible.
-        store.fields.addListener((javafx.collections.ListChangeListener<FieldDefinition>) ch -> {
+        store.drivePaths.addListener((javafx.collections.ListChangeListener<DrivePath>) ch -> {
             // TableView is already bound to the observable list via items.
-            if (!store.fields.isEmpty() && fieldsTable.getSelectionModel().getSelectedItem() == null) {
+            if (!store.drivePaths.isEmpty() && fieldsTable.getSelectionModel().getSelectedItem() == null) {
                 fieldsTable.getSelectionModel().selectFirst();
             }
             rebuildFieldsDetail();
         });
 
-        if (!store.fields.isEmpty()) fieldsTable.getSelectionModel().selectFirst();
+        if (!store.drivePaths.isEmpty()) fieldsTable.getSelectionModel().selectFirst();
         else rebuildFieldsDetail();
 
         box.getChildren().addAll(toolbar, fieldsTable, new Separator(), fieldsDetail);
         return box;
     }
 
-    private TableView<FieldDefinition> buildFieldsTable() {
-        var table = new TableView<FieldDefinition>(store.fields);
+    private TableView<DrivePath> buildFieldsTable() {
+        var table = new TableView<DrivePath>(store.drivePaths);
         table.setPlaceholder(emptyState("No fields yet", "Add a static B\u2080, a gradient, or an RF coil."));
         table.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
 
-        var nameCol = new TableColumn<FieldDefinition, String>("Name");
+        var nameCol = new TableColumn<DrivePath, String>("Name");
         nameCol.setCellValueFactory(cd -> new SimpleStringProperty(cd.getValue().name()));
-        var kindCol = new TableColumn<FieldDefinition, String>("Kind");
+        var kindCol = new TableColumn<DrivePath, String>("Kind");
         kindCol.setCellValueFactory(cd -> new SimpleStringProperty(kindLabel(cd.getValue().kind())));
-        var eigenCol = new TableColumn<FieldDefinition, String>("Eigenfield");
-        eigenCol.setCellValueFactory(cd -> new SimpleStringProperty(eigenfieldNameFor(cd.getValue().eigenfieldId())));
-        var minCol = new TableColumn<FieldDefinition, String>("Min amp");
+        var coilCol = new TableColumn<DrivePath, String>("Transmit coil");
+        coilCol.setCellValueFactory(cd -> new SimpleStringProperty(
+            cd.getValue().isGate() ? "\u2014 (gate)" : (cd.getValue().transmitCoilName() == null ? "?" : cd.getValue().transmitCoilName())));
+        var minCol = new TableColumn<DrivePath, String>("Min amp");
         minCol.setCellValueFactory(cd -> new SimpleStringProperty(
             formatAmpWithUnits(cd.getValue().minAmplitude(), eigenfieldFor(cd.getValue()))));
-        var maxCol = new TableColumn<FieldDefinition, String>("Max amp");
+        var maxCol = new TableColumn<DrivePath, String>("Max amp");
         maxCol.setCellValueFactory(cd -> new SimpleStringProperty(
             formatAmpWithUnits(cd.getValue().maxAmplitude(), eigenfieldFor(cd.getValue()))));
-        var carrierCol = new TableColumn<FieldDefinition, String>("Carrier");
+        var carrierCol = new TableColumn<DrivePath, String>("Carrier");
         carrierCol.setCellValueFactory(cd -> new SimpleStringProperty(
             cd.getValue().kind() == AmplitudeKind.QUADRATURE ? formatFrequency(cd.getValue().carrierHz()) : "\u2014"));
-        var chanCol = new TableColumn<FieldDefinition, String>("Ch");
+        var chanCol = new TableColumn<DrivePath, String>("Ch");
         chanCol.setCellValueFactory(cd -> new SimpleStringProperty(Integer.toString(cd.getValue().channelCount())));
 
         nameCol.setPrefWidth(140);
         kindCol.setPrefWidth(90);
-        eigenCol.setPrefWidth(150);
+        coilCol.setPrefWidth(150);
         minCol.setPrefWidth(90);
         maxCol.setPrefWidth(90);
         carrierCol.setPrefWidth(100);
         chanCol.setPrefWidth(40);
-        table.getColumns().addAll(nameCol, kindCol, eigenCol, minCol, maxCol, carrierCol, chanCol);
+        table.getColumns().addAll(nameCol, kindCol, coilCol, minCol, maxCol, carrierCol, chanCol);
         return table;
     }
 
@@ -893,6 +895,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             case STATIC -> "Static";
             case REAL -> "Real";
             case QUADRATURE -> "Quadrature";
+            case GATE -> "Gate";
         };
     }
 
@@ -901,7 +904,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         fieldsDetail.getChildren().clear();
 
         var field = selectedField.get();
-        int index = field == null ? -1 : store.fields.indexOf(field);
+        int index = field == null ? -1 : store.drivePaths.indexOf(field);
         if (field == null || index < 0) {
             var hint = new Label("Select a field to edit its properties.");
             hint.getStyleClass().add("cfg-empty-subtitle");
@@ -915,9 +918,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         var nameField = new TextField(field.name());
         nameField.setPrefColumnCount(18);
         Runnable commitName = () -> {
-            int idx = store.fields.indexOf(field);
+            int idx = store.drivePaths.indexOf(field);
             if (idx < 0) return;
-            var current = store.fields.get(idx);
+            var current = store.drivePaths.get(idx);
             if (!current.name().equals(nameField.getText()))
                 mutateField(idx, current.withName(nameField.getText()));
         };
@@ -932,9 +935,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         kindControl.setValue(field.kind());
         kindControl.valueProperty().addListener((obs, o, n) -> {
             if (n == null) return;
-            int idx = store.fields.indexOf(field);
+            int idx = store.drivePaths.indexOf(field);
             if (idx < 0) return;
-            var current = store.fields.get(idx);
+            var current = store.drivePaths.get(idx);
             if (current.kind() != n) mutateField(idx, current.withKind(n));
         });
         var kindRow = rowControl("Kind", kindControl, null);
@@ -943,8 +946,10 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         kindRow.getChildren().add(channelsLabel);
         fieldsDetail.getChildren().add(kindRow);
 
-        // Eigenfield selector
-        fieldsDetail.getChildren().add(buildEigenfieldRow(field));
+        // Transmit coil selector (drives which eigenfield backs this path)
+        if (!field.isGate()) {
+            fieldsDetail.getChildren().add(buildTransmitCoilRow(field));
+        }
 
         // Amplitude bounds — the unit/peak label is driven by the eigenfield's
         // defaultMagnitude + units, so the user sees "= 15.4 mT" next to "0.0154".
@@ -959,9 +964,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         minPeak.getStyleClass().add("cfg-row-hint");
         minPeak.setText(peakLabel(field.minAmplitude(), ampScale, ampUnits));
         minNum.valueProperty().addListener((obs, o, n) -> {
-            int idx = store.fields.indexOf(field);
+            int idx = store.drivePaths.indexOf(field);
             if (idx < 0) return;
-            var current = store.fields.get(idx);
+            var current = store.drivePaths.get(idx);
             if (current.minAmplitude() != n.doubleValue())
                 mutateField(idx, current.withMinAmplitude(n.doubleValue()));
             minPeak.setText(peakLabel(n.doubleValue(), ampScale, ampUnits));
@@ -976,9 +981,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         maxPeak.getStyleClass().add("cfg-row-hint");
         maxPeak.setText(peakLabel(field.maxAmplitude(), ampScale, ampUnits));
         maxNum.valueProperty().addListener((obs, o, n) -> {
-            int idx = store.fields.indexOf(field);
+            int idx = store.drivePaths.indexOf(field);
             if (idx < 0) return;
-            var current = store.fields.get(idx);
+            var current = store.drivePaths.get(idx);
             if (current.maxAmplitude() != n.doubleValue())
                 mutateField(idx, current.withMaxAmplitude(n.doubleValue()));
             maxPeak.setText(peakLabel(n.doubleValue(), ampScale, ampUnits));
@@ -1000,9 +1005,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             var carrier = numberField(0, 1e10, 1000);
             carrier.setValue(field.carrierHz());
             carrier.valueProperty().addListener((obs, o, n) -> {
-                int idx = store.fields.indexOf(field);
+                int idx = store.drivePaths.indexOf(field);
                 if (idx < 0) return;
-                var current = store.fields.get(idx);
+                var current = store.drivePaths.get(idx);
                 if (current.carrierHz() != n.doubleValue())
                     mutateField(idx, current.withCarrierHz(n.doubleValue()));
             });
@@ -1037,47 +1042,29 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         }
     }
 
-    private Node buildEigenfieldRow(FieldDefinition field) {
+    private Node buildTransmitCoilRow(DrivePath path) {
         var combo = new ComboBox<String>();
         combo.setMinWidth(180);
-        combo.setItems(eigenfieldNames);
-        combo.setValue(eigenfieldNameFor(field.eigenfieldId()));
+        combo.setItems(javafx.collections.FXCollections.observableArrayList(
+            store.transmitCoils.stream().map(TransmitCoil::name).toList()));
+        combo.setValue(path.transmitCoilName());
         combo.setOnAction(e -> {
-            int idx = store.fields.indexOf(field);
-            if (idx < 0) return;
-            var selected = eigenfieldIdByName.get(combo.getValue());
-            if (selected != null) mutateField(idx, store.fields.get(idx).withEigenfieldId(selected));
+            int idx = store.drivePaths.indexOf(path);
+            if (idx < 0 || combo.getValue() == null) return;
+            mutateField(idx, store.drivePaths.get(idx).withTransmitCoilName(combo.getValue()));
         });
-
-        var openButton = new Button("Open");
-        openButton.getStyleClass().addAll("button", "ghost");
-        openButton.setDisable(field.eigenfieldId() == null);
-        openButton.setOnAction(e -> {
-            if (field.eigenfieldId() != null)
-                paneContext.session().project.openNode(field.eigenfieldId());
-        });
-
-        var newButton = new Button("New…");
-        newButton.getStyleClass().addAll("button", "ghost");
-        newButton.setOnAction(e -> {
-            var stage = topStage();
-            ax.xz.mri.ui.wizard.NewEigenfieldWizard.show(stage, paneContext.session().project)
-                .ifPresent(eigen -> {
-                    int idx = store.fields.indexOf(field);
-                    if (idx >= 0) mutateField(idx, store.fields.get(idx).withEigenfieldId(eigen.id()));
-                });
-        });
-
-        var comboRow = new HBox(6, combo, openButton, newButton);
-        comboRow.setAlignment(Pos.CENTER_LEFT);
-        return rowControl("Eigenfield", comboRow, null);
+        return rowControl("Transmit coil", combo, null);
     }
 
-    /** Look up the eigenfield document for a given field, or null. */
-    private ax.xz.mri.project.EigenfieldDocument eigenfieldFor(FieldDefinition field) {
-        if (field == null || field.eigenfieldId() == null) return null;
+    /** Eigenfield behind the drive path's transmit coil, or {@code null}. */
+    private ax.xz.mri.project.EigenfieldDocument eigenfieldFor(DrivePath path) {
+        if (path == null || path.isGate() || path.transmitCoilName() == null) return null;
+        var coil = store.transmitCoils.stream()
+            .filter(c -> c.name().equals(path.transmitCoilName()))
+            .findFirst().orElse(null);
+        if (coil == null || coil.eigenfieldId() == null) return null;
         var repo = paneContext.session().project.repository.get();
-        return repo.node(field.eigenfieldId()) instanceof ax.xz.mri.project.EigenfieldDocument ef ? ef : null;
+        return repo.node(coil.eigenfieldId()) instanceof ax.xz.mri.project.EigenfieldDocument ef ? ef : null;
     }
 
     /** "= 15.4 mT" — amplitude × eigenfield.defaultMagnitude, with auto SI prefix. */
@@ -1143,10 +1130,10 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     // ================================================================
 
     /** Replace element at {@code index} via {@link ConfigStore}. */
-    private void mutateField(int index, FieldDefinition updated) {
-        if (index < 0 || index >= store.fields.size()) return;
-        if (store.fields.get(index).equals(updated)) return;
-        store.fields.set(index, updated);
+    private void mutateField(int index, DrivePath updated) {
+        if (index < 0 || index >= store.drivePaths.size()) return;
+        if (store.drivePaths.get(index).equals(updated)) return;
+        store.drivePaths.set(index, updated);
         // Re-select and refresh the detail row so it reflects the new identity.
         fieldsTable.getSelectionModel().select(index);
         selectedField.set(updated);
@@ -1154,10 +1141,10 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private void removeField(int index) {
-        if (index < 0 || index >= store.fields.size()) return;
-        store.fields.remove(index);
-        if (!store.fields.isEmpty()) {
-            int next = Math.min(index, store.fields.size() - 1);
+        if (index < 0 || index >= store.drivePaths.size()) return;
+        store.drivePaths.remove(index);
+        if (!store.drivePaths.isEmpty()) {
+            int next = Math.min(index, store.drivePaths.size() - 1);
             fieldsTable.getSelectionModel().select(next);
         }
     }
@@ -1175,9 +1162,19 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private void appendField(ProjectNodeId eigenfieldId) {
-        store.fields.add(new FieldDefinition("New Field", eigenfieldId, AmplitudeKind.REAL, 0, -1, 1));
+        String coilName = uniqueName("New Coil", store.transmitCoils.stream().map(TransmitCoil::name).toList());
+        store.transmitCoils.add(new TransmitCoil(coilName, eigenfieldId, 0.0));
+        String pathName = uniqueName("New Drive", store.drivePaths.stream().map(DrivePath::name).toList());
+        store.drivePaths.add(new DrivePath(pathName, coilName, AmplitudeKind.REAL, 0, -1, 1, null));
         paneContext.session().project.explorer.refresh();
-        fieldsTable.getSelectionModel().select(store.fields.size() - 1);
+        fieldsTable.getSelectionModel().select(store.drivePaths.size() - 1);
+    }
+
+    private static String uniqueName(String base, List<String> existing) {
+        if (!existing.contains(base)) return base;
+        int i = 2;
+        while (existing.contains(base + " " + i)) i++;
+        return base + " " + i;
     }
 
     // ================================================================

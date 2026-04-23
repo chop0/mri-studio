@@ -89,8 +89,8 @@ public final class NewSequenceWizard {
             cfg -> cfg.config() == null ? "" :
                 String.format("B0 %.3f T, %d field%s",
                     cfg.config().referenceB0Tesla(),
-                    cfg.config().fields().size(),
-                    cfg.config().fields().size() == 1 ? "" : "s"));
+                    cfg.config().drivePaths().size(),
+                    cfg.config().drivePaths().size() == 1 ? "" : "s"));
 
         return WizardDialog.<SequenceDocument>builder("New Sequence")
             .step(starterStep)

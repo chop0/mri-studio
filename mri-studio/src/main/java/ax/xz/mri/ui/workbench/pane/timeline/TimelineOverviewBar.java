@@ -146,18 +146,18 @@ public final class TimelineOverviewBar extends ResizableCanvas {
     private void paintCompressedWaveforms(GraphicsContext g, AxisScrubBar.Bounds bounds, double domain) {
         int pixelCount = (int) Math.max(1, Math.min(bounds.width(), 900));
         var config = session.activeConfig.get();
-        if (config == null || config.fields().isEmpty()) return;
+        if (config == null || config.drivePaths().isEmpty()) return;
 
         // Build channel-slot list matching the config's lane order
         var slots = new ArrayList<SequenceChannel>();
         var maxes = new ArrayList<Double>();
         var colours = new ArrayList<Color>();
-        for (var field : config.fields()) {
+        for (var field : config.drivePaths()) {
             int count = field.kind().channelCount();
             double fMax = Math.max(Math.abs(field.minAmplitude()), Math.abs(field.maxAmplitude()));
             if (fMax == 0) fMax = 1;
             for (int sub = 0; sub < count; sub++) {
-                slots.add(SequenceChannel.ofField(field.name(), sub));
+                slots.add(SequenceChannel.ofPath(field.name(), sub));
                 maxes.add(fMax);
                 colours.add(ChannelPalette.colourFor(field.kind(), field.name()));
             }
