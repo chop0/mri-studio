@@ -35,7 +35,9 @@ class CircuitComponentWithIdTest {
             new CircuitComponent.ShuntCapacitor(OLD, "cshunt", 3.3e-9),
             new CircuitComponent.ShuntInductor(OLD, "lshunt", 4.4e-6),
             new CircuitComponent.IdealTransformer(OLD, "xfmr", 2.5),
-            new CircuitComponent.Mixer(OLD, "dc", 655_000)
+            new CircuitComponent.Mixer(OLD, "dc", 655_000),
+            new CircuitComponent.VoltageMetadata(OLD, "RF active", "RF",
+                CircuitComponent.VoltageMetadata.Mode.ACTIVE)
         );
 
         for (var original : originals) {

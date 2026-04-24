@@ -127,9 +127,6 @@ public final class CircuitCompiler {
         private final List<Integer> coilBranch = new ArrayList<>();
         private final List<Integer> probeNode = new ArrayList<>();
         private final Map<ComponentId, Integer> sourceIndexById = new HashMap<>();
-        // Maps source-out node -> source index, populated as registerSource runs.
-        // VoltageMetadata stamping reads this to resolve its "source" input.
-        private final Map<Integer, Integer> sourceIndexByOutNode = new HashMap<>();
 
         private CircuitComponent owner;
 
@@ -174,32 +171,10 @@ public final class CircuitCompiler {
                 if (!(other instanceof CircuitComponent.VoltageMetadata meta)) continue;
                 Integer metaOutNode = nodeOf.get(new ComponentTerminal(meta.id(), "out"));
                 if (metaOutNode == null || metaOutNode != ctlPort.index()) continue;
-                Integer sourceNode = nodeOf.get(new ComponentTerminal(meta.id(), "source"));
-                if (sourceNode == null) continue;
-                var srcIdx = sourceIndexForOutNode(sourceNode);
+                var srcIdx = sourceIndexForName(meta.sourceName());
                 if (srcIdx != null) return new CtlBinding.FromSourceActive(srcIdx);
             }
             return new CtlBinding.AlwaysOpen();
-        }
-
-        /**
-         * Look up which source has its {@code out} port on {@code node}. Used
-         * by VoltageMetadata at stamp time and by resolveCtl. Returns null if
-         * no source is wired to that node yet — the caller handles that by
-         * stamping an AlwaysOpen / zero binding.
-         */
-        private Integer sourceIndexForOutNode(int node) {
-            // Check already-registered sources first (fast path).
-            var registered = sourceIndexByOutNode.get(node);
-            if (registered != null) return registered;
-            // Fall back to scanning the document — required when Metadata
-            // stamps before the referenced VoltageSource does.
-            for (var c : circuit.components()) {
-                if (!(c instanceof CircuitComponent.VoltageSource src)) continue;
-                Integer outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
-                if (outNode != null && outNode == node) return predictSourceIndex(src.id());
-            }
-            return null;
         }
 
         private int predictSourceIndex(ComponentId id) {
@@ -270,20 +245,30 @@ public final class CircuitCompiler {
             channelCursor += kind.channelCount();
             sourceOutBranch.add(addBranch(outPort.index(), Node.GROUND.index(),
                 VBranchKind.SOURCE_OUT, index, 0, 0));
-            if (outPort.index() >= 0) sourceIndexByOutNode.put(outPort.index(), index);
         }
 
         @Override
-        public void stampVoltageMetadata(Node sourceInput, Node outPort,
+        public void stampVoltageMetadata(String sourceName, Node outPort,
                                          CircuitComponent.VoltageMetadata.Mode mode) {
             if (outPort.isGround()) return;
-            Integer srcIdx = sourceInput.isGround() ? null : sourceIndexForOutNode(sourceInput.index());
+            Integer srcIdx = sourceIndexForName(sourceName);
             int m = metadataSourceIndex.size();
             metadataSourceIndex.add(srcIdx == null ? -1 : srcIdx);
             metadataMode.add(toNetworkMode(mode));
             int branch = addBranch(outPort.index(), Node.GROUND.index(),
                 VBranchKind.METADATA_OUT, m, 0, 0);
             metadataOutBranch.add(branch);
+        }
+
+        private Integer sourceIndexForName(String sourceName) {
+            if (sourceName == null || sourceName.isBlank()) return null;
+            int seen = 0;
+            for (var c : circuit.components()) {
+                if (!(c instanceof CircuitComponent.VoltageSource src)) continue;
+                if (src.name().equals(sourceName)) return seen;
+                seen++;
+            }
+            return null;
         }
 
         private static MnaNetwork.MetadataMode toNetworkMode(CircuitComponent.VoltageMetadata.Mode mode) {

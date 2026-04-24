@@ -103,13 +103,13 @@ class MnaSolverTest {
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux",
             1e-6, 1e9, 0.5);
-        var rfActive = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
+        // Metadata tap references the RF source by name.
+        var rfActive = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", mux.id(), "a"),
             wire("w2", probe.id(), "in", mux.id(), "b"),
             wire("w3", mux.id(), "common", coil.id(), "in"),
-            wire("w4", rfSrc.id(), "out", rfActive.id(), "source"),
-            wire("w5", rfActive.id(), "out", mux.id(), "ctl")
+            wire("w4", rfActive.id(), "out", mux.id(), "ctl")
         );
         var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, rfActive, coil, probe, mux), wires, CircuitLayout.empty());

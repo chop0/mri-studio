@@ -72,14 +72,14 @@ class CircuitCompilerTest {
     @Test
     void switchCtlWiredToVoltageMetadataBindsToFromSourceActive() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
-        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
+        // Metadata tap references the source by name (not by wire).
+        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in"),
-            wire("w3", rfSrc.id(), "out", meta.id(), "source"),
-            wire("w4", meta.id(), "out", sw.id(), "ctl")
+            wire("w3", meta.id(), "out", sw.id(), "ctl")
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, meta, sw, coil), wires, CircuitLayout.empty());
@@ -109,7 +109,7 @@ class CircuitCompilerTest {
     @Test
     void multiplexerExpandsIntoTwoOppositePolaritySwitchStamps() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
-        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
+        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux", 0.5, 1e9, 0.5);
@@ -117,8 +117,7 @@ class CircuitCompilerTest {
             wire("w1", rfSrc.id(), "out", mux.id(), "a"),
             wire("w2", probe.id(), "in", mux.id(), "b"),
             wire("w3", mux.id(), "common", coil.id(), "in"),
-            wire("w4", rfSrc.id(), "out", meta.id(), "source"),
-            wire("w5", meta.id(), "out", mux.id(), "ctl")
+            wire("w4", meta.id(), "out", mux.id(), "ctl")
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, meta, coil, probe, mux), wires, CircuitLayout.empty());

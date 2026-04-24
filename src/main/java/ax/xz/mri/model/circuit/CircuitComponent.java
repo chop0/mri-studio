@@ -544,26 +544,28 @@ public sealed interface CircuitComponent {
     // ─── Voltage metadata tap ────────────────────────────────────────────────
 
     /**
-     * Derived-signal tap over a {@link VoltageSource}. Wires its
-     * {@code source} port to the source's {@code out} to identify which
-     * source it observes, then emits a scalar on its {@code out} port that
+     * Derived-signal tap over a {@link VoltageSource}. The user picks the
+     * observed source <em>by name</em> in the inspector — same pattern as
+     * {@link ax.xz.mri.model.sequence.SequenceChannel#sourceName()} — and
+     * the block emits a scalar on its single {@code out} port that
      * downstream switches, muxes, or probes can consume.
      *
-     * <p>The only mode right now is {@link Mode#ACTIVE}: {@code out}
-     * reads {@code 1} on any step where any of the referenced source's
-     * control channels is non-zero ("a clip is playing"), and {@code 0}
-     * otherwise. This replaces the old {@code active} port on
-     * {@link VoltageSource} — instead of every source carrying an extra
-     * port, the user drops a Metadata block next to any source they care
-     * about.
+     * <p>The only mode right now is {@link Mode#ACTIVE}: {@code out} reads
+     * {@code 1} on any step where any of the referenced source's control
+     * channels is non-zero ("a clip is playing"), and {@code 0} otherwise.
+     * This replaces the old {@code active} port on {@link VoltageSource} —
+     * one block per tap instead of every source carrying an extra port.
      *
      * <p>Electrically the block stamps an imposed-voltage branch on
-     * {@code out} with the active-flag as its value, so wiring the output
-     * into a switch ctl, a probe, or any other consumer Just Works.
+     * {@code out} carrying the scalar value, so wiring the output into a
+     * switch ctl, a probe, or any other consumer Just Works. The name
+     * reference is a lookup, not a wire — keeps the schematic clean and
+     * lets one metadata block float anywhere near its consumer.
      */
     record VoltageMetadata(
         ComponentId id,
         String name,
+        @JsonProperty("source_name") String sourceName,
         Mode mode
     ) implements CircuitComponent {
         public enum Mode {
@@ -575,25 +577,34 @@ public sealed interface CircuitComponent {
             if (id == null) throw new IllegalArgumentException("VoltageMetadata.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("VoltageMetadata.name must be non-blank");
             if (mode == null) throw new IllegalArgumentException("VoltageMetadata.mode must not be null");
+            // sourceName may be null or blank — that's valid (block hasn't been
+            // pointed at a source yet); at compile time the tap resolves to zero.
         }
 
         /** Default-mode convenience constructor. */
-        public VoltageMetadata(ComponentId id, String name) { this(id, name, Mode.ACTIVE); }
+        public VoltageMetadata(ComponentId id, String name, String sourceName) {
+            this(id, name, sourceName, Mode.ACTIVE);
+        }
 
-        @Override public List<String> ports() { return List.of("source", "out"); }
+        public VoltageMetadata(ComponentId id, String name) {
+            this(id, name, null, Mode.ACTIVE);
+        }
+
+        @Override public List<String> ports() { return List.of("out"); }
 
         @Override
-        public VoltageMetadata withName(String newName) { return new VoltageMetadata(id, newName, mode); }
+        public VoltageMetadata withName(String newName) { return new VoltageMetadata(id, newName, sourceName, mode); }
 
         @Override
-        public VoltageMetadata withId(ComponentId newId) { return new VoltageMetadata(newId, name, mode); }
+        public VoltageMetadata withId(ComponentId newId) { return new VoltageMetadata(newId, name, sourceName, mode); }
 
         @Override
         public void stamp(CircuitStampContext ctx) {
-            ctx.stampVoltageMetadata(ctx.port("source"), ctx.port("out"), mode);
+            ctx.stampVoltageMetadata(sourceName, ctx.port("out"), mode);
         }
 
-        public VoltageMetadata withMode(Mode newMode) { return new VoltageMetadata(id, name, newMode); }
+        public VoltageMetadata withMode(Mode newMode) { return new VoltageMetadata(id, name, sourceName, newMode); }
+        public VoltageMetadata withSourceName(String newSourceName) { return new VoltageMetadata(id, name, newSourceName, mode); }
     }
 
     /** Ideal two-port transformer with ports {@code pa}, {@code pb} (primary) and {@code sa}, {@code sb} (secondary). */

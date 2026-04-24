@@ -81,13 +81,15 @@ public interface CircuitStampContext {
                         Node outPort);
 
     /**
-     * Register a voltage-metadata tap. The context resolves which source
-     * owns the node at {@code sourceInput} (by matching against each
-     * source's registered {@code out} node) and stamps an imposed-voltage
-     * branch on {@code outPort} whose per-step value follows
-     * {@code mode} applied to that source's current controls.
+     * Register a voltage-metadata tap. The source is identified <em>by
+     * name</em> — same convention as DAW-track to source binding — so the
+     * schematic stays clean (no hack-wire from the source to the tap).
+     * The context stamps an imposed-voltage branch on {@code outPort}
+     * whose per-step value follows {@code mode} applied to the named
+     * source's current controls. An unknown or null {@code sourceName}
+     * stamps a zero-voltage branch.
      */
-    void stampVoltageMetadata(Node sourceInput, Node outPort,
+    void stampVoltageMetadata(String sourceName, Node outPort,
                               CircuitComponent.VoltageMetadata.Mode mode);
 
     /**
