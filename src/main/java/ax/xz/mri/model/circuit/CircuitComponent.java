@@ -52,7 +52,8 @@ import java.util.List;
     @JsonSubTypes.Type(value = CircuitComponent.ShuntCapacitor.class, name = "shunt_capacitor"),
     @JsonSubTypes.Type(value = CircuitComponent.ShuntInductor.class, name = "shunt_inductor"),
     @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer"),
-    @JsonSubTypes.Type(value = CircuitComponent.Mixer.class, name = "mixer")
+    @JsonSubTypes.Type(value = CircuitComponent.Mixer.class, name = "mixer"),
+    @JsonSubTypes.Type(value = CircuitComponent.VoltageMetadata.class, name = "voltage_metadata")
 })
 public sealed interface CircuitComponent {
     ComponentId id();
@@ -98,16 +99,14 @@ public sealed interface CircuitComponent {
         }
 
         /**
-         * Two output ports:
-         * <ul>
-         *   <li>{@code out} carries the scheduled voltage.</li>
-         *   <li>{@code active} is a derived 0/1 signal that reads 1 whenever any
-         *       control channel on this source is non-zero this step — the
-         *       "clip is playing" tap. Wire a switch's {@code ctl} here to
-         *       auto-gate an RX path without hand-authoring a GATE source.</li>
-         * </ul>
+         * Single output port: {@code out} carries the scheduled voltage.
+         *
+         * <p>Derived signals like "is this source's clip playing" live on
+         * dedicated {@link VoltageMetadata} blocks — wire a {@code source}
+         * input on the metadata block to the source's {@code out}, then
+         * read the metadata block's output into a switch's {@code ctl}.
          */
-        @Override public List<String> ports() { return List.of("out", "active"); }
+        @Override public List<String> ports() { return List.of("out"); }
 
         @JsonIgnore
         public int channelCount() { return kind.channelCount(); }
@@ -127,8 +126,7 @@ public sealed interface CircuitComponent {
 
         @Override
         public void stamp(CircuitStampContext ctx) {
-            ctx.registerSource(id, name, kind, carrierHz, maxAmplitude,
-                ctx.port("out"), ctx.port("active"));
+            ctx.registerSource(id, name, kind, carrierHz, maxAmplitude, ctx.port("out"));
         }
 
         public VoltageSource withKind(AmplitudeKind newKind) {
@@ -541,6 +539,61 @@ public sealed interface CircuitComponent {
         public Mixer withLoHz(double v) {
             return new Mixer(id, name, v);
         }
+    }
+
+    // ─── Voltage metadata tap ────────────────────────────────────────────────
+
+    /**
+     * Derived-signal tap over a {@link VoltageSource}. Wires its
+     * {@code source} port to the source's {@code out} to identify which
+     * source it observes, then emits a scalar on its {@code out} port that
+     * downstream switches, muxes, or probes can consume.
+     *
+     * <p>The only mode right now is {@link Mode#ACTIVE}: {@code out}
+     * reads {@code 1} on any step where any of the referenced source's
+     * control channels is non-zero ("a clip is playing"), and {@code 0}
+     * otherwise. This replaces the old {@code active} port on
+     * {@link VoltageSource} — instead of every source carrying an extra
+     * port, the user drops a Metadata block next to any source they care
+     * about.
+     *
+     * <p>Electrically the block stamps an imposed-voltage branch on
+     * {@code out} with the active-flag as its value, so wiring the output
+     * into a switch ctl, a probe, or any other consumer Just Works.
+     */
+    record VoltageMetadata(
+        ComponentId id,
+        String name,
+        Mode mode
+    ) implements CircuitComponent {
+        public enum Mode {
+            /** 1.0 whenever any control channel on the source is non-zero; 0.0 otherwise. */
+            ACTIVE
+        }
+
+        public VoltageMetadata {
+            if (id == null) throw new IllegalArgumentException("VoltageMetadata.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("VoltageMetadata.name must be non-blank");
+            if (mode == null) throw new IllegalArgumentException("VoltageMetadata.mode must not be null");
+        }
+
+        /** Default-mode convenience constructor. */
+        public VoltageMetadata(ComponentId id, String name) { this(id, name, Mode.ACTIVE); }
+
+        @Override public List<String> ports() { return List.of("source", "out"); }
+
+        @Override
+        public VoltageMetadata withName(String newName) { return new VoltageMetadata(id, newName, mode); }
+
+        @Override
+        public VoltageMetadata withId(ComponentId newId) { return new VoltageMetadata(newId, name, mode); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampVoltageMetadata(ctx.port("source"), ctx.port("out"), mode);
+        }
+
+        public VoltageMetadata withMode(Mode newMode) { return new VoltageMetadata(id, name, newMode); }
     }
 
     /** Ideal two-port transformer with ports {@code pa}, {@code pb} (primary) and {@code sa}, {@code sb} (secondary). */

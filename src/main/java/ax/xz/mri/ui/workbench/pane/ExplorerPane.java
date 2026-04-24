@@ -163,6 +163,13 @@ public final class ExplorerPane extends WorkbenchPane {
             rename.setOnAction(event -> renameSimConfig(entry.nodeId()));
             menu.getItems().add(rename);
 
+            var duplicate = new MenuItem("Duplicate Config");
+            duplicate.setOnAction(event -> {
+                var copy = paneContext.session().project.duplicateSimConfig(entry.nodeId());
+                if (copy != null) paneContext.session().project.openNode(copy.id());
+            });
+            menu.getItems().add(duplicate);
+
             var delete = new MenuItem("Delete Config");
             delete.setOnAction(event -> paneContext.session().project.deleteSimConfig(entry.nodeId()));
             menu.getItems().add(delete);

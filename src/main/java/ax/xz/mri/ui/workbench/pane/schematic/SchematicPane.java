@@ -114,12 +114,14 @@ public final class SchematicPane extends BorderPane {
             if (canvas.tool().kind() != SchematicCanvas.ToolState.Kind.PLACING) return;
             var hit = canvas.hitTest(evt.getX(), evt.getY());
             if (hit.kind() != SchematicCanvas.Hit.Kind.EMPTY) return;
-            var prototype = canvas.tool().placementPrototype();
-            if (prototype == null) return;
+            var placement = canvas.tool().placement();
+            if (placement == null || placement.components().isEmpty()) return;
             var cursor = canvas.cursorWorld();
-            var position = new ax.xz.mri.model.circuit.ComponentPosition(
-                prototype.id(), snap(cursor[0]), snap(cursor[1]), 0);
-            session.addComponent(prototype, position);
+            double anchorX = snap(cursor[0]);
+            double anchorY = snap(cursor[1]);
+            session.insertCluster(placement.components(), placement.relativePositions(),
+                placement.internalWires(), anchorX, anchorY,
+                placement.rotationQuarters(), placement.mirrored());
             canvas.setTool(SchematicCanvas.ToolState.idle());
         });
     }
@@ -133,14 +135,22 @@ public final class SchematicPane extends BorderPane {
     /**
      * Scene-level key filter. Fires when the pointer is over the schematic
      * pane — always, regardless of where focus is (canvas, palette, inspector
-     * text field, whatever). Text-input controls keep their own Ctrl+Z/C/V
-     * for text editing: we skip the filter when focus is in one AND no
-     * shortcut-independent schematic action would otherwise fire.
+     * text field, whatever).
+     *
+     * <p>When a text input control has focus, the standard text-editing
+     * shortcuts ({@link #isTextShortcut Cmd/Ctrl + C / X / V / Z / Y / A})
+     * stay local to the field so the user can copy, cut, paste, undo, and
+     * select-all within the inspector text normally. Everything else (mode
+     * letters, schematic-specific shortcuts like Cmd+D duplicate or Cmd+R
+     * rotate) still fires so the schematic is reachable regardless of
+     * focus — the common frustration of "I can't undo because the cursor
+     * is somewhere".
      */
     private void onKey(KeyEvent e) {
         if (e.isConsumed()) return;
         if (!isPointerOverPane()) return;
         boolean inTextField = e.getTarget() instanceof javafx.scene.control.TextInputControl;
+        if (inTextField && isTextShortcut(e)) return;
         if (!e.isShortcutDown() && !e.isAltDown() && !e.isMetaDown()) {
             // Single-letter mode hotkeys collide with typing, so skip them when
             // a text field is focused.
@@ -151,10 +161,23 @@ public final class SchematicPane extends BorderPane {
             if (canvas.handleKey(e)) e.consume();
             return;
         }
-        // Ctrl-shortcuts (or Ctrl+letter) always go to the canvas — even when
-        // focus is in a text field, so Ctrl+Z undoes the schematic edit rather
-        // than a stray text change inside the inspector.
         if (canvas.handleKey(e)) e.consume();
+    }
+
+    /**
+     * True for the standard text-editing shortcuts that a
+     * {@link javafx.scene.control.TextInputControl} should always get to
+     * handle itself. Cmd/Ctrl + {C, X, V, Z, Y, A}. Schematic-specific
+     * shortcuts like Cmd+D (duplicate), Cmd+R (rotate), Cmd+E (mirror),
+     * Cmd+F (fit), Cmd+0/+/- (zoom) are NOT text shortcuts and stay on
+     * the schematic regardless of focus.
+     */
+    private static boolean isTextShortcut(KeyEvent e) {
+        if (!e.isShortcutDown()) return false;
+        return switch (e.getCode()) {
+            case C, X, V, Z, Y, A -> true;
+            default -> false;
+        };
     }
 
     private boolean isPointerOverPane() {

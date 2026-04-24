@@ -54,6 +54,16 @@ public final class SequenceSimulationSession {
         activeConfigDoc.addListener((obs, o, n) -> {
             if (n != null) activeConfig.set(n.config());
         });
+
+        // Schematic / sim-config edits in other tabs mutate repo documents
+        // in-place; the explorer bumps contentRevision so consumers know
+        // their baked state is stale. Re-run the sim against the fresh
+        // repo data so the probe trace reflects the latest circuit.
+        projectSession.explorer.contentRevision.addListener((obs, o, n) -> {
+            if (activeConfig.get() == null) return;
+            stale.set(true);
+            if (autoSimulate.get()) scheduleSimulation();
+        });
     }
 
     public void loadConfig(SimulationConfigDocument doc) {

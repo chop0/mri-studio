@@ -5,6 +5,7 @@ import ax.xz.mri.model.circuit.CircuitComponent.Coil;
 import ax.xz.mri.model.circuit.CircuitComponent.Mixer;
 import ax.xz.mri.model.circuit.CircuitComponent.Multiplexer;
 import ax.xz.mri.model.circuit.CircuitComponent.Probe;
+import ax.xz.mri.model.circuit.CircuitComponent.VoltageMetadata;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.ComponentId;
@@ -90,11 +91,16 @@ public final class CircuitStarterLibrary {
             var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
-            // T/R mux: common -> RF coil, a -> RF source, b -> Mixer, ctl -> RF.active.
+            // T/R mux: common -> RF coil, a -> RF source, b -> Mixer.
             // closed resistance deliberately tiny so the mux doesn't form a
             // noticeable voltage divider against the 1 Ω default coil R.
             var trMux = new Multiplexer(new ComponentId("mux-tr"), "T/R Mux",
                 1e-6, 1e9, 0.5);
+            // Metadata tap on the RF source: emits 1 while any RF control
+            // channel is non-zero (== a clip is playing). Wired to the
+            // mux's ctl so we route TX→coil during transmit and coil→probe
+            // during receive.
+            var rfActive = new VoltageMetadata(new ComponentId("meta-rf-active"), "RF active");
             // Mixer between the mux's RX port and the probe. Its LO is set
             // to the Larmor carrier so the probe's complex trace comes back
             // baseband relative to the RF drive — Point.real = I,
@@ -107,7 +113,7 @@ public final class CircuitStarterLibrary {
             var components = List.<CircuitComponent>of(
                 b0Src, rfSrc, gxSrc, gzSrc,
                 b0Coil, rfCoil, gxCoil, gzCoil,
-                trMux, rxMixer, probe);
+                trMux, rfActive, rxMixer, probe);
 
             var wires = new ArrayList<Wire>();
             wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "in"));
@@ -121,12 +127,15 @@ public final class CircuitStarterLibrary {
             wires.add(wire("w-mux-mixer",   trMux.id(), "b", rxMixer.id(), "in"));
             wires.add(wire("w-mixer-probe", rxMixer.id(), "out", probe.id(), "in"));
             wires.add(wire("w-mux-coil",    trMux.id(), "common", rfCoil.id(), "in"));
-            wires.add(wire("w-mux-ctl",     rfSrc.id(), "active", trMux.id(), "ctl"));
+            // RF-active metadata tap drives mux.ctl: source → meta.source,
+            // meta.out → mux.ctl.
+            wires.add(wire("w-meta-src",    rfSrc.id(), "out", rfActive.id(), "source"));
+            wires.add(wire("w-meta-ctl",    rfActive.id(), "out", trMux.id(), "ctl"));
 
             var layout = LowFieldLayout.arrange(
                 List.of(b0Src, rfSrc, gxSrc, gzSrc),
                 List.of(b0Coil, rfCoil, gxCoil, gzCoil),
-                trMux, rxMixer, probe);
+                trMux, rfActive, rxMixer, probe);
 
             return new CircuitDocument(id, name, components, wires, layout);
         }

@@ -39,13 +39,12 @@ class CircuitCompilerTest {
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
         var mna = compiled.mna();
-        // Two branches per source (out + active) + one per coil = 3 total.
-        assertEquals(3, mna.branchCount());
+        // One source-out branch + one coil branch = 2 total. The source's
+        // "active" flag lives on a separate VoltageMetadata block nowadays,
+        // so a bare source no longer carries a second branch.
+        assertEquals(2, mna.branchCount());
         assertEquals(0, mna.sourceOutBranch()[0]);
-        assertEquals(1, mna.sourceActiveBranch()[0]);
-        assertEquals(2, mna.coilBranch()[0]);
-        // Source-active port node is distinct from source-out.
-        assertNotEquals(mna.branchNodeA()[0], mna.branchNodeA()[1]);
+        assertEquals(1, mna.coilBranch()[0]);
         // Default series resistance kicks in for R=0 L=0 coils.
         assertEquals(1.0, mna.branchR()[mna.coilBranch()[0]], 1e-12);
     }
@@ -71,17 +70,19 @@ class CircuitCompilerTest {
     }
 
     @Test
-    void switchCtlWiredToSourceActiveBindsToFromSourceActive() {
+    void switchCtlWiredToVoltageMetadataBindsToFromSourceActive() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
+        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in"),
-            wire("w3", rfSrc.id(), "active", sw.id(), "ctl")
+            wire("w3", rfSrc.id(), "out", meta.id(), "source"),
+            wire("w4", meta.id(), "out", sw.id(), "ctl")
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(rfSrc, sw, coil), wires, CircuitLayout.empty());
+            List.of(rfSrc, meta, sw, coil), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
         var ctl = compiled.mna().switchCtl()[0];
@@ -108,6 +109,7 @@ class CircuitCompilerTest {
     @Test
     void multiplexerExpandsIntoTwoOppositePolaritySwitchStamps() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
+        var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux", 0.5, 1e9, 0.5);
@@ -115,10 +117,11 @@ class CircuitCompilerTest {
             wire("w1", rfSrc.id(), "out", mux.id(), "a"),
             wire("w2", probe.id(), "in", mux.id(), "b"),
             wire("w3", mux.id(), "common", coil.id(), "in"),
-            wire("w4", rfSrc.id(), "active", mux.id(), "ctl")
+            wire("w4", rfSrc.id(), "out", meta.id(), "source"),
+            wire("w5", meta.id(), "out", mux.id(), "ctl")
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(rfSrc, coil, probe, mux), wires, CircuitLayout.empty());
+            List.of(rfSrc, meta, coil, probe, mux), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
         // One mux → two switch stamps.

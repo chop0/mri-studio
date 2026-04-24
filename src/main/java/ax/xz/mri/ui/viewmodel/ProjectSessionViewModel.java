@@ -250,6 +250,76 @@ public final class ProjectSessionViewModel {
         saveProjectQuietly();
     }
 
+    /**
+     * Deep-copy a simulation config: its {@link CircuitDocument} is cloned
+     * with fresh component ids (so both configs can be edited independently
+     * without mutating a shared circuit), a new config doc wraps it, and
+     * the duplicate is added to the repo with a disambiguated name. Returns
+     * the new doc so the caller can open it.
+     */
+    public SimulationConfigDocument duplicateSimConfig(ProjectNodeId sourceId) {
+        var repo = repository.get();
+        if (!(repo.node(sourceId) instanceof SimulationConfigDocument source)) return null;
+
+        var existingNames = new java.util.HashSet<String>();
+        for (var id : repo.simConfigIds()) {
+            if (repo.node(id) instanceof SimulationConfigDocument d) existingNames.add(d.name());
+        }
+        var newName = uniqueName(existingNames, source.name() + " (copy)");
+
+        var sourceConfig = source.config();
+        ProjectNodeId newCircuitId = sourceConfig.circuitId();
+        if (sourceConfig.circuitId() != null) {
+            var sourceCircuit = repo.circuit(sourceConfig.circuitId());
+            if (sourceCircuit != null) {
+                newCircuitId = new ProjectNodeId("circuit-" + UUID.randomUUID());
+                var clonedComponents = new java.util.ArrayList<ax.xz.mri.model.circuit.CircuitComponent>();
+                var componentIdMap = new java.util.HashMap<ax.xz.mri.model.circuit.ComponentId, ax.xz.mri.model.circuit.ComponentId>();
+                for (var comp : sourceCircuit.components()) {
+                    var newId = new ax.xz.mri.model.circuit.ComponentId(comp.id().value() + "-dup-" + UUID.randomUUID());
+                    componentIdMap.put(comp.id(), newId);
+                    clonedComponents.add(comp.withId(newId));
+                }
+                var clonedWires = new java.util.ArrayList<ax.xz.mri.model.circuit.Wire>();
+                for (var wire : sourceCircuit.wires()) {
+                    var fromId = componentIdMap.getOrDefault(wire.from().componentId(), wire.from().componentId());
+                    var toId = componentIdMap.getOrDefault(wire.to().componentId(), wire.to().componentId());
+                    clonedWires.add(new ax.xz.mri.model.circuit.Wire(
+                        "wire-" + UUID.randomUUID(),
+                        new ax.xz.mri.model.circuit.ComponentTerminal(fromId, wire.from().port()),
+                        new ax.xz.mri.model.circuit.ComponentTerminal(toId, wire.to().port())));
+                }
+                var clonedLayout = ax.xz.mri.model.circuit.CircuitLayout.empty();
+                for (var entry : sourceCircuit.layout().positions().entrySet()) {
+                    var newId = componentIdMap.get(entry.getKey());
+                    if (newId == null) continue;
+                    var pos = entry.getValue();
+                    clonedLayout = clonedLayout.with(new ax.xz.mri.model.circuit.ComponentPosition(
+                        newId, pos.x(), pos.y(), pos.rotationQuarters(), pos.mirrored()));
+                }
+                var clonedCircuit = new ax.xz.mri.model.circuit.CircuitDocument(
+                    newCircuitId, sourceCircuit.name() + " (copy)",
+                    clonedComponents, clonedWires, clonedLayout);
+                repo.addCircuit(clonedCircuit);
+            }
+        }
+        var clonedConfig = sourceConfig.withCircuitId(newCircuitId);
+        var newDoc = new SimulationConfigDocument(
+            new ProjectNodeId("simcfg-" + UUID.randomUUID()), newName, clonedConfig);
+        repo.addSimConfig(newDoc);
+        explorer.refresh();
+        selectNode(newDoc.id());
+        saveProjectQuietly();
+        return newDoc;
+    }
+
+    private static String uniqueName(java.util.Set<String> existing, String base) {
+        if (!existing.contains(base)) return base;
+        int i = 2;
+        while (existing.contains(base + " " + i)) i++;
+        return base + " " + i;
+    }
+
     public void deleteEigenfield(ProjectNodeId eigenfieldId) {
         repository.get().removeEigenfield(eigenfieldId);
         if (eigenfieldId.equals(inspector.inspectedNodeId.get())) {

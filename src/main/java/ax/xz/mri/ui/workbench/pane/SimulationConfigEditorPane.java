@@ -436,8 +436,18 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         }
         circuitSession = new CircuitEditSession(doc);
         savedCircuit = doc;
-        // Schematic edits flip the dirty pill on; the user commits via Save.
-        circuitSession.current.addListener((obs, oldDoc, newDoc) -> refreshDirty());
+        // Schematic edits auto-commit in memory so downstream consumers
+        // (BlochDataFactory → SignalTraceComputer etc.) see the latest
+        // circuit immediately. The dirty pill still tracks whether the
+        // committed state has been written to disk — see save().
+        circuitSession.current.addListener((obs, oldDoc, newDoc) -> {
+            refreshDirty();
+            if (newDoc == null || newDoc.id().value().equals("circuit-placeholder")) return;
+            var liveRepo = paneContext.session().project.repository.get();
+            if (liveRepo.circuit(newDoc.id()) != null) liveRepo.updateCircuit(newDoc);
+            else liveRepo.addCircuit(newDoc);
+            paneContext.session().project.explorer.markContentChanged();
+        });
 
         return new SchematicPane(circuitSession,
             () -> paneContext.session().project.repository.get(),

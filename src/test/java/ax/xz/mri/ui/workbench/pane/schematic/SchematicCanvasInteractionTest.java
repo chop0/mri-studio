@@ -87,7 +87,7 @@ class SchematicCanvasInteractionTest {
     }
 
     @Test
-    void ctrlCThenCtrlVDuplicatesSelection() {
+    void ctrlCThenCtrlVArmsClipboardPlacement() {
         FxTestSupport.runOnFxThread(() -> {
             var session = new CircuitEditSession(lowCircuit());
             var canvas = new SchematicCanvas(session);
@@ -95,8 +95,54 @@ class SchematicCanvasInteractionTest {
             int before = session.doc().components().size();
             canvas.handleKey(keyEvent(KeyCode.C, true, false));
             canvas.handleKey(keyEvent(KeyCode.V, true, false));
-            int after = session.doc().components().size();
-            assertEquals(before + 1, after);
+            // Paste now arms a placement cluster tethered to the cursor;
+            // the commit happens on mouse-click (handled in SchematicPane).
+            // We just verify the tool flipped to PLACING with one component
+            // queued — no new component lands in the doc until the click.
+            assertEquals(before, session.doc().components().size());
+            assertEquals(SchematicCanvas.ToolState.Kind.PLACING, canvas.tool().kind());
+            assertEquals(1, canvas.tool().placement().components().size());
+            assertEquals(new ComponentId("src"),
+                canvas.tool().placement().components().get(0).id());
+        });
+    }
+
+    @Test
+    void ctrlXPutsSelectionOntoClipboardAndDeletesIt() {
+        FxTestSupport.runOnFxThread(() -> {
+            var session = new CircuitEditSession(lowCircuit());
+            var canvas = new SchematicCanvas(session);
+            session.selectedComponents.add(new ComponentId("src"));
+            canvas.handleKey(keyEvent(KeyCode.X, true, false));
+            assertFalse(session.doc().components().stream()
+                .anyMatch(c -> c.id().value().equals("src")),
+                "cut should remove the selection from the doc");
+            // Clipboard retains a copy so a subsequent paste can restore it.
+            assertFalse(session.clipboardIsEmpty());
+        });
+    }
+
+    @Test
+    void ctrlRInPlacingModeRotatesPhantomInsteadOfSelection() {
+        FxTestSupport.runOnFxThread(() -> {
+            var session = new CircuitEditSession(lowCircuit());
+            var canvas = new SchematicCanvas(session);
+            // Select something already in the doc; its rotation should NOT
+            // change just because we pressed Ctrl+R while arming a new
+            // placement.
+            session.selectedComponents.add(new ComponentId("coil"));
+            int selectedRotBefore = session.positionOf(new ComponentId("coil")).rotationQuarters();
+
+            var protoId = new ComponentId("new-r");
+            var prototype = new CircuitComponent.Resistor(protoId, "NewR", 50);
+            canvas.setTool(SchematicCanvas.ToolState.placing(prototype));
+
+            canvas.handleKey(keyEvent(KeyCode.R, true, false));
+            assertEquals(1, canvas.tool().placement().rotationQuarters(),
+                "Ctrl+R while placing rotates the phantom");
+            assertEquals(selectedRotBefore,
+                session.positionOf(new ComponentId("coil")).rotationQuarters(),
+                "Ctrl+R while placing must not touch the selected coil");
         });
     }
 

@@ -263,10 +263,17 @@ public final class MnaSolver {
                     bI[branchRow] = iq[0];
                     bQ[branchRow] = iq[1];
                 }
-                case SOURCE_ACTIVE -> {
-                    var src = circuit.sources().get(ref);
-                    double v = sourceActiveValue(controls, src) ? 1.0 : 0.0;
-                    bI[branchRow] = v;   // active is purely real
+                case METADATA_OUT -> {
+                    // ref is the metadata index. Look up its source and mode.
+                    int srcIdx = net.metadataSourceIndex()[ref];
+                    double v = 0;
+                    if (srcIdx >= 0) {
+                        var mode = net.metadataMode()[ref];
+                        v = switch (mode) {
+                            case ACTIVE -> sourceActiveValue(controls, circuit.sources().get(srcIdx)) ? 1.0 : 0.0;
+                        };
+                    }
+                    bI[branchRow] = v;
                     bQ[branchRow] = 0;
                 }
                 case COIL, PASSIVE_INDUCTOR -> {

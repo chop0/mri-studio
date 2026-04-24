@@ -119,12 +119,17 @@ public final class CircuitCompiler {
         private final List<Integer> mixerInNode = new ArrayList<>();
         private final List<Integer> mixerOutBranch = new ArrayList<>();
         private final List<Double> mixerLoHz = new ArrayList<>();
+        private final List<Integer> metadataSourceIndex = new ArrayList<>();
+        private final List<Integer> metadataOutBranch = new ArrayList<>();
+        private final List<MnaNetwork.MetadataMode> metadataMode = new ArrayList<>();
 
         private final List<Integer> sourceOutBranch = new ArrayList<>();
-        private final List<Integer> sourceActiveBranch = new ArrayList<>();
         private final List<Integer> coilBranch = new ArrayList<>();
         private final List<Integer> probeNode = new ArrayList<>();
         private final Map<ComponentId, Integer> sourceIndexById = new HashMap<>();
+        // Maps source-out node -> source index, populated as registerSource runs.
+        // VoltageMetadata stamping reads this to resolve its "source" input.
+        private final Map<Integer, Integer> sourceIndexByOutNode = new HashMap<>();
 
         private CircuitComponent owner;
 
@@ -155,15 +160,46 @@ public final class CircuitCompiler {
         @Override
         public CtlBinding resolveCtl(Node ctlPort) {
             if (ctlPort.isGround()) return new CtlBinding.AlwaysOpen();
+            // 1. Direct source-out wiring: ctl reads the source's scheduled voltage.
             for (var other : circuit.components()) {
                 if (!(other instanceof CircuitComponent.VoltageSource src)) continue;
                 Integer outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
-                Integer activeNode = nodeOf.get(new ComponentTerminal(src.id(), "active"));
                 int srcIndex = predictSourceIndex(src.id());
                 if (outNode != null && outNode == ctlPort.index()) return new CtlBinding.FromSourceOut(srcIndex);
-                if (activeNode != null && activeNode == ctlPort.index()) return new CtlBinding.FromSourceActive(srcIndex);
+            }
+            // 2. VoltageMetadata blocks: their "out" stamps a 0/1 flag.
+            //    Resolve to FromSourceActive(srcIdx) so the switch's hot path
+            //    stays a direct control-vector read rather than a node-voltage read.
+            for (var other : circuit.components()) {
+                if (!(other instanceof CircuitComponent.VoltageMetadata meta)) continue;
+                Integer metaOutNode = nodeOf.get(new ComponentTerminal(meta.id(), "out"));
+                if (metaOutNode == null || metaOutNode != ctlPort.index()) continue;
+                Integer sourceNode = nodeOf.get(new ComponentTerminal(meta.id(), "source"));
+                if (sourceNode == null) continue;
+                var srcIdx = sourceIndexForOutNode(sourceNode);
+                if (srcIdx != null) return new CtlBinding.FromSourceActive(srcIdx);
             }
             return new CtlBinding.AlwaysOpen();
+        }
+
+        /**
+         * Look up which source has its {@code out} port on {@code node}. Used
+         * by VoltageMetadata at stamp time and by resolveCtl. Returns null if
+         * no source is wired to that node yet — the caller handles that by
+         * stamping an AlwaysOpen / zero binding.
+         */
+        private Integer sourceIndexForOutNode(int node) {
+            // Check already-registered sources first (fast path).
+            var registered = sourceIndexByOutNode.get(node);
+            if (registered != null) return registered;
+            // Fall back to scanning the document — required when Metadata
+            // stamps before the referenced VoltageSource does.
+            for (var c : circuit.components()) {
+                if (!(c instanceof CircuitComponent.VoltageSource src)) continue;
+                Integer outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
+                if (outNode != null && outNode == node) return predictSourceIndex(src.id());
+            }
+            return null;
         }
 
         private int predictSourceIndex(ComponentId id) {
@@ -227,15 +263,33 @@ public final class CircuitCompiler {
         @Override
         public void registerSource(ComponentId id, String name, AmplitudeKind kind,
                                    double carrierHz, double staticAmplitude,
-                                   Node outPort, Node activePort) {
+                                   Node outPort) {
             int index = sources.size();
             sourceIndexById.put(id, index);
             sources.add(new CompiledSource(id, name, channelCursor, kind, carrierHz, staticAmplitude));
             channelCursor += kind.channelCount();
             sourceOutBranch.add(addBranch(outPort.index(), Node.GROUND.index(),
                 VBranchKind.SOURCE_OUT, index, 0, 0));
-            sourceActiveBranch.add(addBranch(activePort.index(), Node.GROUND.index(),
-                VBranchKind.SOURCE_ACTIVE, index, 0, 0));
+            if (outPort.index() >= 0) sourceIndexByOutNode.put(outPort.index(), index);
+        }
+
+        @Override
+        public void stampVoltageMetadata(Node sourceInput, Node outPort,
+                                         CircuitComponent.VoltageMetadata.Mode mode) {
+            if (outPort.isGround()) return;
+            Integer srcIdx = sourceInput.isGround() ? null : sourceIndexForOutNode(sourceInput.index());
+            int m = metadataSourceIndex.size();
+            metadataSourceIndex.add(srcIdx == null ? -1 : srcIdx);
+            metadataMode.add(toNetworkMode(mode));
+            int branch = addBranch(outPort.index(), Node.GROUND.index(),
+                VBranchKind.METADATA_OUT, m, 0, 0);
+            metadataOutBranch.add(branch);
+        }
+
+        private static MnaNetwork.MetadataMode toNetworkMode(CircuitComponent.VoltageMetadata.Mode mode) {
+            return switch (mode) {
+                case ACTIVE -> MnaNetwork.MetadataMode.ACTIVE;
+            };
         }
 
         @Override
@@ -274,9 +328,11 @@ public final class CircuitCompiler {
                 toIntArray(branchNodeA), toIntArray(branchNodeB),
                 branchKind.toArray(new VBranchKind[0]), toIntArray(branchRefIndex),
                 toDoubleArray(branchR), toDoubleArray(branchL),
-                toIntArray(sourceOutBranch), toIntArray(sourceActiveBranch),
+                toIntArray(sourceOutBranch),
                 toIntArray(coilBranch), toIntArray(probeNode),
-                toIntArray(mixerInNode), toIntArray(mixerOutBranch), toDoubleArray(mixerLoHz));
+                toIntArray(mixerInNode), toIntArray(mixerOutBranch), toDoubleArray(mixerLoHz),
+                toIntArray(metadataSourceIndex), toIntArray(metadataOutBranch),
+                metadataMode.toArray(new MnaNetwork.MetadataMode[0]));
             return new CompiledCircuit(sources, coils, probes, network, channelCursor);
         }
 

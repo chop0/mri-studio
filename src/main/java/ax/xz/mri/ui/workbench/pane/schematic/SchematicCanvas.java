@@ -278,16 +278,39 @@ public final class SchematicCanvas extends Canvas {
                 g.setLineDashes();
             }
         } else if (tool.kind() == ToolState.Kind.PLACING) {
-            // Phantom: dim preview of the component at cursor location
-            var prototype = tool.placementPrototype();
-            if (prototype != null) {
+            var placement = tool.placement();
+            if (placement != null && !placement.components().isEmpty()) {
                 g.setGlobalAlpha(0.45);
-                var phantomPos = new ax.xz.mri.model.circuit.ComponentPosition(
-                    prototype.id(), lastMouseWorldX, lastMouseWorldY, 0, false);
-                ComponentRenderer.draw(g, prototype, phantomPos, false, false);
+                double anchorX = snap(lastMouseWorldX);
+                double anchorY = snap(lastMouseWorldY);
+                int rot = placement.rotationQuarters();
+                boolean mirror = placement.mirrored();
+                for (int i = 0; i < placement.components().size(); i++) {
+                    var comp = placement.components().get(i);
+                    var rel = placement.relativePositions().get(i);
+                    double[] off = rotateOffset(rel.x(), rel.y(), rot, mirror);
+                    int finalRot = (rel.rotationQuarters() + rot) & 3;
+                    boolean finalMirror = rel.mirrored() ^ mirror;
+                    var phantomPos = new ax.xz.mri.model.circuit.ComponentPosition(
+                        comp.id(), anchorX + off[0], anchorY + off[1], finalRot, finalMirror);
+                    ComponentRenderer.draw(g, comp, phantomPos, false, false);
+                }
                 g.setGlobalAlpha(1);
             }
         }
+    }
+
+    /** Apply the cluster's rotation + mirror to a relative offset. */
+    private static double[] rotateOffset(double x, double y, int quarters, boolean mirror) {
+        int q = ((quarters % 4) + 4) % 4;
+        double rx = x, ry = y;
+        for (int i = 0; i < q; i++) {
+            double nx = -ry;
+            double ny = rx;
+            rx = nx; ry = ny;
+        }
+        if (mirror) rx = -rx;
+        return new double[]{rx, ry};
     }
 
     // ───────── Hit testing ─────────
@@ -533,20 +556,35 @@ public final class SchematicCanvas extends Canvas {
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.V) {
-            double[] world = cursorWorld();
-            session.paste(snap(world[0]), snap(world[1]));
+            beginClipboardPlacement();
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.D) {
             session.duplicateSelection(40, 40);
             return true;
         }
+        // Rotation / mirror:
+        //   while placing  → rotate the phantom cluster that follows the cursor,
+        //                    so the user can orient a new component before dropping it;
+        //   otherwise      → rotate the currently selected components.
         if (e.isShortcutDown() && e.getCode() == KeyCode.R) {
-            session.rotateSelection();
+            if (tool.kind() == ToolState.Kind.PLACING && tool.placement() != null) {
+                tool = new ToolState(tool.kind(), tool.wireStart(),
+                    tool.placement().withRotationQuarters(tool.placement().rotationQuarters() + 1));
+                redraw();
+            } else {
+                session.rotateSelection();
+            }
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.E) {
-            session.mirrorSelection();
+            if (tool.kind() == ToolState.Kind.PLACING && tool.placement() != null) {
+                tool = new ToolState(tool.kind(), tool.wireStart(),
+                    tool.placement().withMirrored(!tool.placement().mirrored()));
+                redraw();
+            } else {
+                session.mirrorSelection();
+            }
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.Z) {
@@ -581,6 +619,32 @@ public final class SchematicCanvas extends Canvas {
         if (handleKey(e)) e.consume();
     }
 
+    /**
+     * Turn the session's clipboard into a cluster-placement tool state so
+     * the user drops the pasted sub-circuit wherever they click. The
+     * cluster's relative positions are anchored to the clipboard's
+     * bounding-box top-left corner.
+     */
+    private void beginClipboardPlacement() {
+        var clip = session.clipboardContents();
+        if (clip == null || clip.isEmpty()) return;
+        double anchorX = Double.POSITIVE_INFINITY;
+        double anchorY = Double.POSITIVE_INFINITY;
+        for (var p : clip.positions()) {
+            if (p.x() < anchorX) anchorX = p.x();
+            if (p.y() < anchorY) anchorY = p.y();
+        }
+        if (!Double.isFinite(anchorX)) { anchorX = 0; anchorY = 0; }
+        var rel = new java.util.ArrayList<ax.xz.mri.model.circuit.ComponentPosition>();
+        for (var p : clip.positions()) {
+            rel.add(new ax.xz.mri.model.circuit.ComponentPosition(
+                p.id(), p.x() - anchorX, p.y() - anchorY, p.rotationQuarters(), p.mirrored()));
+        }
+        setTool(ToolState.placingCluster(
+            clip.components(), java.util.List.copyOf(rel), clip.internalWires()));
+        redraw();
+    }
+
     private static double snap(double v) {
         int step = 20;
         return Math.round(v / step) * step;
@@ -604,13 +668,65 @@ public final class SchematicCanvas extends Canvas {
         public static Hit wire(String wireId, double x, double y) { return new Hit(Kind.WIRE, null, null, wireId, x, y); }
     }
 
-    /** Tool state machine. */
-    public record ToolState(Kind kind, ComponentTerminal wireStart, CircuitComponent placementPrototype) {
+    /**
+     * Tool state machine. {@link Placement} carries the pending cluster for
+     * both single-component palette placement and multi-component paste —
+     * one path, one rendering, one commit. Rotation and mirror apply to
+     * the whole cluster while placing and are stamped onto each component
+     * when the user clicks to drop.
+     */
+    public record ToolState(Kind kind, ComponentTerminal wireStart, Placement placement) {
         public enum Kind { IDLE, PLACING, WIRING }
+
+        /**
+         * Pending placement cluster. {@code relativePositions} are anchored
+         * at {@code (0, 0)} (the cursor); internal wires are recreated with
+         * fresh ids on commit so pasting a sub-circuit keeps its wiring.
+         */
+        public record Placement(
+            java.util.List<CircuitComponent> components,
+            java.util.List<ax.xz.mri.model.circuit.ComponentPosition> relativePositions,
+            java.util.List<ax.xz.mri.model.circuit.Wire> internalWires,
+            int rotationQuarters,
+            boolean mirrored
+        ) {
+            public Placement withRotationQuarters(int q) {
+                return new Placement(components, relativePositions, internalWires, q, mirrored);
+            }
+            public Placement withMirrored(boolean m) {
+                return new Placement(components, relativePositions, internalWires, rotationQuarters, m);
+            }
+        }
 
         public static ToolState idle() { return new ToolState(Kind.IDLE, null, null); }
         public static ToolState wiring(ComponentTerminal start) { return new ToolState(Kind.WIRING, start, null); }
-        public static ToolState placing(CircuitComponent prototype) { return new ToolState(Kind.PLACING, null, prototype); }
+
+        /** Single-component palette placement — anchored at the cursor. */
+        public static ToolState placing(CircuitComponent prototype) {
+            var pos = new ax.xz.mri.model.circuit.ComponentPosition(prototype.id(), 0, 0, 0, false);
+            return new ToolState(Kind.PLACING, null,
+                new Placement(java.util.List.of(prototype), java.util.List.of(pos),
+                    java.util.List.of(), 0, false));
+        }
+
+        /**
+         * Multi-component placement (paste). The cluster's bounding-box
+         * top-left sits at the cursor; wires between cluster members are
+         * regenerated with fresh ids on commit.
+         */
+        public static ToolState placingCluster(
+                java.util.List<CircuitComponent> components,
+                java.util.List<ax.xz.mri.model.circuit.ComponentPosition> relativePositions,
+                java.util.List<ax.xz.mri.model.circuit.Wire> internalWires) {
+            return new ToolState(Kind.PLACING, null,
+                new Placement(components, relativePositions, internalWires, 0, false));
+        }
+
+        /** Back-compat convenience for single-component placement consumers. */
+        public CircuitComponent placementPrototype() {
+            return placement != null && placement.components().size() == 1
+                ? placement.components().get(0) : null;
+        }
     }
 
     /** Primary interaction mode the user picks from the toolbar. */

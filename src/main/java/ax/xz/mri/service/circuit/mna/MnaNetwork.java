@@ -54,7 +54,6 @@ public record MnaNetwork(
 
     // Index lookups.
     int[] sourceOutBranch,        // sourceOutBranch[s] = branch index of source s's "out" port
-    int[] sourceActiveBranch,     // same for "active"
     int[] coilBranch,             // coilBranch[c] = branch index of coil c
     int[] probeNode,              // probeNode[p] = node index for probe p's "in" (-1 if dangling)
 
@@ -62,8 +61,18 @@ public record MnaNetwork(
     // branch imposing V_out = V(mixerInNode[m]) · exp(-j·2π·mixerLoHz[m]·t).
     int[] mixerInNode,
     int[] mixerOutBranch,
-    double[] mixerLoHz
+    double[] mixerLoHz,
+
+    // VoltageMetadata arrays: size = metadata count. metadataOutBranch[m]
+    // carries a 0/1 "active" flag computed from the referenced source's
+    // current controls; metadataSourceIndex[m] points back into the
+    // source list.
+    int[] metadataSourceIndex,
+    int[] metadataOutBranch,
+    MetadataMode[] metadataMode
 ) {
+
+    public enum MetadataMode { ACTIVE }
 
     public int systemSize() { return nodeCount + voltageBranchCount; }
     public int resistorCount() { return resistorA.length; }
@@ -73,17 +82,18 @@ public record MnaNetwork(
     public int coilCount() { return coilBranch.length; }
     public int probeCount() { return probeNode.length; }
     public int mixerCount() { return mixerInNode.length; }
+    public int metadataCount() { return metadataSourceIndex.length; }
 
     public enum VBranchKind {
         /** Imposed-voltage branch at a source's {@code out} port. */
         SOURCE_OUT,
-        /** Imposed-voltage branch at a source's {@code active} port. */
-        SOURCE_ACTIVE,
         /** Coil: R+L series branch with optional reciprocity EMF supplied each step. */
         COIL,
         /** Passive inductor (or shunt inductor): L-only branch, no EMF. */
         PASSIVE_INDUCTOR,
         /** Mixer output: voltage source whose value is {@code V(in) · exp(-j·2π·loHz·t)}. */
-        MIXER_OUT
+        MIXER_OUT,
+        /** Voltage-metadata output: 0/1 "active" flag driven by the referenced source's controls. */
+        METADATA_OUT
     }
 }

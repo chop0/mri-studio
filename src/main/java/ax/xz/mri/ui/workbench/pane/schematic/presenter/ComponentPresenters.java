@@ -41,6 +41,7 @@ public final class ComponentPresenters {
             case CircuitComponent.ShuntInductor sl -> new ShuntInductorPresenter(sl);
             case CircuitComponent.IdealTransformer t -> new IdealTransformerPresenter(t);
             case CircuitComponent.Mixer dc -> new MixerPresenter(dc);
+            case CircuitComponent.VoltageMetadata meta -> new VoltageMetadataPresenter(meta);
         };
     }
 
@@ -72,6 +73,9 @@ public final class ComponentPresenters {
                 "SPDT: a-to-common when ctl high, b-to-common when low",
                 () -> new CircuitComponent.Multiplexer(newId("mux"), "Mux",
                     1e-6, 1e9, 0.5)),
+            new ComponentPaletteEntry("Routing", "Voltage metadata",
+                "Reads a source's 'clip playing' flag into a gate signal",
+                () -> new CircuitComponent.VoltageMetadata(newId("meta"), "Meta " + shortId())),
 
             // Coils + probes
             new ComponentPaletteEntry("Coils + probes", "Coil", "Bridges circuit and FOV",

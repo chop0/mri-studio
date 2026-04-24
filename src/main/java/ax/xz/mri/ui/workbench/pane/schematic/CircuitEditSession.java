@@ -297,6 +297,9 @@ public final class CircuitEditSession {
 
     public boolean clipboardIsEmpty() { return clipboard.isEmpty(); }
 
+    /** Current clipboard snapshot — read-only view for the canvas's paste-as-placement flow. */
+    public Clipboard clipboardContents() { return clipboard; }
+
     /** Snapshot the current selection into the clipboard. */
     public void copySelection() {
         if (selectedComponents.isEmpty()) return;
@@ -328,13 +331,14 @@ public final class CircuitEditSession {
 
     /**
      * Paste the clipboard at {@code (targetX, targetY)}, using the
-     * clipboard's top-leftmost component as the anchor. Fresh ids are
-     * assigned and names are de-duplicated against the current document.
-     * The pasted components become the new selection.
+     * clipboard's top-leftmost component as the anchor. Shortcut wrapper
+     * around {@link #insertCluster} for callers that don't need rotation
+     * or mirror. Fresh ids are assigned and names are de-duplicated
+     * against the current document. The pasted components become the new
+     * selection.
      */
     public void paste(double targetX, double targetY) {
         if (clipboard.isEmpty()) return;
-
         double anchorX = Double.POSITIVE_INFINITY;
         double anchorY = Double.POSITIVE_INFINITY;
         for (var p : clipboard.positions()) {
@@ -342,31 +346,70 @@ public final class CircuitEditSession {
             if (p.y() < anchorY) anchorY = p.y();
         }
         if (!Double.isFinite(anchorX)) { anchorX = targetX; anchorY = targetY; }
-        double dx = targetX - anchorX;
-        double dy = targetY - anchorY;
+        var rel = new ArrayList<ComponentPosition>();
+        for (var p : clipboard.positions()) {
+            rel.add(new ComponentPosition(p.id(),
+                p.x() - anchorX, p.y() - anchorY, p.rotationQuarters(), p.mirrored()));
+        }
+        insertCluster(clipboard.components(), rel, clipboard.internalWires(),
+            targetX, targetY, 0, false);
+    }
+
+    /**
+     * Insert a cluster of components at {@code (anchorX, anchorY)}, with each
+     * component offset by its entry in {@code relativePositions} (rotated /
+     * mirrored by the cluster's pending {@code rotationQuarters} /
+     * {@code mirrored}). Wires in {@code internalWires} are recreated with
+     * fresh ids so internal sub-circuit wiring survives the paste.
+     *
+     * <p>The pasted components become the new selection so the user can
+     * immediately drag, rotate, or delete them as a group.
+     */
+    public void insertCluster(List<CircuitComponent> components,
+                              List<ComponentPosition> relativePositions,
+                              List<Wire> internalWires,
+                              double anchorX, double anchorY,
+                              int rotationQuarters, boolean mirrored) {
+        if (components.isEmpty()) return;
 
         var existingNames = new java.util.HashSet<String>();
-        for (var c : doc().components()) existingNames.add(c.name());
+        var existingIds = new java.util.HashSet<ComponentId>();
+        for (var c : doc().components()) {
+            existingNames.add(c.name());
+            existingIds.add(c.id());
+        }
         var oldToNew = new java.util.HashMap<ComponentId, ComponentId>();
 
         var doc = doc();
-        for (var original : clipboard.components()) {
-            var cloneId = new ComponentId(original.id().value() + "-paste-" + UUID.randomUUID());
-            var cloneName = uniqueName(existingNames, original.name());
-            existingNames.add(cloneName);
-            var clone = original.withName(cloneName).withId(cloneId);
-            oldToNew.put(original.id(), cloneId);
+        for (var original : components) {
+            // Palette placement hands us fresh UUID-suffixed ids that can't
+            // collide; paste hands us ids that are already in the doc. Only
+            // regenerate on collision so single-component palette flow keeps
+            // its original id.
+            ComponentId newId = existingIds.contains(original.id())
+                ? new ComponentId(original.id().value() + "-paste-" + UUID.randomUUID())
+                : original.id();
+            existingIds.add(newId);
+            String newName = existingNames.contains(original.name())
+                ? uniqueName(existingNames, original.name())
+                : original.name();
+            existingNames.add(newName);
+            var clone = original.withName(newName).withId(newId);
+            oldToNew.put(original.id(), newId);
             doc = doc.addComponent(clone, null);
         }
         var layout = doc.layout();
-        for (var p : clipboard.positions()) {
+        for (var p : relativePositions) {
             var newId = oldToNew.get(p.id());
             if (newId == null) continue;
+            double[] off = rotateOffset(p.x(), p.y(), rotationQuarters, mirrored);
+            int finalRot = (p.rotationQuarters() + rotationQuarters) & 3;
+            boolean finalMirror = p.mirrored() ^ mirrored;
             layout = layout.with(new ComponentPosition(newId,
-                p.x() + dx, p.y() + dy, p.rotationQuarters(), p.mirrored()));
+                anchorX + off[0], anchorY + off[1], finalRot, finalMirror));
         }
         doc = doc.withLayout(layout);
-        for (var w : clipboard.internalWires()) {
+        for (var w : internalWires) {
             var newFrom = oldToNew.get(w.from().componentId());
             var newTo = oldToNew.get(w.to().componentId());
             if (newFrom == null || newTo == null) continue;
@@ -378,6 +421,18 @@ public final class CircuitEditSession {
         replaceDocument(doc);
         selectedComponents.clear();
         selectedComponents.addAll(oldToNew.values());
+    }
+
+    private static double[] rotateOffset(double x, double y, int quarters, boolean mirror) {
+        int q = ((quarters % 4) + 4) % 4;
+        double rx = x, ry = y;
+        for (int i = 0; i < q; i++) {
+            double nx = -ry;
+            double ny = rx;
+            rx = nx; ry = ny;
+        }
+        if (mirror) rx = -rx;
+        return new double[]{rx, ry};
     }
 
     private static CircuitComponent withId(CircuitComponent source, ComponentId newId) {

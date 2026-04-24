@@ -89,11 +89,13 @@ class MnaSolverTest {
 
     @Test
     void muxRoutesCommonToWhicheverCtlBranchIsActive() {
-        // RF source → mux.a; probe → mux.b; mux.common → coil; mux.ctl ← RF.active.
-        // With RF active (controls[0] != 0), mux.a-common closes (ctl=1, non-inverting
-        // side), so coil current = RF voltage / small-R.
-        // With RF inactive, mux.b-common closes (inverting side), but probe has
-        // essentially infinite load so no current flows through the coil.
+        // RF source → mux.a; probe → mux.b; mux.common → coil.
+        // A VoltageMetadata tap observes the RF source and drives mux.ctl
+        // with the "active" flag — 1 when any RF control channel is non-zero,
+        // 0 otherwise. With RF active the mux.a-common branch closes and the
+        // coil current = RF voltage / small-R. With RF inactive the inverted
+        // mux.b-common branch closes instead; the probe is high-Z so no
+        // current flows through the coil.
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 1.0);
@@ -101,14 +103,16 @@ class MnaSolverTest {
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux",
             1e-6, 1e9, 0.5);
+        var rfActive = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active");
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", mux.id(), "a"),
             wire("w2", probe.id(), "in", mux.id(), "b"),
             wire("w3", mux.id(), "common", coil.id(), "in"),
-            wire("w4", rfSrc.id(), "active", mux.id(), "ctl")
+            wire("w4", rfSrc.id(), "out", rfActive.id(), "source"),
+            wire("w5", rfActive.id(), "out", mux.id(), "ctl")
         );
         var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(rfSrc, coil, probe, mux), wires, CircuitLayout.empty());
+            List.of(rfSrc, rfActive, coil, probe, mux), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(doc, repo, R, Z);
         var solver = new MnaSolver(compiled.mna(), compiled);
         var out = new MnaSolver.StepOut(1, 1);

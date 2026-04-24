@@ -1,5 +1,6 @@
 package ax.xz.mri.model.circuit.compile;
 
+import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
@@ -68,14 +69,26 @@ public interface CircuitStampContext {
     // ───── First-class entities ─────
 
     /**
-     * Register a voltage source. The context stamps two voltage branches
-     * (one at {@code outPort} for the driven voltage, one at
-     * {@code activePort} carrying a 0/1 indicating any non-zero control
-     * channel) and appends a {@code CompiledSource} entry.
+     * Register a voltage source. The context stamps one imposed-voltage
+     * branch on {@code outPort} carrying the scheduled per-step amplitude
+     * and appends a {@code CompiledSource} entry. Derived signals (e.g.
+     * "is this source's clip playing") live on a downstream
+     * {@link CircuitComponent.VoltageMetadata} block rather than an extra
+     * port here.
      */
     void registerSource(ComponentId id, String name, AmplitudeKind kind,
                         double carrierHz, double staticAmplitude,
-                        Node outPort, Node activePort);
+                        Node outPort);
+
+    /**
+     * Register a voltage-metadata tap. The context resolves which source
+     * owns the node at {@code sourceInput} (by matching against each
+     * source's registered {@code out} node) and stamps an imposed-voltage
+     * branch on {@code outPort} whose per-step value follows
+     * {@code mode} applied to that source's current controls.
+     */
+    void stampVoltageMetadata(Node sourceInput, Node outPort,
+                              CircuitComponent.VoltageMetadata.Mode mode);
 
     /**
      * Register a coil. The context stamps one COIL branch between
