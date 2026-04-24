@@ -53,7 +53,6 @@ final class VoltageSourcePresenter implements ComponentPresenter {
         g.setFont(Font.font("System", 11));
         g.setTextAlign(TextAlignment.CENTER);
         String glyph = switch (v.kind()) {
-            case QUADRATURE -> "IQ";
             case GATE -> "G";
             case REAL -> "V";
             case STATIC -> "DC";

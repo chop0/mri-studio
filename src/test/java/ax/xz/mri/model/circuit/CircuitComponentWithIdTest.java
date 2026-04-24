@@ -23,7 +23,7 @@ class CircuitComponentWithIdTest {
     void everySubtypeSwapsItsIdWithoutChangingOtherFields() {
         List<CircuitComponent> originals = List.of(
             new CircuitComponent.VoltageSource(OLD, "src",
-                AmplitudeKind.QUADRATURE, 100_000, -1, 1, 50),
+                AmplitudeKind.REAL, 100_000, -1, 1, 50),
             new CircuitComponent.SwitchComponent(OLD, "sw", 1e-6, 1e9, 0.5, true),
             new CircuitComponent.Multiplexer(OLD, "mux", 1e-6, 1e9, 0.5),
             new CircuitComponent.Coil(OLD, "coil", new ProjectNodeId("ef"), 2e-3, 4.5),
@@ -35,7 +35,10 @@ class CircuitComponentWithIdTest {
             new CircuitComponent.ShuntCapacitor(OLD, "cshunt", 3.3e-9),
             new CircuitComponent.ShuntInductor(OLD, "lshunt", 4.4e-6),
             new CircuitComponent.IdealTransformer(OLD, "xfmr", 2.5),
-            new CircuitComponent.Mixer(OLD, "dc", 655_000),
+            new CircuitComponent.Mixer(OLD, "dc", 655_000,
+                ax.xz.mri.model.circuit.compile.ComplexPairFormat.MAG_PHASE),
+            new CircuitComponent.Modulator(OLD, "mod", 655_000,
+                ax.xz.mri.model.circuit.compile.ComplexPairFormat.IQ),
             new CircuitComponent.VoltageMetadata(OLD, "RF active", "RF",
                 CircuitComponent.VoltageMetadata.Mode.ACTIVE)
         );

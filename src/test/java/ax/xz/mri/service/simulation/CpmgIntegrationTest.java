@@ -132,26 +132,34 @@ class CpmgIntegrationTest {
         CircuitDocument circuit = repo.circuit(config.circuitId());
 
         var b0 = circuit.voltageSources().stream().filter(s -> s.name().equals("B0")).findFirst().orElseThrow();
-        var rf = circuit.voltageSources().stream().filter(s -> s.name().equals("RF")).findFirst().orElseThrow();
+        var rfI = circuit.voltageSources().stream().filter(s -> s.name().equals("RF I")).findFirst().orElseThrow();
+        var rfQ = circuit.voltageSources().stream().filter(s -> s.name().equals("RF Q")).findFirst().orElseThrow();
         var gx = circuit.voltageSources().stream().filter(s -> s.name().equals("Gradient X")).findFirst().orElseThrow();
         var gz = circuit.voltageSources().stream().filter(s -> s.name().equals("Gradient Z")).findFirst().orElseThrow();
 
         assertEquals(AmplitudeKind.STATIC, b0.kind());
-        assertEquals(AmplitudeKind.QUADRATURE, rf.kind());
+        assertEquals(AmplitudeKind.REAL, rfI.kind());
+        assertEquals(AmplitudeKind.REAL, rfQ.kind());
         assertEquals(AmplitudeKind.REAL, gx.kind());
         assertEquals(AmplitudeKind.REAL, gz.kind());
 
-        // Channel layout: STATIC B0 contributes 0 channels; dynamic order is [RF_I, RF_Q, Gx, Gz].
-        // The RX switch is gated by RF.active — no dedicated RX Gate source.
+        // Channel layout: STATIC B0 contributes 0 channels; dynamic order is [RF I, RF Q, Gx, Gz].
+        // The Modulator block composes RF I + RF Q into the Larmor drive.
         var dynamic = circuit.voltageSources().stream()
             .filter(s -> s.kind() != AmplitudeKind.STATIC).toList();
-        assertEquals(3, dynamic.size(), "exactly three dynamic sources: RF, Gx, Gz");
-        assertEquals("RF", dynamic.get(0).name(), "RF must come first so controls[0,1] = (I, Q)");
-        assertEquals("Gradient X", dynamic.get(1).name());
-        assertEquals("Gradient Z", dynamic.get(2).name());
+        assertEquals(4, dynamic.size(), "four dynamic sources: RF I, RF Q, Gx, Gz");
+        assertEquals("RF I", dynamic.get(0).name());
+        assertEquals("RF Q", dynamic.get(1).name());
+        assertEquals("Gradient X", dynamic.get(2).name());
+        assertEquals("Gradient Z", dynamic.get(3).name());
 
+        // The Modulator block holds the Larmor carrier now.
         double expectedLarmor = GAMMA * 0.0154 / (2 * Math.PI);
-        assertEquals(expectedLarmor, rf.carrierHz(), 1.0);
+        var modulator = circuit.components().stream()
+            .filter(c -> c instanceof ax.xz.mri.model.circuit.CircuitComponent.Modulator)
+            .map(c -> (ax.xz.mri.model.circuit.CircuitComponent.Modulator) c)
+            .findFirst().orElseThrow();
+        assertEquals(expectedLarmor, modulator.loHz(), 1.0);
         assertEquals(0.0154, config.referenceB0Tesla(), 1e-9);
     }
 

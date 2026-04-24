@@ -3,6 +3,7 @@ package ax.xz.mri.model.circuit.starter;
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.Coil;
 import ax.xz.mri.model.circuit.CircuitComponent.Mixer;
+import ax.xz.mri.model.circuit.CircuitComponent.Modulator;
 import ax.xz.mri.model.circuit.CircuitComponent.Multiplexer;
 import ax.xz.mri.model.circuit.CircuitComponent.Probe;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageMetadata;
@@ -79,8 +80,13 @@ public final class CircuitStarterLibrary {
 
             var b0Src = new VoltageSource(new ComponentId("src-b0"), "B0",
                 AmplitudeKind.STATIC, 0, 0, b0Tesla, 0);
-            var rfSrc = new VoltageSource(new ComponentId("src-rf"), "RF",
-                AmplitudeKind.QUADRATURE, larmorHz, 0, 200e-6, 0);
+            // RF drive is now two REAL envelopes (I and Q) fed into a
+            // Modulator that upconverts to the Larmor carrier. No more
+            // special-case QUADRATURE amplitude kind.
+            var rfISrc = new VoltageSource(new ComponentId("src-rf-i"), "RF I",
+                AmplitudeKind.REAL, 0, -200e-6, 200e-6, 0);
+            var rfQSrc = new VoltageSource(new ComponentId("src-rf-q"), "RF Q",
+                AmplitudeKind.REAL, 0, -200e-6, 200e-6, 0);
             var gxSrc = new VoltageSource(new ComponentId("src-gx"), "Gradient X",
                 AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
             var gzSrc = new VoltageSource(new ComponentId("src-gz"), "Gradient Z",
@@ -91,17 +97,20 @@ public final class CircuitStarterLibrary {
             var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
-            // T/R mux: common -> RF coil, a -> RF source, b -> Mixer.
+            // Modulator composes the I/Q envelopes into an upconverted RF
+            // signal at the Larmor carrier. Its "out" drives the T/R mux;
+            // "in0"/"in1" wire to the two REAL sources.
+            var rfModulator = new Modulator(new ComponentId("mod-rf"), "RF Modulator", larmorHz);
+
+            // T/R mux: common -> RF coil, a -> modulator out, b -> Mixer.
             // closed resistance deliberately tiny so the mux doesn't form a
             // noticeable voltage divider against the 1 Ω default coil R.
             var trMux = new Multiplexer(new ComponentId("mux-tr"), "T/R Mux",
                 1e-6, 1e9, 0.5);
-            // Metadata tap on the RF source: emits 1 while any RF control
-            // channel is non-zero (== a clip is playing). Source reference
-            // is by name ("RF") — no hack-wire to the source itself.
-            // The metadata block's "out" wires into the mux.ctl so we
-            // route TX→coil during transmit and coil→probe during receive.
-            var rfActive = new VoltageMetadata(new ComponentId("meta-rf-active"), "RF active", rfSrc.name());
+            // Metadata tap observes the Modulator by name — the compiler
+            // expands a modulator reference into the OR of its I and Q
+            // source activity, so either envelope playing lights the gate.
+            var rfActive = new VoltageMetadata(new ComponentId("meta-rf-active"), "RF active", rfModulator.name());
             // Mixer between the mux's RX port and the probe. Its LO is set
             // to the Larmor carrier so the probe's complex trace comes back
             // baseband relative to the RF drive — Point.real = I,
@@ -112,30 +121,34 @@ public final class CircuitStarterLibrary {
                 1.0, 0.0, Double.POSITIVE_INFINITY);
 
             var components = List.<CircuitComponent>of(
-                b0Src, rfSrc, gxSrc, gzSrc,
+                b0Src, rfISrc, rfQSrc, gxSrc, gzSrc,
                 b0Coil, rfCoil, gxCoil, gzCoil,
-                trMux, rfActive, rxMixer, probe);
+                rfModulator, trMux, rfActive, rxMixer, probe);
 
             var wires = new ArrayList<Wire>();
             wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "in"));
             wires.add(wire("w-gx-drive", gxSrc.id(), "out", gxCoil.id(), "in"));
             wires.add(wire("w-gz-drive", gzSrc.id(), "out", gzCoil.id(), "in"));
 
-            // T/R routing. Receive path: RF coil -> mux.common, mux.b -> mixer.in,
-            // mixer.out -> probe.in. The mixer is a buffered VCVS — its
-            // output is a low-impedance frame-shifted copy of its input.
-            wires.add(wire("w-rf-mux",      rfSrc.id(), "out", trMux.id(), "a"));
+            // T/R routing. Transmit path: RF I → mod.in0, RF Q → mod.in1,
+            // mod.out → mux.a. Receive path: RF coil → mux.common,
+            // mux.b → mixer.in, mixer.out0 → probe.in (real channel / I).
+            // Second mixer output (Q / phase) stays unwired; the user can
+            // drop another probe on out1 if they want both channels.
+            wires.add(wire("w-rfi-mod",     rfISrc.id(), "out", rfModulator.id(), "in0"));
+            wires.add(wire("w-rfq-mod",     rfQSrc.id(), "out", rfModulator.id(), "in1"));
+            wires.add(wire("w-mod-mux",     rfModulator.id(), "out", trMux.id(), "a"));
             wires.add(wire("w-mux-mixer",   trMux.id(), "b", rxMixer.id(), "in"));
-            wires.add(wire("w-mixer-probe", rxMixer.id(), "out", probe.id(), "in"));
+            wires.add(wire("w-mixer-probe", rxMixer.id(), "out0", probe.id(), "in"));
             wires.add(wire("w-mux-coil",    trMux.id(), "common", rfCoil.id(), "in"));
-            // RF-active metadata tap drives mux.ctl. The tap references its
-            // source by name ("RF"), not by wire.
+            // RF-active metadata tap drives mux.ctl. Source reference is
+            // by name, not by wire.
             wires.add(wire("w-meta-ctl",    rfActive.id(), "out", trMux.id(), "ctl"));
 
             var layout = LowFieldLayout.arrange(
-                List.of(b0Src, rfSrc, gxSrc, gzSrc),
+                List.of(b0Src, rfISrc, rfQSrc, gxSrc, gzSrc),
                 List.of(b0Coil, rfCoil, gxCoil, gzCoil),
-                trMux, rfActive, rxMixer, probe);
+                rfModulator, trMux, rfActive, rxMixer, probe);
 
             return new CircuitDocument(id, name, components, wires, layout);
         }

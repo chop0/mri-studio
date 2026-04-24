@@ -37,8 +37,12 @@ class SequenceStarterLibraryTest {
     }
 
     private static CircuitDocument circuitWithRf() {
-        var rfSrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf"),
-            "RF", AmplitudeKind.QUADRATURE, 63e6, 0, B1_MAX, 0);
+        var rfISrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf-i"),
+            "RF I", AmplitudeKind.REAL, 0, -B1_MAX, B1_MAX, 0);
+        var rfQSrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf-q"),
+            "RF Q", AmplitudeKind.REAL, 0, -B1_MAX, B1_MAX, 0);
+        var rfModulator = new CircuitComponent.Modulator(new ComponentId("mod-rf"),
+            "RF Mod", 63e6);
         var gxSrc = new CircuitComponent.VoltageSource(new ComponentId("src-gx"),
             "Gradient X", AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
         var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"),
@@ -46,11 +50,13 @@ class SequenceStarterLibraryTest {
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
             "Gx Coil", new ProjectNodeId("ef-gx"), 0, 0);
         var wires = List.of(
-            new Wire("w-rf-out", new ComponentTerminal(rfSrc.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),
+            new Wire("w-rfi", new ComponentTerminal(rfISrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in0")),
+            new Wire("w-rfq", new ComponentTerminal(rfQSrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in1")),
+            new Wire("w-rf-out", new ComponentTerminal(rfModulator.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),
             new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in"))
         );
         return new CircuitDocument(CIRCUIT_ID, "Test Circuit",
-            List.of(rfSrc, gxSrc, rfCoil, gxCoil), wires, CircuitLayout.empty());
+            List.of(rfISrc, rfQSrc, gxSrc, rfModulator, rfCoil, gxCoil), wires, CircuitLayout.empty());
     }
 
     private static CircuitDocument circuitWithoutRf() {
@@ -102,15 +108,16 @@ class SequenceStarterLibraryTest {
     @Test
     void cpmg_placesExcitationOnI_andRefocusingOnQ() {
         var seq = starter("cpmg").build(config(), circuitWithRf());
+        // Tracks are one per source channel: RF I, RF Q, Gradient X = 3.
         assertEquals(3, seq.tracks().size());
         // 1 excitation + 4 refocus pulses (default echo count) = 5 clips.
         assertEquals(5, seq.clips().size());
 
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF") && t.outputChannel().subIndex() == 0)
+            .filter(t -> t.outputChannel().sourceName().equals("RF I"))
             .findFirst().orElseThrow();
         Track qTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF") && t.outputChannel().subIndex() == 1)
+            .filter(t -> t.outputChannel().sourceName().equals("RF Q"))
             .findFirst().orElseThrow();
 
         var sorted = seq.clips().stream()
@@ -128,7 +135,7 @@ class SequenceStarterLibraryTest {
     void cp_placesAllPulsesOnI() {
         var seq = starter("cp").build(config(), circuitWithRf());
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF") && t.outputChannel().subIndex() == 0)
+            .filter(t -> t.outputChannel().sourceName().equals("RF I"))
             .findFirst().orElseThrow();
         for (var clip : seq.clips()) {
             assertEquals(iTrack.id(), clip.trackId(),

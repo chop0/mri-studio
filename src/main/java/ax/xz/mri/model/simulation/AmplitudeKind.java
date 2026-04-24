@@ -1,22 +1,17 @@
 package ax.xz.mri.model.simulation;
 
 /**
- * How a voltage source's amplitude schedule is interpreted.
- *
- * <p>This, together with the source's {@code carrierHz}, fully determines how
- * the simulator couples the amplitude to the rotating-frame B-field
- * integration (for transmit sources) or to switch control (for gate sources).
- * There is no inferred "B0 slot" rule — statics are just sources with a fixed
- * amplitude pinned to {@code maxAmplitude}.
+ * How a voltage source's amplitude schedule is interpreted. Every source
+ * emits a single scalar per step; if you want an I/Q quadrature drive,
+ * compose two {@link #REAL} sources (one for I, one for Q) and feed them
+ * into a {@link ax.xz.mri.model.circuit.CircuitComponent.Modulator} block
+ * that upconverts their envelope to the carrier.
  *
  * <p>Pulse-sequence channels per step:
  * <ul>
  *   <li>{@link #STATIC} — 0 channels. Amplitude pinned to the source's
  *       {@code maxAmplitude}; no timeline control.</li>
- *   <li>{@link #REAL} — 1 channel. One real scalar per step, baseband at
- *       {@code carrierHz}. Typical: gradients (carrier = 0).</li>
- *   <li>{@link #QUADRATURE} — 2 channels (I, Q). Complex baseband at
- *       {@code carrierHz}. Typical: RF at Larmor.</li>
+ *   <li>{@link #REAL} — 1 channel. One real scalar per step.</li>
  *   <li>{@link #GATE} — 1 channel. A 0/1-valued digital signal. Drives
  *       switches and acquisition windows; does not contribute to B.</li>
  * </ul>
@@ -24,7 +19,6 @@ package ax.xz.mri.model.simulation;
 public enum AmplitudeKind {
     STATIC(0),
     REAL(1),
-    QUADRATURE(2),
     GATE(1);
 
     private final int channelCount;

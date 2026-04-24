@@ -1,5 +1,6 @@
 package ax.xz.mri.service.circuit.mna;
 
+import ax.xz.mri.model.circuit.compile.ComplexPairFormat;
 import ax.xz.mri.model.circuit.compile.CtlBinding;
 
 /**
@@ -57,19 +58,41 @@ public record MnaNetwork(
     int[] coilBranch,             // coilBranch[c] = branch index of coil c
     int[] probeNode,              // probeNode[p] = node index for probe p's "in" (-1 if dangling)
 
-    // Mixer arrays: size = mixer count. mixerOutBranch[m] is the voltage
-    // branch imposing V_out = V(mixerInNode[m]) · exp(-j·2π·mixerLoHz[m]·t).
+    // Mixer arrays: size = mixer count. Each mixer exposes two scalar
+    // outputs (mixerOut0Branch / mixerOut1Branch) whose values come from
+    // decomposing V(mixerInNode[m]) · exp(-j·2π·mixerLoHz[m]·t) per
+    // mixerFormat[m] (IQ → real,imag; MAG_PHASE → |·|, arg).
     int[] mixerInNode,
-    int[] mixerOutBranch,
+    int[] mixerOut0Branch,
+    int[] mixerOut1Branch,
     double[] mixerLoHz,
+    ComplexPairFormat[] mixerFormat,
 
-    // VoltageMetadata arrays: size = metadata count. metadataOutBranch[m]
-    // carries a 0/1 "active" flag computed from the referenced source's
-    // current controls; metadataSourceIndex[m] points back into the
-    // source list.
-    int[] metadataSourceIndex,
+    // VoltageMetadata arrays: size = metadata count.
+    //   metadataOutBranch[m] — the imposed-voltage branch carrying the
+    //     0/1 scalar each step.
+    //   metadataSourceIndices[m] — source-list indices the tap observes.
+    //     A metadata block targeting a {@link ax.xz.mri.model.circuit.CircuitComponent.VoltageSource}
+    //     resolves to a single-element array; one targeting a
+    //     {@link ax.xz.mri.model.circuit.CircuitComponent.Modulator}
+    //     resolves to that modulator's I and Q source indices so the tap
+    //     fires when either envelope is playing.
+    //   metadataMode[m] — how the indices combine per step (ACTIVE = OR).
+    int[][] metadataSourceIndices,
     int[] metadataOutBranch,
-    MetadataMode[] metadataMode
+    MetadataMode[] metadataMode,
+
+    // Modulator arrays: size = modulator count. Each modulator reads two
+    // scalar node voltages (modulatorIn0Node / modulatorIn1Node) and
+    // stamps one output branch (modulatorOutBranch) combining them per
+    // modulatorFormat[k]:
+    //   IQ:         V_out = (V_in0 + j·V_in1) · exp(j·(2π·loHz - ω_sim)·t)
+    //   MAG_PHASE:  V_out = V_in0 · exp(j·V_in1) · exp(j·(2π·loHz - ω_sim)·t)
+    int[] modulatorIn0Node,
+    int[] modulatorIn1Node,
+    int[] modulatorOutBranch,
+    double[] modulatorLoHz,
+    ComplexPairFormat[] modulatorFormat
 ) {
 
     public enum MetadataMode { ACTIVE }
@@ -82,7 +105,13 @@ public record MnaNetwork(
     public int coilCount() { return coilBranch.length; }
     public int probeCount() { return probeNode.length; }
     public int mixerCount() { return mixerInNode.length; }
-    public int metadataCount() { return metadataSourceIndex.length; }
+    public int metadataCount() { return metadataSourceIndices.length; }
+    public int modulatorCount() { return modulatorOutBranch.length; }
+
+    /** True iff any component needs coupled-channel iteration (Mixer or Modulator). */
+    public boolean needsComplexIteration() {
+        return mixerCount() > 0 || modulatorCount() > 0;
+    }
 
     public enum VBranchKind {
         /** Imposed-voltage branch at a source's {@code out} port. */
@@ -91,9 +120,13 @@ public record MnaNetwork(
         COIL,
         /** Passive inductor (or shunt inductor): L-only branch, no EMF. */
         PASSIVE_INDUCTOR,
-        /** Mixer output: voltage source whose value is {@code V(in) · exp(-j·2π·loHz·t)}. */
-        MIXER_OUT,
+        /** Mixer first output — real-part (IQ) or magnitude (MAG_PHASE). */
+        MIXER_OUT_0,
+        /** Mixer second output — imag-part (IQ) or phase (MAG_PHASE). */
+        MIXER_OUT_1,
         /** Voltage-metadata output: 0/1 "active" flag driven by the referenced source's controls. */
-        METADATA_OUT
+        METADATA_OUT,
+        /** Modulator output: complex upconverted envelope of its two scalar inputs. */
+        MODULATOR_OUT
     }
 }

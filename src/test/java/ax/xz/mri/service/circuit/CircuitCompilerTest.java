@@ -51,7 +51,7 @@ class CircuitCompilerTest {
 
     @Test
     void switchCtlWiredToSourceOutBindsToFromSourceOut() {
-        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
+        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 0.001);
         var gate = voltageSource("src-gate", "Gate", AmplitudeKind.GATE, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
@@ -71,7 +71,7 @@ class CircuitCompilerTest {
 
     @Test
     void switchCtlWiredToVoltageMetadataBindsToFromSourceActive() {
-        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
+        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 0.001);
         // Metadata tap references the source by name (not by wire).
         var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
@@ -108,7 +108,7 @@ class CircuitCompilerTest {
 
     @Test
     void multiplexerExpandsIntoTwoOppositePolaritySwitchStamps() {
-        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.QUADRATURE, 0.001);
+        var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 0.001);
         var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
@@ -177,37 +177,41 @@ class CircuitCompilerTest {
     }
 
     @Test
-    void mixerStampsABranchAndExposesItsInAndLoHz() {
-        // The mixer is an electrical element — a buffered VCVS with a
-        // time-varying complex gain. The compiler should place a MIXER_OUT
-        // branch on its out-port and register its in-node + loHz for the
-        // solver to resolve each step.
+    void mixerStampsTwoOutputBranchesAndExposesInAndLoHz() {
+        // The mixer is an electrical element — a buffered VCVS that splits
+        // the frame-shifted complex input into two scalar outputs. The
+        // compiler should place a MIXER_OUT_0 and MIXER_OUT_1 branch on
+        // out0/out1 and register its in-node + loHz for the solver.
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_234);
-        var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX",
+        var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var probeQ = new CircuitComponent.Probe(new ComponentId("probe-q"), "Q",
             1.0, 0.0, Double.POSITIVE_INFINITY);
         var wires = List.of(
             wire("w1", src.id(), "out", coil.id(), "in"),
             wire("w2", coil.id(), "in", mixer.id(), "in"),
-            wire("w3", mixer.id(), "out", probe.id(), "in")
+            wire("w3", mixer.id(), "out0", probeI.id(), "in"),
+            wire("w4", mixer.id(), "out1", probeQ.id(), "in")
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(src, coil, mixer, probe), wires, CircuitLayout.empty());
+            List.of(src, coil, mixer, probeI, probeQ), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
         var mna = compiled.mna();
 
         assertEquals(1, mna.mixerCount());
         assertEquals(1_234, mna.mixerLoHz()[0], 1e-12);
-        int b = mna.mixerOutBranch()[0];
-        assertEquals(MnaNetwork.VBranchKind.MIXER_OUT, mna.branchKind()[b]);
-        // Mixer's in-node and the coil's node must be the same — they are
-        // wired together, and no virtual-alias trickery intervenes.
+        int b0 = mna.mixerOut0Branch()[0];
+        int b1 = mna.mixerOut1Branch()[0];
+        assertEquals(MnaNetwork.VBranchKind.MIXER_OUT_0, mna.branchKind()[b0]);
+        assertEquals(MnaNetwork.VBranchKind.MIXER_OUT_1, mna.branchKind()[b1]);
+        // Mixer's in-node matches the coil's node — they're wired together.
         int coilNode = mna.branchNodeA()[mna.coilBranch()[0]];
         assertEquals(coilNode, mna.mixerInNode()[0]);
-        // The probe's node and the mixer-out node are the same — they're
-        // wired together too.
-        assertEquals(mna.branchNodeA()[b], mna.probeNode()[0]);
+        // Each probe lands on its respective output node.
+        assertEquals(mna.branchNodeA()[b0], mna.probeNode()[0]);
+        assertEquals(mna.branchNodeA()[b1], mna.probeNode()[1]);
     }
 
     private static CircuitComponent.VoltageSource voltageSource(

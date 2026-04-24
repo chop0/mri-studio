@@ -28,12 +28,15 @@ public record CompiledCircuit(
     List<CompiledCoil> coils,
     List<CompiledProbe> probes,
     MnaNetwork mna,
-    int totalChannelCount
+    int totalChannelCount,
+    int[] rfEnvelopeChannelOffsets
 ) {
     public CompiledCircuit {
         sources = List.copyOf(sources == null ? List.of() : sources);
         coils = List.copyOf(coils == null ? List.of() : coils);
         probes = List.copyOf(probes == null ? List.of() : probes);
+        rfEnvelopeChannelOffsets = rfEnvelopeChannelOffsets == null
+            ? new int[0] : rfEnvelopeChannelOffsets.clone();
     }
 
     /**

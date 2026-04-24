@@ -152,12 +152,19 @@ public final class TestBlochDataFactory {
         var gxEfId = addEigenfield(repo, "ef-gx", "return Vec3.of(0, 0, x);");
         var gzEfId = addEigenfield(repo, "ef-gz", "return Vec3.of(0, 0, z);");
 
-        var rfSrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf"),
-            "RF", AmplitudeKind.QUADRATURE, 0, 0, 1, 0);
+        // RF drive is two REAL envelopes fed into a Modulator (loHz=0 —
+        // keep the carrier out of the test so optimiser math stays simple;
+        // the Modulator still exercises the coupled I/Q stamp path).
+        var rfISrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf-i"),
+            "RF I", AmplitudeKind.REAL, 0, 0, 1, 0);
+        var rfQSrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf-q"),
+            "RF Q", AmplitudeKind.REAL, 0, 0, 1, 0);
         var gxSrc = new CircuitComponent.VoltageSource(new ComponentId("src-gx"),
             "Gx", AmplitudeKind.REAL, 0, -1, 1, 0);
         var gzSrc = new CircuitComponent.VoltageSource(new ComponentId("src-gz"),
             "Gz", AmplitudeKind.REAL, 0, -1, 1, 0);
+        var rfModulator = new CircuitComponent.Modulator(new ComponentId("mod-rf"),
+            "RF Mod", 0);
         var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", rfEfId, 0, 0);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", gxEfId, 0, 0);
         var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", gzEfId, 0, 0);
@@ -165,13 +172,15 @@ public final class TestBlochDataFactory {
             "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
 
         var wires = List.of(
-            new Wire("w-rf", new ComponentTerminal(rfSrc.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),
+            new Wire("w-rfi", new ComponentTerminal(rfISrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in0")),
+            new Wire("w-rfq", new ComponentTerminal(rfQSrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in1")),
+            new Wire("w-rf", new ComponentTerminal(rfModulator.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),
             new Wire("w-gx", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in")),
             new Wire("w-gz", new ComponentTerminal(gzSrc.id(), "out"), new ComponentTerminal(gzCoil.id(), "in")),
             new Wire("w-probe", new ComponentTerminal(probe.id(), "in"), new ComponentTerminal(rfCoil.id(), "in"))
         );
         var doc = new CircuitDocument(new ProjectNodeId("circuit-test"), "Test",
-            List.of(rfSrc, gxSrc, gzSrc, rfCoil, gxCoil, gzCoil, probe),
+            List.of(rfISrc, rfQSrc, gxSrc, gzSrc, rfModulator, rfCoil, gxCoil, gzCoil, probe),
             wires, CircuitLayout.empty());
 
         return CircuitCompiler.compile(doc, repo, rMm, zMm);

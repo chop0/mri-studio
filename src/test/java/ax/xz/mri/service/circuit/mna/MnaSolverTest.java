@@ -42,14 +42,29 @@ class MnaSolverTest {
     }
 
     @Test
-    void quadratureSourceContributesIAndQIndependently() {
-        var compiled = compileSingleDriveCircuit(AmplitudeKind.QUADRATURE, /* coilR */ 1.0);
+    void modulatorCombinesTwoRealSourcesIntoIAndQ() {
+        // Two REAL sources wired to mod.in0/in1 at loHz=0 and omegaSim=0
+        // should land on the coil as (V_in0 + j·V_in1) directly.
+        var repo = ProjectRepository.untitled();
+        var efId = addEigenfield(repo, "ef");
+        var rfI = voltageSource("src-i", "I", AmplitudeKind.REAL, 1.0);
+        var rfQ = voltageSource("src-q", "Q", AmplitudeKind.REAL, 1.0);
+        var mod = new CircuitComponent.Modulator(new ComponentId("mod"), "Mod", 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1.0);
+        var wires = List.of(
+            wire("w-i-mod", rfI.id(), "out", mod.id(), "in0"),
+            wire("w-q-mod", rfQ.id(), "out", mod.id(), "in1"),
+            wire("w-mod-coil", mod.id(), "out", coil.id(), "in")
+        );
+        var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(rfI, rfQ, mod, coil), wires, CircuitLayout.empty());
+        var compiled = CircuitCompiler.compile(doc, repo, R, Z);
         var solver = new MnaSolver(compiled.mna(), compiled);
         var out = new MnaSolver.StepOut(1, 1);
 
         solver.step(new double[]{3.0, 4.0}, null, null, 1e-6, 0, 0, out);
-        assertEquals(3.0, out.coilIReal()[0], 1e-9);
-        assertEquals(4.0, out.coilIImag()[0], 1e-9);
+        assertEquals(3.0, out.coilIReal()[0], 1e-9, "in0 feeds the real channel");
+        assertEquals(4.0, out.coilIImag()[0], 1e-9, "in1 feeds the imag channel");
     }
 
     @Test
@@ -129,73 +144,75 @@ class MnaSolverTest {
     }
 
     @Test
-    void mixerBuffersItsInputAndFrameShiftsToOutput() {
-        // source (V=2) → coil (so the in-node has a well-defined voltage)
-        // coil.in → mixer.in
-        // mixer.out → shunt-to-ground load
-        // probe → mixer.out (observer)
-        // With loHz = 0, the mixer should be a unity buffer: V(out) = V(in)
-        // every step. The load on V(out) must NOT change V(in) (buffered).
+    void mixerBuffersItsInputAndSplitsIntoIQ() {
+        // source (V=2) → coil → mixer.in; mixer.out0 → (load + I-probe);
+        // mixer.out1 → Q-probe. With loHz=0 and IQ format the mixer is a
+        // unity buffer: V_in is real-valued 2, so out0 = 2 and out1 = 0.
+        // The load on out0 must NOT affect V(in) (buffered property).
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 2.0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 0);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 0);
         var load = new CircuitComponent.ShuntResistor(new ComponentId("load"), "Rp", 10);
-        var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX",
+        var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var probeQ = new CircuitComponent.Probe(new ComponentId("probe-q"), "Q",
             1.0, 0.0, Double.POSITIVE_INFINITY);
         var wires = List.of(
             wire("w1", src.id(), "out", coil.id(), "in"),
             wire("w2", coil.id(), "in", mixer.id(), "in"),
-            wire("w3", mixer.id(), "out", load.id(), "in"),
-            wire("w4", mixer.id(), "out", probe.id(), "in")
+            wire("w3", mixer.id(), "out0", load.id(), "in"),
+            wire("w4", mixer.id(), "out0", probeI.id(), "in"),
+            wire("w5", mixer.id(), "out1", probeQ.id(), "in")
         );
         var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(src, coil, mixer, load, probe), wires, CircuitLayout.empty());
+            List.of(src, coil, mixer, load, probeI, probeQ), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(doc, repo, R, Z);
         var solver = new MnaSolver(compiled.mna(), compiled);
-        var out = new MnaSolver.StepOut(1, 1);
+        var out = new MnaSolver.StepOut(1, 2);
 
         solver.step(new double[]{2.0}, null, null, 1e-6, 0, 0, out);
-        // Mixer output equals input (loHz=0 ⇒ unity buffer), so probe reads V=2.
-        assertEquals(2.0, out.probeVReal()[0], 1e-6,
-            "unity-LO mixer should pass its input straight through");
-        assertEquals(0.0, out.probeVImag()[0], 1e-6);
+        assertEquals(2.0, out.probeVReal()[0], 1e-6, "I-probe sees the real part (2)");
+        assertEquals(0.0, out.probeVReal()[1], 1e-6, "Q-probe sees the imag part (0)");
         // The coil current must still be V/R = 2/1 = 2 A regardless of the
-        // load on the mixer's output — this is the "buffered" property.
+        // load on the mixer's out0 — this is the "buffered" property.
         assertEquals(2.0, out.coilIReal()[0], 1e-6,
-            "load on mixer.out must not draw current through mixer.in");
+            "load on mixer.out0 must not draw current through mixer.in");
     }
 
     @Test
     void mixerRotationShiftsOutputFrameByNegativeLo() {
-        // Mixer with loHz = 1 MHz applies exp(-j·2π·1e6·t). Over a fixed dt
-        // after a single step, the output phase should be −2π·1e6·t relative
-        // to the input (which is a constant 1 V from a REAL source).
+        // Mixer with loHz = 1 MHz applies exp(-j·2π·1e6·t). The shifted
+        // complex envelope is cos(θ) + j·(-sin(θ)), so IQ format puts
+        // cos(θ) on out0 and -sin(θ) on out1.
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1.0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 0);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_000_000);
-        var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX",
+        var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var probeQ = new CircuitComponent.Probe(new ComponentId("probe-q"), "Q",
             1.0, 0.0, Double.POSITIVE_INFINITY);
         var wires = List.of(
             wire("w1", src.id(), "out", coil.id(), "in"),
             wire("w2", coil.id(), "in", mixer.id(), "in"),
-            wire("w3", mixer.id(), "out", probe.id(), "in")
+            wire("w3", mixer.id(), "out0", probeI.id(), "in"),
+            wire("w4", mixer.id(), "out1", probeQ.id(), "in")
         );
         var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
-            List.of(src, coil, mixer, probe), wires, CircuitLayout.empty());
+            List.of(src, coil, mixer, probeI, probeQ), wires, CircuitLayout.empty());
         var compiled = CircuitCompiler.compile(doc, repo, R, Z);
         var solver = new MnaSolver(compiled.mna(), compiled);
-        var out = new MnaSolver.StepOut(1, 1);
+        var out = new MnaSolver.StepOut(1, 2);
 
         double dt = 1e-6;
         double tSeconds = 2 * dt;     // pick a moment where the rotation is non-zero.
         solver.step(new double[]{1.0}, null, null, dt, tSeconds, 0, out);
         double theta = 2 * Math.PI * 1_000_000 * tSeconds;
-        assertEquals(Math.cos(theta), out.probeVReal()[0], 1e-6);
-        assertEquals(-Math.sin(theta), out.probeVImag()[0], 1e-6);
+        assertEquals(Math.cos(theta), out.probeVReal()[0], 1e-6, "I = Re(e^{-jθ}) = cos θ");
+        assertEquals(-Math.sin(theta), out.probeVReal()[1], 1e-6, "Q = Im(e^{-jθ}) = -sin θ");
     }
 
     // ───────── Helpers ─────────

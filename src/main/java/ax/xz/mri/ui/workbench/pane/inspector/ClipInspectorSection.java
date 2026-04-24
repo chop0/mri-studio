@@ -543,12 +543,26 @@ public final class ClipInspectorSection {
         return row;
     }
 
-    /** True if the track's target source is a QUADRATURE (RF) channel in the active circuit. */
+    /**
+     * True if the track's target source is referenced as an I or Q envelope
+     * by any {@link ax.xz.mri.model.circuit.CircuitComponent.Modulator} in
+     * the active circuit — i.e. the track ultimately feeds an RF drive.
+     */
     private boolean isRfTrack(String trackId) {
         var track = session.findTrack(trackId);
         if (track == null) return false;
         var src = session.sourceForChannel(track.outputChannel());
-        return src != null && src.kind() == AmplitudeKind.QUADRATURE;
+        if (src == null) return false;
+        var circuit = session.activeCircuit();
+        if (circuit == null) return false;
+        for (var comp : circuit.components()) {
+            if (!(comp instanceof ax.xz.mri.model.circuit.CircuitComponent.Modulator m)) continue;
+            var i = ax.xz.mri.model.circuit.CircuitComponent.Modulator.inputSource(m, "in0", circuit);
+            var q = ax.xz.mri.model.circuit.CircuitComponent.Modulator.inputSource(m, "in1", circuit);
+            if (i != null && src.name().equals(i.name())) return true;
+            if (q != null && src.name().equals(q.name())) return true;
+        }
+        return false;
     }
 
     private static String formatMag(double mx, double my, double mz) {

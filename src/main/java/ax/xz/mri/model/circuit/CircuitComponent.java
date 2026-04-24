@@ -1,6 +1,7 @@
 package ax.xz.mri.model.circuit;
 
 import ax.xz.mri.model.circuit.compile.CircuitStampContext;
+import ax.xz.mri.model.circuit.compile.ComplexPairFormat;
 import ax.xz.mri.model.circuit.compile.SwitchParams;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
@@ -53,6 +54,7 @@ import java.util.List;
     @JsonSubTypes.Type(value = CircuitComponent.ShuntInductor.class, name = "shunt_inductor"),
     @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer"),
     @JsonSubTypes.Type(value = CircuitComponent.Mixer.class, name = "mixer"),
+    @JsonSubTypes.Type(value = CircuitComponent.Modulator.class, name = "modulator"),
     @JsonSubTypes.Type(value = CircuitComponent.VoltageMetadata.class, name = "voltage_metadata")
 })
 public sealed interface CircuitComponent {
@@ -490,54 +492,151 @@ public sealed interface CircuitComponent {
         public ShuntInductor withInductanceHenry(double v) { return new ShuntInductor(id, name, v); }
     }
 
-    // ─── Mixer (buffered I/Q frame shift) ────────────────────────────────────
+    // ─── Mixer (buffered demodulator) ────────────────────────────────────────
 
     /**
      * Complex-baseband mixer. Senses the voltage at {@code in} with infinite
-     * input impedance and drives {@code out} with a low-impedance copy
-     * rotated by {@code exp(-j·2π·loHz·t)} in the simulator's rotating
-     * frame.
+     * input impedance, frame-shifts it by {@code exp(-j·2π·loHz·t)} in the
+     * simulator's rotating frame, and decomposes the result onto two
+     * buffered scalar outputs:
      *
-     * <p>This is a true voltage-controlled voltage source — the output can
-     * drive arbitrary loads (probes, filters, another mixer's input) without
-     * affecting the input node. Setting {@code loHz = 0} makes it an
-     * unity-gain buffer; {@code loHz > 0} shifts the output envelope down
-     * by that many Hz relative to the input.
+     * <ul>
+     *   <li>{@link ComplexPairFormat#IQ}: {@code out0} = I (real part),
+     *       {@code out1} = Q (imaginary part).</li>
+     *   <li>{@link ComplexPairFormat#MAG_PHASE}: {@code out0} =
+     *       magnitude, {@code out1} = phase in radians.</li>
+     * </ul>
      *
-     * <p>Name is deliberately "Mixer", not "Mixer", because the same
-     * stamp handles up-mixing when a negative {@code loHz} is used or when
-     * the mixer's input and output are swapped in schematic intent.
+     * <p>Both outputs are true voltage-controlled voltage sources — they
+     * can drive arbitrary loads (probes, filters) without affecting
+     * {@code in}. Mirror of {@link Modulator}, which takes two scalar
+     * inputs and upconverts into a single complex output.
      */
     record Mixer(
         ComponentId id,
         String name,
-        @JsonProperty("lo_hz") double loHz
+        @JsonProperty("lo_hz") double loHz,
+        ComplexPairFormat format
     ) implements CircuitComponent {
         public Mixer {
             if (id == null) throw new IllegalArgumentException("Mixer.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Mixer.name must be non-blank");
             if (!Double.isFinite(loHz)) throw new IllegalArgumentException("Mixer.loHz must be finite");
+            if (format == null) throw new IllegalArgumentException("Mixer.format must not be null");
         }
 
-        @Override public List<String> ports() { return List.of("in", "out"); }
+        /** Convenience constructor defaulting to {@link ComplexPairFormat#IQ}. */
+        public Mixer(ComponentId id, String name, double loHz) {
+            this(id, name, loHz, ComplexPairFormat.IQ);
+        }
+
+        @Override public List<String> ports() { return List.of("in", "out0", "out1"); }
 
         @Override
-        public Mixer withName(String newName) {
-            return new Mixer(id, newName, loHz);
-        }
+        public Mixer withName(String newName) { return new Mixer(id, newName, loHz, format); }
 
         @Override
-        public Mixer withId(ComponentId newId) {
-            return new Mixer(newId, name, loHz);
-        }
+        public Mixer withId(ComponentId newId) { return new Mixer(newId, name, loHz, format); }
 
         @Override
         public void stamp(CircuitStampContext ctx) {
-            ctx.stampMixer(ctx.port("in"), ctx.port("out"), loHz);
+            ctx.stampMixer(ctx.port("in"), ctx.port("out0"), ctx.port("out1"), loHz, format);
         }
 
-        public Mixer withLoHz(double v) {
-            return new Mixer(id, name, v);
+        public Mixer withLoHz(double v) { return new Mixer(id, name, v, format); }
+        public Mixer withFormat(ComplexPairFormat v) { return new Mixer(id, name, loHz, v); }
+    }
+
+    // ─── Modulator (upconverter) ─────────────────────────────────────────────
+
+    /**
+     * Quadrature up-mixer. Reads two scalar node voltages from its
+     * {@code in0} / {@code in1} ports — wired from any two
+     * {@link VoltageSource} outputs — and emits the combined complex
+     * phasor upconverted to {@code loHz} on a buffered {@code out}
+     * node:
+     *
+     * <ul>
+     *   <li>{@link ComplexPairFormat#IQ}: {@code V_out = (V_in0 + j·V_in1)}
+     *       rotated by {@code exp(j·(2π·loHz − ω_sim)·t)}.</li>
+     *   <li>{@link ComplexPairFormat#MAG_PHASE}: {@code V_out =
+     *       V_in0 · exp(j·V_in1)} rotated by the same factor.</li>
+     * </ul>
+     *
+     * <p>Symmetric mirror of {@link Mixer}: the mixer takes a complex
+     * input and splits it into two scalars, the modulator takes two
+     * scalars and combines them into a complex output.
+     */
+    record Modulator(
+        ComponentId id,
+        String name,
+        @JsonProperty("lo_hz") double loHz,
+        ComplexPairFormat format
+    ) implements CircuitComponent {
+        public Modulator {
+            if (id == null) throw new IllegalArgumentException("Modulator.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("Modulator.name must be non-blank");
+            if (!Double.isFinite(loHz)) throw new IllegalArgumentException("Modulator.loHz must be finite");
+            if (format == null) throw new IllegalArgumentException("Modulator.format must not be null");
+        }
+
+        /** Convenience constructor defaulting to {@link ComplexPairFormat#IQ}. */
+        public Modulator(ComponentId id, String name, double loHz) {
+            this(id, name, loHz, ComplexPairFormat.IQ);
+        }
+
+        @Override public List<String> ports() { return List.of("in0", "in1", "out"); }
+
+        @Override
+        public Modulator withName(String newName) { return new Modulator(id, newName, loHz, format); }
+
+        @Override
+        public Modulator withId(ComponentId newId) { return new Modulator(newId, name, loHz, format); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampModulator(ctx.port("in0"), ctx.port("in1"), ctx.port("out"), loHz, format);
+        }
+
+        public Modulator withLoHz(double v) { return new Modulator(id, name, v, format); }
+        public Modulator withFormat(ComplexPairFormat v) { return new Modulator(id, name, loHz, v); }
+
+        /**
+         * Walk the document's wires from {@code port} ("in0" or "in1") back
+         * to the first {@link VoltageSource} whose {@code out} is on the
+         * same electrical net. Returns null if there's no source at the
+         * other end (or no wire).
+         *
+         * <p>Lets non-solver consumers — {@code ClipBaker}, starter
+         * libraries, inspector code — answer "which source feeds this
+         * modulator input?" without reimplementing the union-find.
+         */
+        public static VoltageSource inputSource(Modulator modulator, String port,
+                                                 CircuitDocument doc) {
+            if (doc == null) return null;
+            var target = new ComponentTerminal(modulator.id(), port);
+            var net = collectNet(doc, target);
+            for (var terminal : net) {
+                if (!"out".equals(terminal.port())) continue;
+                var comp = doc.component(terminal.componentId()).orElse(null);
+                if (comp instanceof VoltageSource src) return src;
+            }
+            return null;
+        }
+
+        private static java.util.Set<ComponentTerminal> collectNet(CircuitDocument doc,
+                                                                    ComponentTerminal seed) {
+            var net = new java.util.HashSet<ComponentTerminal>();
+            net.add(seed);
+            boolean grew;
+            do {
+                grew = false;
+                for (var w : doc.wires()) {
+                    if (net.contains(w.from()) && net.add(w.to())) grew = true;
+                    if (net.contains(w.to()) && net.add(w.from())) grew = true;
+                }
+            } while (grew);
+            return net;
         }
     }
 

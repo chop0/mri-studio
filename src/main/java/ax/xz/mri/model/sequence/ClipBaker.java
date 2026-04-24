@@ -18,9 +18,10 @@ import java.util.List;
  * {@link PulseStep#controls()} is sized to the circuit's total channel count
  * in voltage-source declaration order.
  *
- * <p>{@link PulseStep#rfGate()} is an optimisation hint derived from the
- * running magnitude of every {@link AmplitudeKind#QUADRATURE} source. The
- * simulator's T/R gating comes from explicit
+ * <p>{@link PulseStep#rfGate()} is an optimisation hint derived from any
+ * {@link CircuitComponent.Modulator Modulator} block's referenced I/Q
+ * sources — a clip is "on" when any I or Q channel it touches is non-zero.
+ * The simulator's T/R gating comes from explicit
  * {@link CircuitComponent.SwitchComponent Switch} components in the circuit.
  */
 public final class ClipBaker {
@@ -47,17 +48,35 @@ public final class ClipBaker {
         for (var src : circuit.voltageSources()) totalChannels += src.channelCount();
 
         var channelSlots = new SequenceChannel[totalChannels];
-        var quadratureSlotIndices = new ArrayList<Integer>();
         int cursor = 0;
         for (var src : circuit.voltageSources()) {
             int count = src.channelCount();
             for (int sub = 0; sub < count; sub++) {
                 channelSlots[cursor + sub] = SequenceChannel.of(src.name(), sub);
-                if (src.kind() == AmplitudeKind.QUADRATURE) {
-                    quadratureSlotIndices.add(cursor + sub);
-                }
             }
             cursor += count;
+        }
+
+        // Gather control-indices for every source whose "out" is wired to a
+        // Modulator's in0 or in1 port. Those are the "RF envelope" slots
+        // whose non-zero activity drives the rfGate hint.
+        var rfSlotIndices = new ArrayList<Integer>();
+        var rfSourceNames = new java.util.HashSet<String>();
+        for (var comp : circuit.components()) {
+            if (!(comp instanceof CircuitComponent.Modulator m)) continue;
+            var iSrc = CircuitComponent.Modulator.inputSource(m, "in0", circuit);
+            var qSrc = CircuitComponent.Modulator.inputSource(m, "in1", circuit);
+            if (iSrc != null) rfSourceNames.add(iSrc.name());
+            if (qSrc != null) rfSourceNames.add(qSrc.name());
+        }
+        int offset = 0;
+        for (var src : circuit.voltageSources()) {
+            if (rfSourceNames.contains(src.name())) {
+                for (int sub = 0; sub < src.channelCount(); sub++) {
+                    rfSlotIndices.add(offset + sub);
+                }
+            }
+            offset += src.channelCount();
         }
 
         var steps = new ArrayList<PulseStep>(totalSteps);
@@ -68,7 +87,7 @@ public final class ClipBaker {
                 controls[k] = ClipEvaluator.evaluateChannel(clips, tracksById, channelSlots[k], t);
             }
             double rfMagSq = 0;
-            for (int qIdx : quadratureSlotIndices) {
+            for (int qIdx : rfSlotIndices) {
                 double v = controls[qIdx];
                 rfMagSq += v * v;
             }
@@ -87,9 +106,6 @@ public final class ClipBaker {
 
     /** Human-friendly track name for a voltage source's channel. */
     public static String defaultTrackName(CircuitComponent.VoltageSource src, int subIndex) {
-        if (src.kind() == AmplitudeKind.QUADRATURE) {
-            return src.name() + " \u00b7 " + (subIndex == 0 ? "I" : "Q");
-        }
         return src.name();
     }
 

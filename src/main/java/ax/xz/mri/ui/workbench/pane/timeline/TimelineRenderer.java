@@ -154,11 +154,12 @@ public final class TimelineRenderer {
                 new double[]{btnY, btnY, btnY + COLLAPSE_BTN_SIZE}, 3);
         }
 
-        // Kind badge (I / Q / R / G)
+        // Kind badge (R / G). Every source is single-channel post-QUADRATURE;
+        // quadrature drives are composed from two REAL sources + a Modulator
+        // block, so sub-index distinctions live on the Modulator, not here.
         String badge = null;
         if (field instanceof ax.xz.mri.model.circuit.CircuitComponent.VoltageSource src) {
-            if (src.kind() == AmplitudeKind.QUADRATURE) badge = track.outputChannel().subIndex() == 0 ? "I" : "Q";
-            else if (src.kind() == AmplitudeKind.REAL) badge = "R";
+            if (src.kind() == AmplitudeKind.REAL) badge = "R";
             else if (src.kind() == AmplitudeKind.GATE) badge = "G";
         }
         if (badge != null) {

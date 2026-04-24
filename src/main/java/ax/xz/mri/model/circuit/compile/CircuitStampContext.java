@@ -57,14 +57,25 @@ public interface CircuitStampContext {
     void stampSwitch(Node a, Node b, SwitchParams params);
 
     /**
-     * Complex-baseband mixer: a buffered voltage source at {@code out}
-     * whose value tracks {@code V(in) · exp(-j·2π·loHz·t)} in the
-     * simulator's rotating frame. Ideal input impedance (zero input
-     * current), ideal output impedance (zero Thevenin). The MNA resolves
-     * the output each step by iterating until {@code V_in} stabilises —
-     * one iteration suffices for DAG topologies.
+     * Complex-baseband mixer. Taps {@code in} with infinite impedance,
+     * frame-shifts by {@code exp(-j·2π·loHz·t)}, and stamps two buffered
+     * scalar outputs per {@code format}: IQ → (real, imag) or
+     * MAG_PHASE → (|·|, arg). The MNA resolves the output each step by
+     * iterating until {@code V_in} stabilises — one iteration suffices
+     * for DAG topologies.
      */
-    void stampMixer(Node in, Node out, double loHz);
+    void stampMixer(Node in, Node out0, Node out1, double loHz,
+                    ComplexPairFormat format);
+
+    /**
+     * Quadrature up-converter. Reads two scalar node voltages from
+     * {@code in0} / {@code in1}, combines them per {@code format}
+     * (IQ → in0 + j·in1; MAG_PHASE → in0·exp(j·in1)), and stamps one
+     * buffered output at {@code outPort} whose per-step value is the
+     * combined envelope times {@code exp(j·(2π·loHz - ω_sim)·t)}.
+     */
+    void stampModulator(Node in0, Node in1, Node out,
+                        double loHz, ComplexPairFormat format);
 
     // ───── First-class entities ─────
 

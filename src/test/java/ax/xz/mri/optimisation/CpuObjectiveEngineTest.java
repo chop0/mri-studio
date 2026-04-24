@@ -28,8 +28,12 @@ class CpuObjectiveEngineTest {
 
         var evaluation = engine.evaluate(problem, segments);
 
-        // value = rfPower / rfPowerRef where rfPower = B1_MAX² · 1.0 and rfPowerRef = 1.
-        double expected = OptimisationHardwareLimits.B1_MAX * OptimisationHardwareLimits.B1_MAX;
+        // value = rfPower / rfPowerRef.
+        //   rfPower    = B1_MAX² (only controls[0] is non-zero) · 1 step · dt=1.
+        //   rfPowerRef = (# of RF envelope channels) · totalDt = 2 · 1 = 2
+        //                because the geometry has two REAL sources (RF I, RF Q)
+        //                feeding a Modulator.
+        double expected = OptimisationHardwareLimits.B1_MAX * OptimisationHardwareLimits.B1_MAX / 2.0;
         assertEquals(expected, evaluation.value(), 1e-12);
         assertEquals(2, evaluation.signalTrace().points().size());
     }

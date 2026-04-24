@@ -8,21 +8,13 @@ import javafx.scene.paint.Color;
 /**
  * Single source of truth for channel colours in the DAW editor. Each colour is
  * deterministic from the channel's identity — so two clips on the same
- * channel always share a hue, different fields remain visually distinct, and
- * QUADRATURE sub-channels (I/Q) share their field's colour.
+ * channel always share a hue, and different sources remain visually distinct.
  *
- * <p>Colours are chosen purely from the active config's field layout; there
+ * <p>Colours are chosen purely from the active config's source list; there
  * are no hard-coded special-case channels.
  */
 public final class ChannelPalette {
     private ChannelPalette() {}
-
-    private static final Color[] QUADRATURE_FAMILY = {
-        Color.web("#1e64c8"), // strong blue
-        Color.web("#7c3aed"), // indigo / violet
-        Color.web("#0e7490"), // teal
-        Color.web("#4338ca"), // cobalt
-    };
 
     private static final Color[] REAL_FAMILY = {
         Color.web("#15803d"), // forest green
@@ -49,9 +41,7 @@ public final class ChannelPalette {
     public static Color colourFor(AmplitudeKind kind, String fieldName) {
         if (kind == null) return UNKNOWN;
         return switch (kind) {
-            case QUADRATURE -> pick(QUADRATURE_FAMILY, fieldName);
-            case REAL -> pick(REAL_FAMILY, fieldName);
-            case STATIC -> pick(REAL_FAMILY, fieldName); // unreachable in practice (no channels)
+            case REAL, STATIC -> pick(REAL_FAMILY, fieldName);
             case GATE -> GATE;
         };
     }

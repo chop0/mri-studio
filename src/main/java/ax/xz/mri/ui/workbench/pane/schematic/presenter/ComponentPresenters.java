@@ -41,6 +41,7 @@ public final class ComponentPresenters {
             case CircuitComponent.ShuntInductor sl -> new ShuntInductorPresenter(sl);
             case CircuitComponent.IdealTransformer t -> new IdealTransformerPresenter(t);
             case CircuitComponent.Mixer dc -> new MixerPresenter(dc);
+            case CircuitComponent.Modulator mod -> new ModulatorPresenter(mod);
             case CircuitComponent.VoltageMetadata meta -> new VoltageMetadataPresenter(meta);
         };
     }
@@ -83,9 +84,12 @@ public final class ComponentPresenters {
             new ComponentPaletteEntry("Coils + probes", "Probe", "Voltage measurement",
                 () -> new CircuitComponent.Probe(newId("probe"), "Probe",
                     1, 0, Double.POSITIVE_INFINITY)),
-            new ComponentPaletteEntry("Coils + probes", "Mixer",
-                "I/Q mixer: rotates its tap by exp(-j\u00b72\u03C0\u00b7loHz\u00b7t)",
-                () -> new CircuitComponent.Mixer(newId("dc"), "DC", 0)),
+            new ComponentPaletteEntry("Coils + probes", "Mixer (downconvert)",
+                "Complex → (I, Q) or (mag, phase) at the chosen LO",
+                () -> new CircuitComponent.Mixer(newId("dc"), "DC " + shortId(), 0)),
+            new ComponentPaletteEntry("Coils + probes", "Modulator (upconvert)",
+                "(I, Q) or (mag, phase) → complex upconverted envelope",
+                () -> new CircuitComponent.Modulator(newId("mod"), "Mod " + shortId(), 0)),
 
             // Series passives
             new ComponentPaletteEntry("Series passives", "Resistor (series)",

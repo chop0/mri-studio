@@ -2,7 +2,6 @@ package ax.xz.mri.model.sequence;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
-import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.ui.wizard.WizardStep;
 
@@ -93,18 +92,27 @@ public final class SequenceStarterLibrary {
         if (config == null || circuit == null) {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
-        var rfSrc = firstQuadratureSource(circuit);
-        if (rfSrc == null) {
+        // The RF drive is a pair of REAL sources fed into a Modulator. Walk
+        // the first Modulator, look up its I and Q source names, and find
+        // the tracks that route to them — those are the two timelines a
+        // Carr-Purcell sequence drops 90°/180° pulses onto.
+        var modulator = firstModulator(circuit);
+        if (modulator == null) {
+            return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
+        }
+        var iSrc = CircuitComponent.Modulator.inputSource(modulator, "in0", circuit);
+        var qSrc = CircuitComponent.Modulator.inputSource(modulator, "in1", circuit);
+        if (iSrc == null || qSrc == null) {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
 
-        String iTrackId = trackIdFor(tracks, rfSrc.name(), 0);
-        String qTrackId = trackIdFor(tracks, rfSrc.name(), 1);
+        String iTrackId = trackIdFor(tracks, iSrc.name(), 0);
+        String qTrackId = trackIdFor(tracks, qSrc.name(), 0);
         if (iTrackId == null || qTrackId == null) {
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
 
-        double b1Max = Math.abs(rfSrc.maxAmplitude());
+        double b1Max = Math.max(Math.abs(iSrc.maxAmplitude()), Math.abs(qSrc.maxAmplitude()));
         double gamma = Math.abs(config.gamma());
         double t90 = computeT90Micros(gamma, b1Max);
         double t180 = 2 * t90;
@@ -140,9 +148,17 @@ public final class SequenceStarterLibrary {
         return target;
     }
 
-    private static CircuitComponent.VoltageSource firstQuadratureSource(CircuitDocument circuit) {
+    private static CircuitComponent.Modulator firstModulator(CircuitDocument circuit) {
+        for (var c : circuit.components()) {
+            if (c instanceof CircuitComponent.Modulator m) return m;
+        }
+        return null;
+    }
+
+    private static CircuitComponent.VoltageSource findSourceByName(CircuitDocument circuit, String name) {
+        if (name == null) return null;
         for (var src : circuit.voltageSources()) {
-            if (src.kind() == AmplitudeKind.QUADRATURE) return src;
+            if (name.equals(src.name())) return src;
         }
         return null;
     }

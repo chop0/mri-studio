@@ -17,20 +17,21 @@ import static ax.xz.mri.ui.workbench.pane.schematic.presenter.SchematicInk.MIXER
 import static ax.xz.mri.ui.workbench.pane.schematic.presenter.SchematicInk.drawLabel;
 
 /**
- * I/Q downconverting mixer. Single complex input, two scalar outputs
- * decomposed per {@link ComplexPairFormat}: IQ (I + Q) or MAG_PHASE
- * (magnitude + phase). Mirror of {@link ModulatorPresenter}.
+ * Quadrature up-mixer. Two scalar inputs on the left (I/Q or mag/phase
+ * per {@link ComplexPairFormat}) combine into a single complex output
+ * on the right, upconverted to {@code loHz}. Mirror of
+ * {@link MixerPresenter}.
  */
-final class MixerPresenter implements ComponentPresenter {
+final class ModulatorPresenter implements ComponentPresenter {
     private static final ComponentGeometry GEOM = new ComponentGeometry(100, 90, List.of(
-        new ComponentGeometry.Terminal("in", -50, 0),
-        new ComponentGeometry.Terminal("out0", 50, -20),
-        new ComponentGeometry.Terminal("out1", 50, 20)
+        new ComponentGeometry.Terminal("in0", -50, -20),
+        new ComponentGeometry.Terminal("in1", -50, 20),
+        new ComponentGeometry.Terminal("out", 50, 0)
     ));
 
-    private final CircuitComponent.Mixer dc;
+    private final CircuitComponent.Modulator m;
 
-    MixerPresenter(CircuitComponent.Mixer dc) { this.dc = dc; }
+    ModulatorPresenter(CircuitComponent.Modulator m) { this.m = m; }
 
     @Override public ComponentGeometry geometry() { return GEOM; }
 
@@ -38,9 +39,9 @@ final class MixerPresenter implements ComponentPresenter {
     public void drawBody(GraphicsContext g) {
         g.setStroke(INK);
         g.setLineWidth(1.4);
-        g.strokeLine(-50, 0, -22, 0);
-        g.strokeLine(22, -8, 50, -20);
-        g.strokeLine(22, 8, 50, 20);
+        g.strokeLine(-50, -20, -22, -8);
+        g.strokeLine(-50, 20, -22, 8);
+        g.strokeLine(22, 0, 50, 0);
         g.setFill(Color.WHITE);
         g.fillOval(-22, -22, 44, 44);
         g.setStroke(MIXER_ACCENT);
@@ -48,19 +49,22 @@ final class MixerPresenter implements ComponentPresenter {
         g.strokeOval(-22, -22, 44, 44);
         g.strokeLine(-11, -11, 11, 11);
         g.strokeLine(11, -11, -11, 11);
+        // LO tick on TOP (vs bottom on the Mixer) to convey "carrier
+        // being added in" rather than "carrier being stripped out".
         g.setStroke(MIXER_ACCENT.deriveColor(0, 1, 1, 0.6));
         g.setLineDashes(3, 2);
-        g.strokeLine(0, 22, 0, 34);
+        g.strokeLine(0, -22, 0, -34);
         g.setLineDashes();
-        // Output labels inside the schematic — show which port is which at a glance.
+        // Input labels inside the block — symmetric mirror of Mixer's
+        // output labels.
         g.setFill(MIXER_ACCENT);
         g.setFont(Font.font("System", 9));
-        g.setTextAlign(TextAlignment.LEFT);
-        String[] outLabels = labelsFor(dc.format());
-        g.fillText(outLabels[0], 28, -17);
-        g.fillText(outLabels[1], 28, 25);
-        drawLabel(g, dc.name(), INK, 0, -34);
-        drawLabel(g, formatLo(dc.loHz()), MIXER_ACCENT, 0, 42);
+        g.setTextAlign(TextAlignment.RIGHT);
+        String[] inLabels = labelsFor(m.format());
+        g.fillText(inLabels[0], -28, -17);
+        g.fillText(inLabels[1], -28, 25);
+        drawLabel(g, m.name(), INK, 0, -42);
+        drawLabel(g, formatLo(m.loHz()), MIXER_ACCENT, 0, 36);
     }
 
     private static String[] labelsFor(ComplexPairFormat format) {
@@ -81,19 +85,19 @@ final class MixerPresenter implements ComponentPresenter {
     @Override
     public void buildInspector(VBox container, InspectorEnv env) {
         var help = new Label(
-            "Downconverts its complex input by exp(-j\u00b72\u03C0\u00b7loHz\u00b7t) " +
-            "and splits the result across two buffered scalar outputs. Pick " +
-            "I/Q for rectangular or Mag/Phase for polar.");
+            "Combines two scalar inputs into a complex envelope and upconverts " +
+            "to loHz. Wire two sources (or arbitrary node voltages) to in0/in1. " +
+            "Pick I/Q for rectangular or Mag/Phase for polar.");
         help.setWrapText(true);
         help.getStyleClass().add("schematic-inspector-hint");
         container.getChildren().add(help);
         container.getChildren().add(InspectorFields.enumField("Format",
-            ComplexPairFormat.values(), dc.format(),
-            f -> env.session().replaceComponent(dc.withFormat(f))));
-        container.getChildren().add(InspectorFields.doubleField("LO (Hz)", dc.loHz(),
-            v -> env.session().replaceComponent(dc.withLoHz(v))));
+            ComplexPairFormat.values(), m.format(),
+            f -> env.session().replaceComponent(m.withFormat(f))));
+        container.getChildren().add(InspectorFields.doubleField("LO (Hz)", m.loHz(),
+            v -> env.session().replaceComponent(m.withLoHz(v))));
     }
 
-    @Override public int autoLayoutColumn() { return 3; }
-    @Override public String displayName() { return "Mixer (downconverter)"; }
+    @Override public int autoLayoutColumn() { return 1; }
+    @Override public String displayName() { return "Modulator (upconverter)"; }
 }

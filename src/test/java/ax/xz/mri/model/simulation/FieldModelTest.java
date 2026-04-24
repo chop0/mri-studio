@@ -20,9 +20,10 @@ class FieldModelTest {
 
     @Test
     void amplitudeKindChannelCounts() {
+        // Every kind is a single scalar now — quadrature drives are composed
+        // from two REAL sources fed through a Modulator block.
         assertEquals(0, AmplitudeKind.STATIC.channelCount());
         assertEquals(1, AmplitudeKind.REAL.channelCount());
-        assertEquals(2, AmplitudeKind.QUADRATURE.channelCount());
         assertEquals(1, AmplitudeKind.GATE.channelCount());
     }
 

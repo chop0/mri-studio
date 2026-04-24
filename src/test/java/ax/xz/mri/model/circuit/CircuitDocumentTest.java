@@ -102,7 +102,7 @@ class CircuitDocumentTest {
     void jsonRoundTripPreservesComponentsAndWires() throws Exception {
         var mapper = new ObjectMapper();
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "RF",
-            AmplitudeKind.QUADRATURE, 63e6, 0, 200e-6, 0);
+            AmplitudeKind.REAL, 63e6, 0, 200e-6, 0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "RF Coil",
             new ProjectNodeId("ef-rf"), 0, 0);
         var wires = List.of(

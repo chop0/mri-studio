@@ -3,7 +3,6 @@ package ax.xz.mri.optimisation;
 import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
-import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.service.circuit.CircuitStepEvaluator;
 
@@ -64,7 +63,8 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double gateSwitch = 0.0;
         double gateBinary = 0.0;
         double totalDt = 0.0;
-        int quadChannels = countQuadratureChannels(circuit);
+        int[] rfOffsets = circuit.rfEnvelopeChannelOffsets();
+        int quadChannels = rfOffsets.length;
 
         for (int segmentIndex = 0; segmentIndex < segments.size(); segmentIndex++) {
             var segment = segments.get(segmentIndex);
@@ -89,7 +89,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 jIn += sigGate * sigMag2;
                 jOut += sigGate * (sxOut * sxOut + syOut * syOut);
                 powerOut += sigGate * powerOutStep;
-                double[] quadNow = quadratureComponents(circuit, step, quadChannels);
+                double[] quadNow = rfChannelValues(step, rfOffsets);
                 rfPower += sumOfSquares(quadNow) * dt;
                 if (stepIndex >= 2) {
                     double smooth = 0.0;
@@ -215,21 +215,11 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         }
     }
 
-    protected static int countQuadratureChannels(ax.xz.mri.service.circuit.CompiledCircuit circuit) {
-        int count = 0;
-        for (var src : circuit.sources()) if (src.kind() == AmplitudeKind.QUADRATURE) count += 2;
-        return count;
-    }
-
-    protected static double[] quadratureComponents(ax.xz.mri.service.circuit.CompiledCircuit circuit, PulseStep step, int quadChannels) {
-        double[] out = new double[quadChannels];
-        int k = 0;
+    /** Snapshot of the compiled RF envelope slots at the current step. */
+    protected static double[] rfChannelValues(PulseStep step, int[] rfOffsets) {
+        double[] out = new double[rfOffsets.length];
         var controls = step.controls();
-        for (var src : circuit.sources()) {
-            if (src.kind() != AmplitudeKind.QUADRATURE) continue;
-            out[k++] = controls[src.channelOffset()];
-            out[k++] = controls[src.channelOffset() + 1];
-        }
+        for (int i = 0; i < rfOffsets.length; i++) out[i] = controls[rfOffsets[i]];
         return out;
     }
 
@@ -289,15 +279,13 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         return new double[]{phasedR, phasedI};
     }
 
+    /**
+     * Normaliser for the RF-power objective term — one unit per RF
+     * envelope channel, bottom-capped at 1 so circuits without a modulator
+     * don't divide by zero.
+     */
     protected static double referenceRfPower(ax.xz.mri.service.circuit.CompiledCircuit circuit) {
-        double sum = 0;
-        boolean any = false;
-        for (var src : circuit.sources()) {
-            if (src.kind() != AmplitudeKind.QUADRATURE) continue;
-            any = true;
-            sum += 1.0;
-        }
-        return any ? sum : 1.0;
+        return Math.max(circuit.rfEnvelopeChannelOffsets().length, 1);
     }
 
     /**

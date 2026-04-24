@@ -1,7 +1,6 @@
 package ax.xz.mri.service.circuit.mna;
 
 import ax.xz.mri.model.circuit.compile.CtlBinding;
-import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.service.circuit.CompiledCircuit;
 
 import java.util.Arrays;
@@ -92,29 +91,33 @@ public final class MnaSolver {
         boolean[] closed = resolveSwitchClosures(controls);
         stampG(dt, closed);
 
-        // Mixer RHS is a function of V_in, which itself is part of the
-        // solution vector. We use a fixed-point iteration: start with V_out
-        // pinned to zero, solve, read V_in at each mixer, recompute V_out,
-        // solve again. For any DAG topology (mixer inputs aren't downstream
-        // of their own outputs) one re-solve converges; a second pass is
-        // essentially free insurance against stiff cases.
-        double[] mixerVoutRe = new double[net.mixerCount()];
-        double[] mixerVoutIm = new double[net.mixerCount()];
+        // Both Mixer and Modulator RHSs are functions of node voltages,
+        // which are unknowns of the MNA — so we use a fixed-point iteration.
+        // Start with every mixer / modulator output pinned at zero, solve,
+        // read node voltages, recompute RHSs, solve again. For any DAG
+        // topology (outputs don't feed back into their own inputs through
+        // the network) one re-solve converges; a second pass is essentially
+        // free insurance against stiff cases.
+        double[] mixerOut0 = new double[net.mixerCount()];   // first scalar per mixer
+        double[] mixerOut1 = new double[net.mixerCount()];   // second scalar per mixer
+        double[] modulatorOutRe = new double[net.modulatorCount()];
+        double[] modulatorOutIm = new double[net.modulatorCount()];
         stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec,
-            mixerVoutRe, mixerVoutIm);
+            mixerOut0, mixerOut1, modulatorOutRe, modulatorOutIm);
         copyMatrix(G, lu);
         luFactorize(lu, size, piv);
         luSolve(lu, size, piv, bI, xI);
         luSolve(lu, size, piv, bQ, xQ);
-        if (net.mixerCount() > 0) {
+        if (net.needsComplexIteration()) {
             int passes = 2;
             for (int pass = 0; pass < passes; pass++) {
-                boolean converged = updateMixerOutputs(mixerVoutRe, mixerVoutIm, tSeconds);
+                boolean mConv = updateMixerOutputs(mixerOut0, mixerOut1, tSeconds);
+                boolean modConv = updateModulatorOutputs(modulatorOutRe, modulatorOutIm, tSeconds, omegaSimRadPerSec);
                 stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec,
-                    mixerVoutRe, mixerVoutIm);
+                    mixerOut0, mixerOut1, modulatorOutRe, modulatorOutIm);
                 luSolve(lu, size, piv, bI, xI);
                 luSolve(lu, size, piv, bQ, xQ);
-                if (converged) break;
+                if (mConv && modConv) break;
             }
         }
 
@@ -123,12 +126,12 @@ public final class MnaSolver {
     }
 
     /**
-     * Fill {@code mixerVout*} from the current node-voltage solution by
-     * applying each mixer's {@code exp(-j·2π·loHz·t)} rotation to its
-     * input-node voltage. Returns {@code true} if every entry is within
-     * 1e-12 of its previous value (fixed-point reached).
+     * Recompute each mixer's two scalar outputs from the current node-voltage
+     * solution. For IQ: out0 = Re(V_in · e^{-jθ}), out1 = Im(V_in · e^{-jθ}).
+     * For MAG_PHASE: out0 = |V_in|, out1 = arg(V_in · e^{-jθ}).
+     * Returns {@code true} if every slot is within 1e-12 of its previous value.
      */
-    private boolean updateMixerOutputs(double[] voutRe, double[] voutIm, double tSeconds) {
+    private boolean updateMixerOutputs(double[] out0, double[] out1, double tSeconds) {
         boolean converged = true;
         for (int m = 0; m < net.mixerCount(); m++) {
             int inNode = net.mixerInNode()[m];
@@ -136,14 +139,60 @@ public final class MnaSolver {
             double vInIm = inNode >= 0 ? xQ[inNode] : 0;
             double theta = 2 * Math.PI * net.mixerLoHz()[m] * tSeconds;
             double c = Math.cos(theta), s = Math.sin(theta);
-            // V_out = V_in · e^{-jθ} = (Re + j·Im)·(cos − j·sin)
-            //      = Re·cos + Im·sin + j·(Im·cos − Re·sin)
-            double newRe = vInRe * c + vInIm * s;
-            double newIm = vInIm * c - vInRe * s;
-            if (Math.abs(newRe - voutRe[m]) > 1e-12) converged = false;
-            if (Math.abs(newIm - voutIm[m]) > 1e-12) converged = false;
-            voutRe[m] = newRe;
-            voutIm[m] = newIm;
+            // V_shifted = V_in · e^{-jθ} = (Re·cos + Im·sin) + j·(Im·cos − Re·sin)
+            double shiftRe = vInRe * c + vInIm * s;
+            double shiftIm = vInIm * c - vInRe * s;
+            double n0, n1;
+            switch (net.mixerFormat()[m]) {
+                case IQ -> { n0 = shiftRe; n1 = shiftIm; }
+                case MAG_PHASE -> {
+                    n0 = Math.hypot(shiftRe, shiftIm);
+                    n1 = Math.atan2(shiftIm, shiftRe);
+                }
+                default -> throw new IllegalStateException("unhandled Mixer format");
+            }
+            if (Math.abs(n0 - out0[m]) > 1e-12) converged = false;
+            if (Math.abs(n1 - out1[m]) > 1e-12) converged = false;
+            out0[m] = n0;
+            out1[m] = n1;
+        }
+        return converged;
+    }
+
+    /**
+     * Recompute each modulator's complex output from its two scalar input
+     * node voltages, then apply the carrier frame shift.
+     */
+    private boolean updateModulatorOutputs(double[] outRe, double[] outIm,
+                                           double tSeconds, double omegaSim) {
+        boolean converged = true;
+        for (int k = 0; k < net.modulatorCount(); k++) {
+            int in0 = net.modulatorIn0Node()[k];
+            int in1 = net.modulatorIn1Node()[k];
+            // Scalar reads: we take the real channel of each input node
+            // because the sources feeding the modulator are REAL and emit
+            // purely into xI. Using the real channel means mag-phase and IQ
+            // both interpret their inputs consistently.
+            double v0 = in0 >= 0 ? xI[in0] : 0;
+            double v1 = in1 >= 0 ? xI[in1] : 0;
+            double envRe, envIm;
+            switch (net.modulatorFormat()[k]) {
+                case IQ -> { envRe = v0; envIm = v1; }
+                case MAG_PHASE -> {
+                    envRe = v0 * Math.cos(v1);
+                    envIm = v0 * Math.sin(v1);
+                }
+                default -> throw new IllegalStateException("unhandled Modulator format");
+            }
+            double deltaOmega = 2 * Math.PI * net.modulatorLoHz()[k] - omegaSim;
+            double phase = deltaOmega * tSeconds;
+            double c = Math.cos(phase), s = Math.sin(phase);
+            double newRe = envRe * c - envIm * s;
+            double newIm = envRe * s + envIm * c;
+            if (Math.abs(newRe - outRe[k]) > 1e-12) converged = false;
+            if (Math.abs(newIm - outIm[k]) > 1e-12) converged = false;
+            outRe[k] = newRe;
+            outIm[k] = newIm;
         }
         return converged;
     }
@@ -166,9 +215,17 @@ public final class MnaSolver {
             Double v = switch (ctl) {
                 case CtlBinding.AlwaysOpen a -> null;
                 case CtlBinding.FromSourceOut ref ->
-                    sourceOutValue(controls, circuit.sources().get(ref.sourceIndex()));
-                case CtlBinding.FromSourceActive ref ->
-                    sourceActiveValue(controls, circuit.sources().get(ref.sourceIndex())) ? 1.0 : 0.0;
+                    sourceScalarValue(controls, circuit.sources().get(ref.sourceIndex()));
+                case CtlBinding.FromSourceActive ref -> {
+                    boolean any = false;
+                    for (int idx : ref.sourceIndices()) {
+                        if (sourceActiveValue(controls, circuit.sources().get(idx))) {
+                            any = true;
+                            break;
+                        }
+                    }
+                    yield any ? 1.0 : 0.0;
+                }
             };
             if (v == null) { closed[i] = false; continue; }
             boolean raw = v >= net.switchThreshold()[i];
@@ -233,7 +290,8 @@ public final class MnaSolver {
 
     private void stampB(double[] controls, double[] emfReal, double[] emfImag,
                         double dt, double tSeconds, double omegaSimRadPerSec,
-                        double[] mixerVoutRe, double[] mixerVoutIm) {
+                        double[] mixerOut0, double[] mixerOut1,
+                        double[] modulatorOutRe, double[] modulatorOutIm) {
         Arrays.fill(bI, 0);
         Arrays.fill(bQ, 0);
 
@@ -259,18 +317,29 @@ public final class MnaSolver {
             switch (net.branchKind()[b]) {
                 case SOURCE_OUT -> {
                     var src = circuit.sources().get(ref);
-                    double[] iq = sourceOutIQ(controls, src, tSeconds, omegaSimRadPerSec);
-                    bI[branchRow] = iq[0];
-                    bQ[branchRow] = iq[1];
+                    bI[branchRow] = sourceScalarValue(controls, src);
+                    bQ[branchRow] = 0;
                 }
                 case METADATA_OUT -> {
-                    // ref is the metadata index. Look up its source and mode.
-                    int srcIdx = net.metadataSourceIndex()[ref];
+                    // ref is the metadata index. OR together the referenced
+                    // sources' activity flags — a tap pointed at a Modulator
+                    // resolves to both the I and Q sources, so either envelope
+                    // playing fires the tap.
+                    int[] srcIdxs = net.metadataSourceIndices()[ref];
                     double v = 0;
-                    if (srcIdx >= 0) {
+                    if (srcIdxs.length > 0) {
                         var mode = net.metadataMode()[ref];
                         v = switch (mode) {
-                            case ACTIVE -> sourceActiveValue(controls, circuit.sources().get(srcIdx)) ? 1.0 : 0.0;
+                            case ACTIVE -> {
+                                boolean any = false;
+                                for (int idx : srcIdxs) {
+                                    if (sourceActiveValue(controls, circuit.sources().get(idx))) {
+                                        any = true;
+                                        break;
+                                    }
+                                }
+                                yield any ? 1.0 : 0.0;
+                            }
                         };
                     }
                     bI[branchRow] = v;
@@ -288,54 +357,48 @@ public final class MnaSolver {
                     bI[branchRow] = re;
                     bQ[branchRow] = im;
                 }
-                case MIXER_OUT -> {
-                    // The mixer stamps a voltage branch V_out − 0 = V_out_value;
-                    // the value comes from the current iteration's snapshot of
-                    // V_in · exp(−j·2π·loHz·t). First pass has mixerVout* = 0
-                    // (no-op), then updateMixerOutputs() refreshes from V_in.
-                    bI[branchRow] = mixerVoutRe[ref];
-                    bQ[branchRow] = mixerVoutIm[ref];
+                case MIXER_OUT_0 -> {
+                    // Mixer's first scalar output — real-part (IQ) or
+                    // magnitude (MAG_PHASE). Value comes from the current
+                    // iteration's read of V(in). First pass has everything
+                    // zero; updateMixerOutputs() refreshes each iteration.
+                    bI[branchRow] = mixerOut0[ref];
+                    bQ[branchRow] = 0;
+                }
+                case MIXER_OUT_1 -> {
+                    // Mixer's second scalar output — imag-part (IQ) or
+                    // phase (MAG_PHASE).
+                    bI[branchRow] = mixerOut1[ref];
+                    bQ[branchRow] = 0;
+                }
+                case MODULATOR_OUT -> {
+                    // Modulator's complex output value; updated by
+                    // updateModulatorOutputs() from its two scalar input
+                    // node voltages plus the carrier frame shift.
+                    bI[branchRow] = modulatorOutRe[ref];
+                    bQ[branchRow] = modulatorOutIm[ref];
                 }
             }
         }
     }
 
-    private static double sourceOutValue(double[] controls, CompiledCircuit.CompiledSource src) {
+    /**
+     * The source's scalar value at the current step. Every source emits a
+     * single scalar — quadrature RF drives are composed via a
+     * {@link ax.xz.mri.model.circuit.CircuitComponent.Modulator} block.
+     */
+    private static double sourceScalarValue(double[] controls, CompiledCircuit.CompiledSource src) {
         return switch (src.kind()) {
             case STATIC -> src.staticAmplitude();
             case REAL, GATE -> controls[src.channelOffset()];
-            case QUADRATURE -> Math.hypot(
-                controls[src.channelOffset()], controls[src.channelOffset() + 1]);
-        };
-    }
-
-    private static double[] sourceOutIQ(double[] controls, CompiledCircuit.CompiledSource src,
-                                         double tSeconds, double omegaSimRadPerSec) {
-        return switch (src.kind()) {
-            case STATIC -> new double[]{src.staticAmplitude(), 0};
-            case REAL, GATE -> new double[]{controls[src.channelOffset()], 0};
-            case QUADRATURE -> {
-                double i = controls[src.channelOffset()];
-                double q = controls[src.channelOffset() + 1];
-                double deltaOmega = 2 * Math.PI * src.carrierHz() - omegaSimRadPerSec;
-                if (Math.abs(deltaOmega) > 1e-9) {
-                    double phase = deltaOmega * tSeconds;
-                    double c = Math.cos(phase), s = Math.sin(phase);
-                    yield new double[]{i * c - q * s, i * s + q * c};
-                }
-                yield new double[]{i, q};
-            }
         };
     }
 
     private static boolean sourceActiveValue(double[] controls, CompiledCircuit.CompiledSource src) {
-        if (src.kind() == AmplitudeKind.STATIC) return src.staticAmplitude() != 0.0;
-        int count = src.kind().channelCount();
-        int offset = src.channelOffset();
-        for (int k = 0; k < count; k++) {
-            if (controls[offset + k] != 0.0) return true;
-        }
-        return false;
+        return switch (src.kind()) {
+            case STATIC -> src.staticAmplitude() != 0.0;
+            case REAL, GATE -> controls[src.channelOffset()] != 0.0;
+        };
     }
 
     // ───────── LU ─────────
