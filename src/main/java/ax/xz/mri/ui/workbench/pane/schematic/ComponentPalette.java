@@ -1,18 +1,22 @@
 package ax.xz.mri.ui.workbench.pane.schematic;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
-import ax.xz.mri.model.circuit.ComponentId;
-import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.ui.workbench.pane.schematic.presenter.ComponentPresenters;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.VBox;
 
-import java.util.UUID;
 import java.util.function.Consumer;
 
-/** Left-hand palette of component kinds — click a button to arm placement mode. */
+/**
+ * Left-hand palette of component kinds — click a button to arm placement
+ * mode. The button list is generated from
+ * {@link ComponentPresenters#paletteEntries()} so adding a new kind never
+ * requires touching this file.
+ */
 public final class ComponentPalette extends VBox {
 
     public ComponentPalette(Consumer<CircuitComponent> onPick) {
@@ -25,45 +29,14 @@ public final class ComponentPalette extends VBox {
         header.getStyleClass().add("schematic-palette-header");
         getChildren().add(header);
 
-        addSection("Sources");
-        addButton("Voltage source (real)", "Real-valued drive",
-            onPick, () -> newSource(AmplitudeKind.REAL, "Source"));
-        addButton("RF source (I/Q)", "Two-channel RF drive",
-            onPick, () -> newSource(AmplitudeKind.QUADRATURE, "RF"));
-        addButton("Static source", "Fixed amplitude (B0-like)",
-            onPick, () -> newSource(AmplitudeKind.STATIC, "Static"));
-        addButton("Gate source", "0/1 digital signal",
-            onPick, () -> newSource(AmplitudeKind.GATE, "Gate"));
-
-        addSection("Routing");
-        addButton("Switch", "Gated pass-through",
-            onPick, () -> new CircuitComponent.SwitchComponent(
-                newId("sw"), "Switch", 1e-6, 1e9, 0.5));
-        addButton("Multiplexer", "SPDT: a-to-common when ctl high, b-to-common when low",
-            onPick, () -> new CircuitComponent.Multiplexer(
-                newId("mux"), "Mux", 1e-6, 1e9, 0.5));
-
-        addSection("Coils + probes");
-        addButton("Coil", "Bridges circuit and FOV",
-            onPick, () -> new CircuitComponent.Coil(newId("coil"), "Coil", null, 0, 0));
-        addButton("Probe", "Voltage measurement",
-            onPick, () -> new CircuitComponent.Probe(newId("probe"), "Probe", 1, 0, Double.POSITIVE_INFINITY));
-
-        addSection("Series passives");
-        addButton("Resistor (series)", "Linear resistance inline",
-            onPick, () -> new CircuitComponent.Resistor(newId("r"), "R", 50));
-        addButton("Capacitor (series)", "Reactive capacitance inline",
-            onPick, () -> new CircuitComponent.Capacitor(newId("c"), "C", 1e-9));
-        addButton("Inductor (series)", "Reactive inductance inline",
-            onPick, () -> new CircuitComponent.Inductor(newId("l"), "L", 1e-6));
-
-        addSection("Parallel (shunt to ground)");
-        addButton("Resistor (parallel)", "Shunt resistance to ground",
-            onPick, () -> new CircuitComponent.ShuntResistor(newId("rshunt"), "Rp", 50));
-        addButton("Capacitor (parallel)", "Shunt capacitance to ground",
-            onPick, () -> new CircuitComponent.ShuntCapacitor(newId("cshunt"), "Cp", 1e-9));
-        addButton("Inductor (parallel)", "Shunt inductance to ground",
-            onPick, () -> new CircuitComponent.ShuntInductor(newId("lshunt"), "Lp", 1e-6));
+        String currentSection = null;
+        for (var entry : ComponentPresenters.paletteEntries()) {
+            if (!entry.section().equals(currentSection)) {
+                addSection(entry.section());
+                currentSection = entry.section();
+            }
+            addButton(entry.label(), entry.tooltip(), onPick, entry.factory());
+        }
     }
 
     private void addSection(String title) {
@@ -78,22 +51,9 @@ public final class ComponentPalette extends VBox {
         var btn = new Button(label);
         btn.setMaxWidth(Double.MAX_VALUE);
         btn.setAlignment(Pos.BASELINE_LEFT);
-        btn.setTooltip(new javafx.scene.control.Tooltip(tip));
+        btn.setTooltip(new Tooltip(tip));
         btn.setOnAction(e -> onPick.accept(factory.get()));
         btn.getStyleClass().add("schematic-palette-button");
         getChildren().add(btn);
-    }
-
-    private static ComponentId newId(String prefix) {
-        return new ComponentId(prefix + "-" + UUID.randomUUID());
-    }
-
-    private static CircuitComponent newSource(AmplitudeKind kind, String prefix) {
-        String name = prefix + " " + shortId();
-        return new CircuitComponent.VoltageSource(newId("src"), name, kind, 0, 0, 1, 0);
-    }
-
-    private static String shortId() {
-        return UUID.randomUUID().toString().substring(0, 4);
     }
 }

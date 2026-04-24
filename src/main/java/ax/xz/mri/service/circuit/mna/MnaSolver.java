@@ -1,5 +1,6 @@
 package ax.xz.mri.service.circuit.mna;
 
+import ax.xz.mri.model.circuit.compile.CtlBinding;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.service.circuit.CompiledCircuit;
 
@@ -90,15 +91,61 @@ public final class MnaSolver {
                      StepOut out) {
         boolean[] closed = resolveSwitchClosures(controls);
         stampG(dt, closed);
-        stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec);
 
+        // Mixer RHS is a function of V_in, which itself is part of the
+        // solution vector. We use a fixed-point iteration: start with V_out
+        // pinned to zero, solve, read V_in at each mixer, recompute V_out,
+        // solve again. For any DAG topology (mixer inputs aren't downstream
+        // of their own outputs) one re-solve converges; a second pass is
+        // essentially free insurance against stiff cases.
+        double[] mixerVoutRe = new double[net.mixerCount()];
+        double[] mixerVoutIm = new double[net.mixerCount()];
+        stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec,
+            mixerVoutRe, mixerVoutIm);
         copyMatrix(G, lu);
         luFactorize(lu, size, piv);
         luSolve(lu, size, piv, bI, xI);
         luSolve(lu, size, piv, bQ, xQ);
+        if (net.mixerCount() > 0) {
+            int passes = 2;
+            for (int pass = 0; pass < passes; pass++) {
+                boolean converged = updateMixerOutputs(mixerVoutRe, mixerVoutIm, tSeconds);
+                stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec,
+                    mixerVoutRe, mixerVoutIm);
+                luSolve(lu, size, piv, bI, xI);
+                luSolve(lu, size, piv, bQ, xQ);
+                if (converged) break;
+            }
+        }
 
         extractResults(out);
         updateHistory(controls);
+    }
+
+    /**
+     * Fill {@code mixerVout*} from the current node-voltage solution by
+     * applying each mixer's {@code exp(-j·2π·loHz·t)} rotation to its
+     * input-node voltage. Returns {@code true} if every entry is within
+     * 1e-12 of its previous value (fixed-point reached).
+     */
+    private boolean updateMixerOutputs(double[] voutRe, double[] voutIm, double tSeconds) {
+        boolean converged = true;
+        for (int m = 0; m < net.mixerCount(); m++) {
+            int inNode = net.mixerInNode()[m];
+            double vInRe = inNode >= 0 ? xI[inNode] : 0;
+            double vInIm = inNode >= 0 ? xQ[inNode] : 0;
+            double theta = 2 * Math.PI * net.mixerLoHz()[m] * tSeconds;
+            double c = Math.cos(theta), s = Math.sin(theta);
+            // V_out = V_in · e^{-jθ} = (Re + j·Im)·(cos − j·sin)
+            //      = Re·cos + Im·sin + j·(Im·cos − Re·sin)
+            double newRe = vInRe * c + vInIm * s;
+            double newIm = vInIm * c - vInRe * s;
+            if (Math.abs(newRe - voutRe[m]) > 1e-12) converged = false;
+            if (Math.abs(newIm - voutIm[m]) > 1e-12) converged = false;
+            voutRe[m] = newRe;
+            voutIm[m] = newIm;
+        }
+        return converged;
     }
 
     /** Reset backward-Euler history to zero (call at the start of a new trajectory). */
@@ -117,10 +164,10 @@ public final class MnaSolver {
         for (int i = 0; i < n; i++) {
             var ctl = net.switchCtl()[i];
             Double v = switch (ctl) {
-                case MnaNetwork.CtlBinding.AlwaysOpen a -> null;
-                case MnaNetwork.CtlBinding.FromSourceOut ref ->
+                case CtlBinding.AlwaysOpen a -> null;
+                case CtlBinding.FromSourceOut ref ->
                     sourceOutValue(controls, circuit.sources().get(ref.sourceIndex()));
-                case MnaNetwork.CtlBinding.FromSourceActive ref ->
+                case CtlBinding.FromSourceActive ref ->
                     sourceActiveValue(controls, circuit.sources().get(ref.sourceIndex())) ? 1.0 : 0.0;
             };
             if (v == null) { closed[i] = false; continue; }
@@ -185,7 +232,8 @@ public final class MnaSolver {
     }
 
     private void stampB(double[] controls, double[] emfReal, double[] emfImag,
-                        double dt, double tSeconds, double omegaSimRadPerSec) {
+                        double dt, double tSeconds, double omegaSimRadPerSec,
+                        double[] mixerVoutRe, double[] mixerVoutIm) {
         Arrays.fill(bI, 0);
         Arrays.fill(bQ, 0);
 
@@ -232,6 +280,14 @@ public final class MnaSolver {
                     }
                     bI[branchRow] = re;
                     bQ[branchRow] = im;
+                }
+                case MIXER_OUT -> {
+                    // The mixer stamps a voltage branch V_out − 0 = V_out_value;
+                    // the value comes from the current iteration's snapshot of
+                    // V_in · exp(−j·2π·loHz·t). First pass has mixerVout* = 0
+                    // (no-op), then updateMixerOutputs() refreshes from V_in.
+                    bI[branchRow] = mixerVoutRe[ref];
+                    bQ[branchRow] = mixerVoutIm[ref];
                 }
             }
         }

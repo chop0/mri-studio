@@ -4,18 +4,21 @@ import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
+import ax.xz.mri.model.circuit.compile.CircuitStampContext;
+import ax.xz.mri.model.circuit.compile.CtlBinding;
+import ax.xz.mri.model.circuit.compile.Node;
+import ax.xz.mri.model.circuit.compile.SwitchParams;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledCoil;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledProbe;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledSource;
-import ax.xz.mri.service.circuit.CompiledCircuit.CompiledSwitch;
 import ax.xz.mri.service.circuit.mna.MnaNetwork;
-import ax.xz.mri.service.circuit.mna.MnaNetwork.CtlBinding;
 import ax.xz.mri.service.circuit.mna.MnaNetwork.VBranchKind;
 
 import java.util.ArrayList;
@@ -24,29 +27,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Compiles a {@link CircuitDocument} into a {@link CompiledCircuit} the
- * simulator can run against.
+ * Compiles a {@link CircuitDocument} into a {@link CompiledCircuit}.
  *
- * <p>Responsibilities:
- * <ol>
- *   <li>Union-find over wires collapses every {@link ComponentTerminal} onto
- *       an integer node id. Ground is represented by {@code -1}.</li>
- *   <li>Each component is visited once and stamped into parallel arrays that
- *       the {@link ax.xz.mri.service.circuit.mna.MnaSolver} reads every
- *       timestep — no walker, no pseudo-switch pairs, no topology links.</li>
- *   <li>A switch's {@code ctl} port resolves to a {@link CtlBinding} — either
- *       a source's {@code out}/{@code active} port or {@code AlwaysOpen} for
- *       floating ctl. More exotic bindings (ctl driven by a node voltage in
- *       the rest of the network) are rejected; that requires a nonlinear
- *       solve and isn't in scope here.</li>
- * </ol>
+ * <p>The compiler is <em>component-agnostic</em>: it does not switch on
+ * concrete {@link CircuitComponent} subtypes. Each component owns its own
+ * {@link CircuitComponent#stamp stamping logic}; the compiler's job is to
+ * run union-find over the wires, build a {@link CircuitStampContext} backed
+ * by mutable MNA builder arrays, and call {@code c.stamp(ctx)} on every
+ * component.
  *
- * <p>Coils default to a 1 Ω series resistance if the user leaves both {@code
- * seriesResistanceOhms} and {@code selfInductanceHenry} at zero. That keeps
- * the historical {@code V_source == I_coil} numerical convention working —
- * source voltage feeds directly into the coil's drive current, and the
- * eigenfield's {@code defaultMagnitude} (B per unit current) converts that
- * into a real B field. Non-zero user values are honoured unchanged.
+ * <p>Adding a new component type means adding a record with its own
+ * {@code stamp}. The compiler does not change.
  */
 public final class CircuitCompiler {
     private static final double DEFAULT_SERIES_R_OHMS = 1.0;
@@ -57,7 +48,7 @@ public final class CircuitCompiler {
                                           double[] rMm, double[] zMm) {
         if (circuit == null) throw new IllegalArgumentException("CircuitCompiler.compile: circuit is null");
 
-        // --- Union-find over terminals to discover nodes. ---
+        // --- Union-find over terminals → dense MNA node ids. ---
         var termIndex = new HashMap<ComponentTerminal, Integer>();
         for (var c : circuit.components()) {
             for (var port : c.ports()) {
@@ -69,11 +60,6 @@ public final class CircuitCompiler {
         for (var w : circuit.wires()) {
             union(parent, termIndex.get(w.from()), termIndex.get(w.to()));
         }
-
-        // Collapse terminal roots to dense node ids. Any terminal whose net
-        // carries no component-side constraint other than a source return is
-        // fine — the solver handles dangling nodes transparently. Ground is
-        // -1; nodes are numbered from 0 up.
         Map<Integer, Integer> rootToNode = new HashMap<>();
         Map<ComponentTerminal, Integer> nodeOf = new HashMap<>();
         for (var entry : termIndex.entrySet()) {
@@ -83,236 +69,232 @@ public final class CircuitCompiler {
         }
         int nodeCount = rootToNode.size();
 
-        // --- Enumerate components and build the CompiledCircuit metadata. ---
-        var sources = new ArrayList<CompiledSource>();
-        var switches = new ArrayList<CompiledSwitch>();
-        var coils = new ArrayList<CompiledCoil>();
-        var probes = new ArrayList<CompiledProbe>();
-        var sourceIndexById = new HashMap<ComponentId, Integer>();
-        var coilIndexById = new HashMap<ComponentId, Integer>();
-
-        int channelCursor = 0;
+        // --- Build a context bound to each component in turn. ---
+        var ctx = new CompilerContext(circuit, repository, rMm, zMm, nodeOf, nodeCount);
         for (var component : circuit.components()) {
-            switch (component) {
-                case CircuitComponent.VoltageSource v -> {
-                    sourceIndexById.put(v.id(), sources.size());
-                    sources.add(new CompiledSource(
-                        v.id(), v.name(), channelCursor,
-                        v.kind(), v.carrierHz(), v.maxAmplitude()));
-                    channelCursor += v.channelCount();
-                }
-                case CircuitComponent.Coil c -> {
-                    coilIndexById.put(c.id(), coils.size());
-                    var sample = sampleEigenfield(c, repository, rMm, zMm);
-                    coils.add(new CompiledCoil(
-                        c.id(), c.name(),
-                        c.selfInductanceHenry(), c.seriesResistanceOhms(),
-                        sample[0], sample[1], sample[2]));
-                }
-                case CircuitComponent.Probe p ->
-                    probes.add(new CompiledProbe(
-                        p.id(), p.name(),
-                        p.gain(), p.carrierHz(), p.demodPhaseDeg(), p.loadImpedanceOhms()));
-                case CircuitComponent.SwitchComponent s ->
-                    switches.add(new CompiledSwitch(
-                        s.id(), s.name(),
-                        s.closedOhms(), s.openOhms(), s.thresholdVolts(), s.invertCtl()));
-                default -> { /* passives and muxes contribute only to MNA stamps */ }
+            ctx.bindOwner(component);
+            component.stamp(ctx);
+        }
+        return ctx.finish();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Stamp context — the SPI bound to the component currently stamping
+    // ─────────────────────────────────────────────────────────────────────
+
+    private static final class CompilerContext implements CircuitStampContext {
+        private final CircuitDocument circuit;
+        private final ProjectRepository repository;
+        private final double[] rMm;
+        private final double[] zMm;
+        private final Map<ComponentTerminal, Integer> nodeOf;
+        private final int nodeCount;
+
+        // Output metadata.
+        private final List<CompiledSource> sources = new ArrayList<>();
+        private final List<CompiledCoil> coils = new ArrayList<>();
+        private final List<CompiledProbe> probes = new ArrayList<>();
+        private int channelCursor = 0;
+
+        // MNA stamps.
+        private final List<Integer> resistorA = new ArrayList<>();
+        private final List<Integer> resistorB = new ArrayList<>();
+        private final List<Double> resistorG = new ArrayList<>();
+        private final List<Integer> capacitorA = new ArrayList<>();
+        private final List<Integer> capacitorB = new ArrayList<>();
+        private final List<Double> capacitorF = new ArrayList<>();
+        private final List<Integer> switchA = new ArrayList<>();
+        private final List<Integer> switchB = new ArrayList<>();
+        private final List<Double> switchClosedOhms = new ArrayList<>();
+        private final List<Double> switchOpenOhms = new ArrayList<>();
+        private final List<Double> switchThreshold = new ArrayList<>();
+        private final List<CtlBinding> switchCtl = new ArrayList<>();
+        private final List<Boolean> switchInvert = new ArrayList<>();
+        private final List<Integer> branchNodeA = new ArrayList<>();
+        private final List<Integer> branchNodeB = new ArrayList<>();
+        private final List<VBranchKind> branchKind = new ArrayList<>();
+        private final List<Integer> branchRefIndex = new ArrayList<>();
+        private final List<Double> branchR = new ArrayList<>();
+        private final List<Double> branchL = new ArrayList<>();
+        private final List<Integer> mixerInNode = new ArrayList<>();
+        private final List<Integer> mixerOutBranch = new ArrayList<>();
+        private final List<Double> mixerLoHz = new ArrayList<>();
+
+        private final List<Integer> sourceOutBranch = new ArrayList<>();
+        private final List<Integer> sourceActiveBranch = new ArrayList<>();
+        private final List<Integer> coilBranch = new ArrayList<>();
+        private final List<Integer> probeNode = new ArrayList<>();
+        private final Map<ComponentId, Integer> sourceIndexById = new HashMap<>();
+
+        private CircuitComponent owner;
+
+        CompilerContext(CircuitDocument circuit, ProjectRepository repository,
+                        double[] rMm, double[] zMm,
+                        Map<ComponentTerminal, Integer> nodeOf, int nodeCount) {
+            this.circuit = circuit;
+            this.repository = repository;
+            this.rMm = rMm;
+            this.zMm = zMm;
+            this.nodeOf = nodeOf;
+            this.nodeCount = nodeCount;
+        }
+
+        void bindOwner(CircuitComponent c) { this.owner = c; }
+
+        // ─── CircuitStampContext ───
+
+        @Override
+        public Node port(String portName) {
+            Integer n = nodeOf.get(new ComponentTerminal(owner.id(), portName));
+            return new Node(n == null ? Node.GROUND.index() : n);
+        }
+
+        @Override
+        public Node ground() { return Node.GROUND; }
+
+        @Override
+        public CtlBinding resolveCtl(Node ctlPort) {
+            if (ctlPort.isGround()) return new CtlBinding.AlwaysOpen();
+            for (var other : circuit.components()) {
+                if (!(other instanceof CircuitComponent.VoltageSource src)) continue;
+                Integer outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
+                Integer activeNode = nodeOf.get(new ComponentTerminal(src.id(), "active"));
+                int srcIndex = predictSourceIndex(src.id());
+                if (outNode != null && outNode == ctlPort.index()) return new CtlBinding.FromSourceOut(srcIndex);
+                if (activeNode != null && activeNode == ctlPort.index()) return new CtlBinding.FromSourceActive(srcIndex);
             }
+            return new CtlBinding.AlwaysOpen();
         }
 
-        // --- Build the MNA network. ---
-        var resistorA = new ArrayList<Integer>();
-        var resistorB = new ArrayList<Integer>();
-        var resistorG = new ArrayList<Double>();
-        var capacitorA = new ArrayList<Integer>();
-        var capacitorB = new ArrayList<Integer>();
-        var capacitorF = new ArrayList<Double>();
-        var switchA = new ArrayList<Integer>();
-        var switchB = new ArrayList<Integer>();
-        var switchClosedOhms = new ArrayList<Double>();
-        var switchOpenOhms = new ArrayList<Double>();
-        var switchThreshold = new ArrayList<Double>();
-        var switchCtl = new ArrayList<CtlBinding>();
-        var switchInvert = new ArrayList<Boolean>();
-        var branchNodeA = new ArrayList<Integer>();
-        var branchNodeB = new ArrayList<Integer>();
-        var branchKind = new ArrayList<VBranchKind>();
-        var branchRefIndex = new ArrayList<Integer>();
-        var branchR = new ArrayList<Double>();
-        var branchL = new ArrayList<Double>();
-
-        int[] sourceOutBranch = new int[sources.size()];
-        int[] sourceActiveBranch = new int[sources.size()];
-        int[] coilBranchIdx = new int[coils.size()];
-        java.util.Arrays.fill(sourceOutBranch, -1);
-        java.util.Arrays.fill(sourceActiveBranch, -1);
-
-        // Each source contributes two voltage branches (out and active). Both
-        // return through implicit ground — the user's schematic never wires
-        // the "other side" of a source by convention.
-        for (int s = 0; s < sources.size(); s++) {
-            var src = sources.get(s);
-            sourceOutBranch[s] = addBranch(branchNodeA, branchNodeB, branchKind, branchRefIndex, branchR, branchL,
-                nodeOrGround(nodeOf, new ComponentTerminal(src.id(), "out")), -1,
-                VBranchKind.SOURCE_OUT, s, 0, 0);
-            sourceActiveBranch[s] = addBranch(branchNodeA, branchNodeB, branchKind, branchRefIndex, branchR, branchL,
-                nodeOrGround(nodeOf, new ComponentTerminal(src.id(), "active")), -1,
-                VBranchKind.SOURCE_ACTIVE, s, 0, 0);
+        private int predictSourceIndex(ComponentId id) {
+            int seen = 0;
+            for (var c : circuit.components()) {
+                if (c instanceof CircuitComponent.VoltageSource v) {
+                    if (v.id().equals(id)) return seen;
+                    seen++;
+                }
+            }
+            throw new IllegalStateException("Source '" + id.value() + "' not in document");
         }
 
-        // Coils: one branch each, between coil.in and ground. A coil with no
-        // user-supplied R or L falls back to R = 1 Ω so the source-voltage-
-        // equals-coil-current convention from the walker era still holds.
-        for (int c = 0; c < coils.size(); c++) {
-            var coil = coils.get(c);
-            double r = coil.seriesResistanceOhms();
-            double l = coil.selfInductanceHenry();
+        @Override
+        public void stampResistor(Node a, Node b, double ohms) {
+            if (!(ohms > 0)) throw new IllegalArgumentException("stampResistor: ohms must be > 0, got " + ohms);
+            resistorA.add(a.index());
+            resistorB.add(b.index());
+            resistorG.add(1.0 / ohms);
+        }
+
+        @Override
+        public void stampCapacitor(Node a, Node b, double farads) {
+            if (!(farads > 0)) throw new IllegalArgumentException("stampCapacitor: F must be > 0, got " + farads);
+            capacitorA.add(a.index());
+            capacitorB.add(b.index());
+            capacitorF.add(farads);
+        }
+
+        @Override
+        public void stampInductor(Node a, Node b, double henry) {
+            if (!(henry > 0)) throw new IllegalArgumentException("stampInductor: H must be > 0, got " + henry);
+            addBranch(a.index(), b.index(), VBranchKind.PASSIVE_INDUCTOR, -1, 0, henry);
+        }
+
+        @Override
+        public void stampSwitch(Node a, Node b, SwitchParams params) {
+            switchA.add(a.index());
+            switchB.add(b.index());
+            switchClosedOhms.add(params.closedOhms());
+            switchOpenOhms.add(params.openOhms());
+            switchThreshold.add(params.thresholdVolts());
+            switchCtl.add(params.ctl());
+            switchInvert.add(params.invert());
+        }
+
+        @Override
+        public void stampMixer(Node in, Node out, double loHz) {
+            if (in.isGround() || out.isGround()) {
+                // Grounded in or out is non-sensical — skip stamp, treat as no-op.
+                return;
+            }
+            int mixerIndex = mixerInNode.size();
+            int branch = addBranch(out.index(), Node.GROUND.index(),
+                VBranchKind.MIXER_OUT, mixerIndex, 0, 0);
+            mixerInNode.add(in.index());
+            mixerOutBranch.add(branch);
+            mixerLoHz.add(loHz);
+        }
+
+        @Override
+        public void registerSource(ComponentId id, String name, AmplitudeKind kind,
+                                   double carrierHz, double staticAmplitude,
+                                   Node outPort, Node activePort) {
+            int index = sources.size();
+            sourceIndexById.put(id, index);
+            sources.add(new CompiledSource(id, name, channelCursor, kind, carrierHz, staticAmplitude));
+            channelCursor += kind.channelCount();
+            sourceOutBranch.add(addBranch(outPort.index(), Node.GROUND.index(),
+                VBranchKind.SOURCE_OUT, index, 0, 0));
+            sourceActiveBranch.add(addBranch(activePort.index(), Node.GROUND.index(),
+                VBranchKind.SOURCE_ACTIVE, index, 0, 0));
+        }
+
+        @Override
+        public void registerCoil(ComponentId id, String name, ProjectNodeId eigenfieldId,
+                                 double selfInductanceHenry, double seriesResistanceOhms,
+                                 Node inPort) {
+            double r = seriesResistanceOhms;
+            double l = selfInductanceHenry;
             if (r == 0 && l == 0) r = DEFAULT_SERIES_R_OHMS;
-            coilBranchIdx[c] = addBranch(branchNodeA, branchNodeB, branchKind, branchRefIndex, branchR, branchL,
-                nodeOrGround(nodeOf, new ComponentTerminal(coil.id(), "in")), -1,
-                VBranchKind.COIL, c, r, l);
+            var sample = sampleEigenfield(eigenfieldId, repository, rMm, zMm);
+            int index = coils.size();
+            coils.add(new CompiledCoil(id, name, selfInductanceHenry, seriesResistanceOhms,
+                sample[0], sample[1], sample[2]));
+            coilBranch.add(addBranch(inPort.index(), Node.GROUND.index(),
+                VBranchKind.COIL, index, r, l));
         }
 
-        // Passives (series + shunt) and switches (+ mux-expanded).
-        for (var component : circuit.components()) {
-            switch (component) {
-                case CircuitComponent.Resistor r -> addResistor(resistorA, resistorB, resistorG,
-                    nodeOrGround(nodeOf, new ComponentTerminal(r.id(), "a")),
-                    nodeOrGround(nodeOf, new ComponentTerminal(r.id(), "b")),
-                    r.resistanceOhms());
-                case CircuitComponent.Capacitor c -> addCapacitor(capacitorA, capacitorB, capacitorF,
-                    nodeOrGround(nodeOf, new ComponentTerminal(c.id(), "a")),
-                    nodeOrGround(nodeOf, new ComponentTerminal(c.id(), "b")),
-                    c.capacitanceFarads());
-                case CircuitComponent.Inductor l -> addBranch(branchNodeA, branchNodeB, branchKind, branchRefIndex, branchR, branchL,
-                    nodeOrGround(nodeOf, new ComponentTerminal(l.id(), "a")),
-                    nodeOrGround(nodeOf, new ComponentTerminal(l.id(), "b")),
-                    VBranchKind.PASSIVE_INDUCTOR, -1, 0, l.inductanceHenry());
-                case CircuitComponent.ShuntResistor r -> addResistor(resistorA, resistorB, resistorG,
-                    nodeOrGround(nodeOf, new ComponentTerminal(r.id(), "in")),
-                    -1,
-                    r.resistanceOhms());
-                case CircuitComponent.ShuntCapacitor c -> addCapacitor(capacitorA, capacitorB, capacitorF,
-                    nodeOrGround(nodeOf, new ComponentTerminal(c.id(), "in")),
-                    -1,
-                    c.capacitanceFarads());
-                case CircuitComponent.ShuntInductor l -> addBranch(branchNodeA, branchNodeB, branchKind, branchRefIndex, branchR, branchL,
-                    nodeOrGround(nodeOf, new ComponentTerminal(l.id(), "in")),
-                    -1,
-                    VBranchKind.PASSIVE_INDUCTOR, -1, 0, l.inductanceHenry());
-                case CircuitComponent.SwitchComponent s -> {
-                    switchA.add(nodeOrGround(nodeOf, new ComponentTerminal(s.id(), "a")));
-                    switchB.add(nodeOrGround(nodeOf, new ComponentTerminal(s.id(), "b")));
-                    switchClosedOhms.add(s.closedOhms());
-                    switchOpenOhms.add(s.openOhms());
-                    switchThreshold.add(s.thresholdVolts());
-                    switchCtl.add(resolveCtl(circuit, nodeOf, sourceIndexById,
-                        new ComponentTerminal(s.id(), "ctl")));
-                    switchInvert.add(s.invertCtl());
-                }
-                case CircuitComponent.Multiplexer m -> {
-                    int aNode = nodeOrGround(nodeOf, new ComponentTerminal(m.id(), "a"));
-                    int bNode = nodeOrGround(nodeOf, new ComponentTerminal(m.id(), "b"));
-                    int commonNode = nodeOrGround(nodeOf, new ComponentTerminal(m.id(), "common"));
-                    var ctl = resolveCtl(circuit, nodeOf, sourceIndexById,
-                        new ComponentTerminal(m.id(), "ctl"));
-                    // a ↔ common closes when ctl is high (non-inverting).
-                    switchA.add(aNode);
-                    switchB.add(commonNode);
-                    switchClosedOhms.add(m.closedOhms());
-                    switchOpenOhms.add(m.openOhms());
-                    switchThreshold.add(m.thresholdVolts());
-                    switchCtl.add(ctl);
-                    switchInvert.add(false);
-                    // b ↔ common closes when ctl is low (inverting).
-                    switchA.add(bNode);
-                    switchB.add(commonNode);
-                    switchClosedOhms.add(m.closedOhms());
-                    switchOpenOhms.add(m.openOhms());
-                    switchThreshold.add(m.thresholdVolts());
-                    switchCtl.add(ctl);
-                    switchInvert.add(true);
-                }
-                default -> { /* already handled above, or nothing to stamp */ }
-            }
+        @Override
+        public void registerProbe(ComponentId id, String name, double gain,
+                                  double demodPhaseDeg, double loadImpedanceOhms, Node inPort) {
+            probes.add(new CompiledProbe(id, name, gain, demodPhaseDeg, loadImpedanceOhms));
+            probeNode.add(inPort.index());
         }
 
-        int[] probeNode = new int[probes.size()];
-        for (int p = 0; p < probes.size(); p++) {
-            probeNode[p] = nodeOrGround(nodeOf, new ComponentTerminal(probes.get(p).id(), "in"));
+        // ─── Finalisation ───
+
+        CompiledCircuit finish() {
+            var network = new MnaNetwork(
+                nodeCount,
+                branchKind.size(),
+                toIntArray(resistorA), toIntArray(resistorB), toDoubleArray(resistorG),
+                toIntArray(capacitorA), toIntArray(capacitorB), toDoubleArray(capacitorF),
+                toIntArray(switchA), toIntArray(switchB),
+                toDoubleArray(switchClosedOhms), toDoubleArray(switchOpenOhms), toDoubleArray(switchThreshold),
+                switchCtl.toArray(new CtlBinding[0]), toBooleanArray(switchInvert),
+                toIntArray(branchNodeA), toIntArray(branchNodeB),
+                branchKind.toArray(new VBranchKind[0]), toIntArray(branchRefIndex),
+                toDoubleArray(branchR), toDoubleArray(branchL),
+                toIntArray(sourceOutBranch), toIntArray(sourceActiveBranch),
+                toIntArray(coilBranch), toIntArray(probeNode),
+                toIntArray(mixerInNode), toIntArray(mixerOutBranch), toDoubleArray(mixerLoHz));
+            return new CompiledCircuit(sources, coils, probes, network, channelCursor);
         }
 
-        var network = new MnaNetwork(
-            nodeCount,
-            branchKind.size(),
-            toIntArray(resistorA), toIntArray(resistorB), toDoubleArray(resistorG),
-            toIntArray(capacitorA), toIntArray(capacitorB), toDoubleArray(capacitorF),
-            toIntArray(switchA), toIntArray(switchB),
-            toDoubleArray(switchClosedOhms), toDoubleArray(switchOpenOhms), toDoubleArray(switchThreshold),
-            switchCtl.toArray(new CtlBinding[0]), toBooleanArray(switchInvert),
-            toIntArray(branchNodeA), toIntArray(branchNodeB),
-            branchKind.toArray(new VBranchKind[0]), toIntArray(branchRefIndex),
-            toDoubleArray(branchR), toDoubleArray(branchL),
-            sourceOutBranch, sourceActiveBranch, coilBranchIdx, probeNode);
-
-        return new CompiledCircuit(sources, switches, coils, probes, network, channelCursor);
-    }
-
-    // ───────── Helpers ─────────
-
-    private static int nodeOrGround(Map<ComponentTerminal, Integer> nodeOf, ComponentTerminal t) {
-        Integer n = nodeOf.get(t);
-        return n == null ? -1 : n;
-    }
-
-    private static void addResistor(List<Integer> as, List<Integer> bs, List<Double> gs,
-                                     int a, int b, double ohms) {
-        as.add(a);
-        bs.add(b);
-        gs.add(1.0 / ohms);
-    }
-
-    private static void addCapacitor(List<Integer> as, List<Integer> bs, List<Double> fs,
-                                      int a, int b, double farads) {
-        as.add(a);
-        bs.add(b);
-        fs.add(farads);
-    }
-
-    private static int addBranch(List<Integer> branchNodeA, List<Integer> branchNodeB,
-                                  List<VBranchKind> kind, List<Integer> ref,
-                                  List<Double> branchR, List<Double> branchL,
-                                  int nodeA, int nodeB,
-                                  VBranchKind k, int refIdx, double r, double l) {
-        int idx = kind.size();
-        branchNodeA.add(nodeA);
-        branchNodeB.add(nodeB);
-        kind.add(k);
-        ref.add(refIdx);
-        branchR.add(r);
-        branchL.add(l);
-        return idx;
-    }
-
-    private static CtlBinding resolveCtl(CircuitDocument circuit,
-                                          Map<ComponentTerminal, Integer> nodeOf,
-                                          Map<ComponentId, Integer> sourceIndexById,
-                                          ComponentTerminal ctl) {
-        Integer ctlNode = nodeOf.get(ctl);
-        if (ctlNode == null) return new CtlBinding.AlwaysOpen();
-        for (var other : circuit.components()) {
-            if (!(other instanceof CircuitComponent.VoltageSource src)) continue;
-            Integer outNode = nodeOf.get(new ComponentTerminal(src.id(), "out"));
-            Integer activeNode = nodeOf.get(new ComponentTerminal(src.id(), "active"));
-            int srcIdx = sourceIndexById.get(src.id());
-            if (outNode != null && outNode.equals(ctlNode))
-                return new CtlBinding.FromSourceOut(srcIdx);
-            if (activeNode != null && activeNode.equals(ctlNode))
-                return new CtlBinding.FromSourceActive(srcIdx);
+        private int addBranch(int nodeA, int nodeB, VBranchKind kind, int refIdx, double r, double l) {
+            int idx = branchKind.size();
+            branchNodeA.add(nodeA);
+            branchNodeB.add(nodeB);
+            branchKind.add(kind);
+            branchRefIndex.add(refIdx);
+            branchR.add(r);
+            branchL.add(l);
+            return idx;
         }
-        return new CtlBinding.AlwaysOpen();
     }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Primitive helpers
+    // ─────────────────────────────────────────────────────────────────────
 
     private static int find(int[] parent, int i) {
         while (parent[i] != i) {
@@ -346,7 +328,8 @@ public final class CircuitCompiler {
         return out;
     }
 
-    private static double[][][] sampleEigenfield(CircuitComponent.Coil coil, ProjectRepository repository,
+    private static double[][][] sampleEigenfield(ProjectNodeId eigenfieldId,
+                                                 ProjectRepository repository,
                                                  double[] rMm, double[] zMm) {
         int nR = rMm.length;
         int nZ = zMm.length;
@@ -354,9 +337,9 @@ public final class CircuitCompiler {
         double[][] ey = new double[nR][nZ];
         double[][] ez = new double[nR][nZ];
 
-        EigenfieldDocument doc = (repository == null || coil.eigenfieldId() == null)
+        EigenfieldDocument doc = (repository == null || eigenfieldId == null)
             ? null
-            : (repository.node(coil.eigenfieldId()) instanceof EigenfieldDocument d ? d : null);
+            : (repository.node(eigenfieldId) instanceof EigenfieldDocument d ? d : null);
         if (doc == null) return new double[][][]{ex, ey, ez};
 
         EigenfieldScript script;

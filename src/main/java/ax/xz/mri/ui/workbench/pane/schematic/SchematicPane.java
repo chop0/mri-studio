@@ -2,7 +2,6 @@ package ax.xz.mri.ui.workbench.pane.schematic;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
-import ax.xz.mri.model.circuit.starter.AutoLayout;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import javafx.geometry.Insets;
@@ -241,56 +240,21 @@ public final class SchematicPane extends BorderPane {
     }
 
     private void populateAddMenu(ContextMenu menu, SchematicCanvas.Hit hit) {
-        addMenu(menu, "Voltage source", () -> new CircuitComponent.VoltageSource(
-            newId("src"), uniqueName("V"),
-            ax.xz.mri.model.simulation.AmplitudeKind.REAL, 0, 0, 1, 0), hit);
-        addMenu(menu, "Switch", () -> new CircuitComponent.SwitchComponent(
-            newId("sw"), uniqueName("SW"), 1e-6, 1e9, 0.5), hit);
-        addMenu(menu, "Multiplexer", () -> new CircuitComponent.Multiplexer(
-            newId("mux"), uniqueName("Mux"), 1e-6, 1e9, 0.5), hit);
-        addMenu(menu, "Coil", () -> new CircuitComponent.Coil(
-            newId("coil"), uniqueName("Coil"), null, 0, 0), hit);
-        addMenu(menu, "Probe", () -> new CircuitComponent.Probe(
-            newId("probe"), uniqueName("Probe"), 1, 0, Double.POSITIVE_INFINITY), hit);
-        menu.getItems().add(new SeparatorMenuItem());
-        addMenu(menu, "Resistor (series)", () -> new CircuitComponent.Resistor(
-            newId("r"), uniqueName("R"), 50), hit);
-        addMenu(menu, "Capacitor (series)", () -> new CircuitComponent.Capacitor(
-            newId("c"), uniqueName("C"), 1e-9), hit);
-        addMenu(menu, "Inductor (series)", () -> new CircuitComponent.Inductor(
-            newId("l"), uniqueName("L"), 1e-6), hit);
-        menu.getItems().add(new SeparatorMenuItem());
-        addMenu(menu, "Resistor (parallel)", () -> new CircuitComponent.ShuntResistor(
-            newId("rshunt"), uniqueName("Rp"), 50), hit);
-        addMenu(menu, "Capacitor (parallel)", () -> new CircuitComponent.ShuntCapacitor(
-            newId("cshunt"), uniqueName("Cp"), 1e-9), hit);
-        addMenu(menu, "Inductor (parallel)", () -> new CircuitComponent.ShuntInductor(
-            newId("lshunt"), uniqueName("Lp"), 1e-6), hit);
-    }
-
-    private void addMenu(ContextMenu menu, String label, java.util.function.Supplier<CircuitComponent> factory,
-                         SchematicCanvas.Hit hit) {
-        var item = new MenuItem("Add " + label);
-        item.setOnAction(e -> {
-            var component = factory.get();
-            var position = new ax.xz.mri.model.circuit.ComponentPosition(
-                component.id(), snap(hit.worldX()), snap(hit.worldY()), 0);
-            session.addComponent(component, position);
-        });
-        menu.getItems().add(item);
-    }
-
-    private static ax.xz.mri.model.circuit.ComponentId newId(String prefix) {
-        return new ax.xz.mri.model.circuit.ComponentId(prefix + "-" + java.util.UUID.randomUUID());
-    }
-
-    private String uniqueName(String base) {
-        var existing = new java.util.HashSet<String>();
-        for (var c : session.doc().components()) existing.add(c.name());
-        if (!existing.contains(base)) return base;
-        int i = 2;
-        while (existing.contains(base + " " + i)) i++;
-        return base + " " + i;
+        String currentSection = null;
+        for (var entry : ax.xz.mri.ui.workbench.pane.schematic.presenter.ComponentPresenters.paletteEntries()) {
+            if (currentSection != null && !currentSection.equals(entry.section())) {
+                menu.getItems().add(new SeparatorMenuItem());
+            }
+            currentSection = entry.section();
+            var item = new MenuItem("Add " + entry.label());
+            item.setOnAction(e -> {
+                var component = entry.factory().get();
+                var position = new ax.xz.mri.model.circuit.ComponentPosition(
+                    component.id(), snap(hit.worldX()), snap(hit.worldY()), 0);
+                session.addComponent(component, position);
+            });
+            menu.getItems().add(item);
+        }
     }
 
     private static double snap(double v) {

@@ -1,5 +1,7 @@
 package ax.xz.mri.model.circuit;
 
+import ax.xz.mri.model.circuit.compile.CircuitStampContext;
+import ax.xz.mri.model.circuit.compile.SwitchParams;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -19,6 +21,22 @@ import java.util.List;
  *
  * <p>Every concrete subtype is a {@code record} so the whole circuit model is
  * immutable + structurally comparable + trivially serialisable.
+ *
+ * <h2>Behaviour, not just data</h2>
+ * Each component owns its own simulation behaviour — no compiler-side switch
+ * enumerating concrete types:
+ * <ul>
+ *   <li>{@link #stamp(CircuitStampContext)} writes the component's
+ *       contribution to the MNA (resistor / capacitor / switch / mixer
+ *       stamps, or {@code registerSource} / {@code registerCoil} /
+ *       {@code registerProbe} for first-class simulator entities).</li>
+ *   <li>{@link #withId(ComponentId)} returns a clone with a fresh id,
+ *       consumed by the schematic's duplicate / cut-paste actions — saves
+ *       the UI from having to know every record's field list.</li>
+ * </ul>
+ *
+ * Adding a new kind of component is, on the simulation side, a single
+ * {@code record} with those two methods.
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
@@ -33,7 +51,8 @@ import java.util.List;
     @JsonSubTypes.Type(value = CircuitComponent.ShuntResistor.class, name = "shunt_resistor"),
     @JsonSubTypes.Type(value = CircuitComponent.ShuntCapacitor.class, name = "shunt_capacitor"),
     @JsonSubTypes.Type(value = CircuitComponent.ShuntInductor.class, name = "shunt_inductor"),
-    @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer")
+    @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer"),
+    @JsonSubTypes.Type(value = CircuitComponent.Mixer.class, name = "mixer")
 })
 public sealed interface CircuitComponent {
     ComponentId id();
@@ -41,6 +60,10 @@ public sealed interface CircuitComponent {
     List<String> ports();
 
     CircuitComponent withName(String newName);
+    CircuitComponent withId(ComponentId newId);
+
+    /** Contribute this component's stamps to the MNA. */
+    void stamp(CircuitStampContext ctx);
 
     // ─── Voltage source ───────────────────────────────────────────────────────
 
@@ -95,6 +118,17 @@ public sealed interface CircuitComponent {
         @Override
         public VoltageSource withName(String newName) {
             return new VoltageSource(id, newName, kind, carrierHz, minAmplitude, maxAmplitude, outputImpedanceOhms);
+        }
+
+        @Override
+        public VoltageSource withId(ComponentId newId) {
+            return new VoltageSource(newId, name, kind, carrierHz, minAmplitude, maxAmplitude, outputImpedanceOhms);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.registerSource(id, name, kind, carrierHz, maxAmplitude,
+                ctx.port("out"), ctx.port("active"));
         }
 
         public VoltageSource withKind(AmplitudeKind newKind) {
@@ -154,6 +188,18 @@ public sealed interface CircuitComponent {
             return new SwitchComponent(id, newName, closedOhms, openOhms, thresholdVolts, invertCtl);
         }
 
+        @Override
+        public SwitchComponent withId(ComponentId newId) {
+            return new SwitchComponent(newId, name, closedOhms, openOhms, thresholdVolts, invertCtl);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            var ctl = ctx.resolveCtl(ctx.port("ctl"));
+            ctx.stampSwitch(ctx.port("a"), ctx.port("b"),
+                SwitchParams.of(closedOhms, openOhms, thresholdVolts, ctl, invertCtl));
+        }
+
         public SwitchComponent withInvertCtl(boolean invert) {
             return new SwitchComponent(id, name, closedOhms, openOhms, thresholdVolts, invert);
         }
@@ -190,6 +236,22 @@ public sealed interface CircuitComponent {
         public Multiplexer withName(String newName) {
             return new Multiplexer(id, newName, closedOhms, openOhms, thresholdVolts);
         }
+
+        @Override
+        public Multiplexer withId(ComponentId newId) {
+            return new Multiplexer(newId, name, closedOhms, openOhms, thresholdVolts);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            var ctl = ctx.resolveCtl(ctx.port("ctl"));
+            // a ↔ common closes when ctl is high (non-inverting).
+            ctx.stampSwitch(ctx.port("a"), ctx.port("common"),
+                SwitchParams.of(closedOhms, openOhms, thresholdVolts, ctl, false));
+            // b ↔ common closes when ctl is low (inverting).
+            ctx.stampSwitch(ctx.port("b"), ctx.port("common"),
+                SwitchParams.of(closedOhms, openOhms, thresholdVolts, ctl, true));
+        }
     }
 
     // ─── Coil ─────────────────────────────────────────────────────────────────
@@ -225,6 +287,17 @@ public sealed interface CircuitComponent {
             return new Coil(id, newName, eigenfieldId, selfInductanceHenry, seriesResistanceOhms);
         }
 
+        @Override
+        public Coil withId(ComponentId newId) {
+            return new Coil(newId, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.registerCoil(id, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms,
+                ctx.port("in"));
+        }
+
         public Coil withEigenfieldId(ProjectNodeId newId) {
             return new Coil(id, name, newId, selfInductanceHenry, seriesResistanceOhms);
         }
@@ -244,12 +317,13 @@ public sealed interface CircuitComponent {
      * A voltage measurement point (versus ground). Emits one
      * {@link ax.xz.mri.model.simulation.SignalTrace} per simulation.
      *
-     * <p>The probe mixes its input down to baseband at
-     * {@link #carrierHz()}; {@code 0} means no mixing (output is the raw
-     * rotating-frame signal). {@link #demodPhaseDeg()} rotates the resulting
-     * complex signal. {@link #gain()} scales the result.
-     * {@link #loadImpedanceOhms()} is the probe's input impedance — an
-     * ideal voltmeter has {@link Double#POSITIVE_INFINITY}.
+     * <p>Probes are pure observers — they read a node voltage in the
+     * simulator's rotating frame without loading the circuit. Any frame
+     * shifting (down-conversion, up-conversion) happens in a dedicated
+     * {@link Mixer} block wired between the circuit and the probe's input.
+     * The probe itself only applies a constant {@link #demodPhaseDeg()
+     * phase rotation} and a scalar {@link #gain() gain} before emitting
+     * {@code (I, Q)} to the trace.
      *
      * <p>Single-terminal: the probe's input side wires into the circuit; the
      * other pole is the implicit ground.
@@ -258,7 +332,6 @@ public sealed interface CircuitComponent {
         ComponentId id,
         String name,
         double gain,
-        @JsonProperty("carrier_hz") double carrierHz,
         @JsonProperty("demod_phase_deg") double demodPhaseDeg,
         @JsonProperty("load_impedance_ohms") double loadImpedanceOhms
     ) implements CircuitComponent {
@@ -266,37 +339,38 @@ public sealed interface CircuitComponent {
             if (id == null) throw new IllegalArgumentException("Probe.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Probe.name must be non-blank");
             if (!Double.isFinite(gain)) throw new IllegalArgumentException("Probe.gain must be finite");
-            if (!Double.isFinite(carrierHz)) throw new IllegalArgumentException("Probe.carrierHz must be finite");
             if (!Double.isFinite(demodPhaseDeg)) throw new IllegalArgumentException("Probe.demodPhaseDeg must be finite");
             if (!(loadImpedanceOhms > 0)) throw new IllegalArgumentException("Probe.loadImpedanceOhms must be > 0");
-        }
-
-        /** Convenience constructor: zero carrier (raw rotating-frame signal). */
-        public Probe(ComponentId id, String name, double gain, double demodPhaseDeg, double loadImpedanceOhms) {
-            this(id, name, gain, 0.0, demodPhaseDeg, loadImpedanceOhms);
         }
 
         @Override public List<String> ports() { return List.of("in"); }
 
         @Override
         public Probe withName(String newName) {
-            return new Probe(id, newName, gain, carrierHz, demodPhaseDeg, loadImpedanceOhms);
+            return new Probe(id, newName, gain, demodPhaseDeg, loadImpedanceOhms);
+        }
+
+        @Override
+        public Probe withId(ComponentId newId) {
+            return new Probe(newId, name, gain, demodPhaseDeg, loadImpedanceOhms);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.registerProbe(id, name, gain, demodPhaseDeg, loadImpedanceOhms,
+                ctx.port("in"));
         }
 
         public Probe withGain(double v) {
-            return new Probe(id, name, v, carrierHz, demodPhaseDeg, loadImpedanceOhms);
-        }
-
-        public Probe withCarrierHz(double v) {
-            return new Probe(id, name, gain, v, demodPhaseDeg, loadImpedanceOhms);
+            return new Probe(id, name, v, demodPhaseDeg, loadImpedanceOhms);
         }
 
         public Probe withDemodPhaseDeg(double v) {
-            return new Probe(id, name, gain, carrierHz, v, loadImpedanceOhms);
+            return new Probe(id, name, gain, v, loadImpedanceOhms);
         }
 
         public Probe withLoadImpedanceOhms(double v) {
-            return new Probe(id, name, gain, carrierHz, demodPhaseDeg, v);
+            return new Probe(id, name, gain, demodPhaseDeg, v);
         }
     }
 
@@ -314,6 +388,14 @@ public sealed interface CircuitComponent {
         @Override
         public Resistor withName(String newName) { return new Resistor(id, newName, resistanceOhms); }
 
+        @Override
+        public Resistor withId(ComponentId newId) { return new Resistor(newId, name, resistanceOhms); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampResistor(ctx.port("a"), ctx.port("b"), resistanceOhms);
+        }
+
         public Resistor withResistanceOhms(double v) { return new Resistor(id, name, v); }
     }
 
@@ -328,6 +410,14 @@ public sealed interface CircuitComponent {
 
         @Override
         public Capacitor withName(String newName) { return new Capacitor(id, newName, capacitanceFarads); }
+
+        @Override
+        public Capacitor withId(ComponentId newId) { return new Capacitor(newId, name, capacitanceFarads); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampCapacitor(ctx.port("a"), ctx.port("b"), capacitanceFarads);
+        }
 
         public Capacitor withCapacitanceFarads(double v) { return new Capacitor(id, name, v); }
     }
@@ -344,6 +434,14 @@ public sealed interface CircuitComponent {
         @Override
         public Inductor withName(String newName) { return new Inductor(id, newName, inductanceHenry); }
 
+        @Override
+        public Inductor withId(ComponentId newId) { return new Inductor(newId, name, inductanceHenry); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampInductor(ctx.port("a"), ctx.port("b"), inductanceHenry);
+        }
+
         public Inductor withInductanceHenry(double v) { return new Inductor(id, name, v); }
     }
 
@@ -357,6 +455,10 @@ public sealed interface CircuitComponent {
         }
         @Override public List<String> ports() { return List.of("in"); }
         @Override public ShuntResistor withName(String newName) { return new ShuntResistor(id, newName, resistanceOhms); }
+        @Override public ShuntResistor withId(ComponentId newId) { return new ShuntResistor(newId, name, resistanceOhms); }
+        @Override public void stamp(CircuitStampContext ctx) {
+            ctx.stampResistor(ctx.port("in"), ctx.ground(), resistanceOhms);
+        }
         public ShuntResistor withResistanceOhms(double v) { return new ShuntResistor(id, name, v); }
     }
 
@@ -368,6 +470,10 @@ public sealed interface CircuitComponent {
         }
         @Override public List<String> ports() { return List.of("in"); }
         @Override public ShuntCapacitor withName(String newName) { return new ShuntCapacitor(id, newName, capacitanceFarads); }
+        @Override public ShuntCapacitor withId(ComponentId newId) { return new ShuntCapacitor(newId, name, capacitanceFarads); }
+        @Override public void stamp(CircuitStampContext ctx) {
+            ctx.stampCapacitor(ctx.port("in"), ctx.ground(), capacitanceFarads);
+        }
         public ShuntCapacitor withCapacitanceFarads(double v) { return new ShuntCapacitor(id, name, v); }
     }
 
@@ -379,7 +485,62 @@ public sealed interface CircuitComponent {
         }
         @Override public List<String> ports() { return List.of("in"); }
         @Override public ShuntInductor withName(String newName) { return new ShuntInductor(id, newName, inductanceHenry); }
+        @Override public ShuntInductor withId(ComponentId newId) { return new ShuntInductor(newId, name, inductanceHenry); }
+        @Override public void stamp(CircuitStampContext ctx) {
+            ctx.stampInductor(ctx.port("in"), ctx.ground(), inductanceHenry);
+        }
         public ShuntInductor withInductanceHenry(double v) { return new ShuntInductor(id, name, v); }
+    }
+
+    // ─── Mixer (buffered I/Q frame shift) ────────────────────────────────────
+
+    /**
+     * Complex-baseband mixer. Senses the voltage at {@code in} with infinite
+     * input impedance and drives {@code out} with a low-impedance copy
+     * rotated by {@code exp(-j·2π·loHz·t)} in the simulator's rotating
+     * frame.
+     *
+     * <p>This is a true voltage-controlled voltage source — the output can
+     * drive arbitrary loads (probes, filters, another mixer's input) without
+     * affecting the input node. Setting {@code loHz = 0} makes it an
+     * unity-gain buffer; {@code loHz > 0} shifts the output envelope down
+     * by that many Hz relative to the input.
+     *
+     * <p>Name is deliberately "Mixer", not "Mixer", because the same
+     * stamp handles up-mixing when a negative {@code loHz} is used or when
+     * the mixer's input and output are swapped in schematic intent.
+     */
+    record Mixer(
+        ComponentId id,
+        String name,
+        @JsonProperty("lo_hz") double loHz
+    ) implements CircuitComponent {
+        public Mixer {
+            if (id == null) throw new IllegalArgumentException("Mixer.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("Mixer.name must be non-blank");
+            if (!Double.isFinite(loHz)) throw new IllegalArgumentException("Mixer.loHz must be finite");
+        }
+
+        @Override public List<String> ports() { return List.of("in", "out"); }
+
+        @Override
+        public Mixer withName(String newName) {
+            return new Mixer(id, newName, loHz);
+        }
+
+        @Override
+        public Mixer withId(ComponentId newId) {
+            return new Mixer(newId, name, loHz);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            ctx.stampMixer(ctx.port("in"), ctx.port("out"), loHz);
+        }
+
+        public Mixer withLoHz(double v) {
+            return new Mixer(id, name, v);
+        }
     }
 
     /** Ideal two-port transformer with ports {@code pa}, {@code pb} (primary) and {@code sa}, {@code sb} (secondary). */
@@ -395,6 +556,16 @@ public sealed interface CircuitComponent {
 
         @Override
         public IdealTransformer withName(String newName) { return new IdealTransformer(id, newName, turnsRatio); }
+
+        @Override
+        public IdealTransformer withId(ComponentId newId) { return new IdealTransformer(newId, name, turnsRatio); }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            // No-op for now — true ideal-transformer stamping needs a
+            // constrained-current branch; the component is placeable but
+            // electrically inert until that arrives.
+        }
 
         public IdealTransformer withTurnsRatio(double v) { return new IdealTransformer(id, name, v); }
     }

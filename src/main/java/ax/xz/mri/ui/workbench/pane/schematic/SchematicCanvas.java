@@ -525,11 +525,16 @@ public final class SchematicCanvas extends Canvas {
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.C) {
-            clipboardCopy();
+            session.copySelection();
+            return true;
+        }
+        if (e.isShortcutDown() && e.getCode() == KeyCode.X) {
+            session.cutSelection();
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.V) {
-            clipboardPaste();
+            double[] world = cursorWorld();
+            session.paste(snap(world[0]), snap(world[1]));
             return true;
         }
         if (e.isShortcutDown() && e.getCode() == KeyCode.D) {
@@ -575,19 +580,6 @@ public final class SchematicCanvas extends Canvas {
     private void onKeyPressed(javafx.scene.input.KeyEvent e) {
         if (handleKey(e)) e.consume();
     }
-
-    private void clipboardCopy() {
-        pendingClipboard = session.selectedComponents.stream().toList();
-    }
-
-    private void clipboardPaste() {
-        if (pendingClipboard == null || pendingClipboard.isEmpty()) return;
-        session.selectedComponents.clear();
-        session.selectedComponents.addAll(pendingClipboard);
-        session.duplicateSelection(40, 40);
-    }
-
-    private java.util.List<ComponentId> pendingClipboard = java.util.List.of();
 
     private static double snap(double v) {
         int step = 20;

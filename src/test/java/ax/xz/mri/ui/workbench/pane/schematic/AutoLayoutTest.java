@@ -1,7 +1,8 @@
-package ax.xz.mri.model.circuit.starter;
+package ax.xz.mri.ui.workbench.pane.schematic;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.ComponentId;
+import ax.xz.mri.model.circuit.starter.CircuitStarterLibrary;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;

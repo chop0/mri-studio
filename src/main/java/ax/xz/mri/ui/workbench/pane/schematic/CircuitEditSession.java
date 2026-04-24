@@ -275,27 +275,113 @@ public final class CircuitEditSession {
         selectedComponents.addAll(oldToNew.values());
     }
 
+    // ─── Clipboard: cut / copy / paste ────────────────────────────────────
+
+    /**
+     * In-memory snapshot of a selection the user cut or copied. Stashes the
+     * component data, its layout position, and any wires that connect two
+     * clipboard components (so pasting a sub-circuit keeps its internal
+     * wiring intact). Cross-boundary wires — ones that go from a clipboard
+     * component to something not in the selection — are dropped, because
+     * there's no target to hook them up to on the paste side.
+     */
+    public record Clipboard(
+        List<CircuitComponent> components,
+        List<ComponentPosition> positions,
+        List<Wire> internalWires
+    ) {
+        public boolean isEmpty() { return components.isEmpty(); }
+    }
+
+    private Clipboard clipboard = new Clipboard(List.of(), List.of(), List.of());
+
+    public boolean clipboardIsEmpty() { return clipboard.isEmpty(); }
+
+    /** Snapshot the current selection into the clipboard. */
+    public void copySelection() {
+        if (selectedComponents.isEmpty()) return;
+        var doc = doc();
+        var ids = new java.util.HashSet<>(selectedComponents);
+        var components = new ArrayList<CircuitComponent>();
+        var positions = new ArrayList<ComponentPosition>();
+        for (var id : selectedComponents) {
+            var c = doc.component(id).orElse(null);
+            if (c == null) continue;
+            components.add(c);
+            doc.layout().positionOf(id).ifPresent(positions::add);
+        }
+        var internalWires = new ArrayList<Wire>();
+        for (var w : doc.wires()) {
+            if (ids.contains(w.from().componentId()) && ids.contains(w.to().componentId())) {
+                internalWires.add(w);
+            }
+        }
+        clipboard = new Clipboard(List.copyOf(components), List.copyOf(positions), List.copyOf(internalWires));
+    }
+
+    /** Copy the selection to the clipboard, then delete it. */
+    public void cutSelection() {
+        if (selectedComponents.isEmpty()) return;
+        copySelection();
+        deleteSelection();
+    }
+
+    /**
+     * Paste the clipboard at {@code (targetX, targetY)}, using the
+     * clipboard's top-leftmost component as the anchor. Fresh ids are
+     * assigned and names are de-duplicated against the current document.
+     * The pasted components become the new selection.
+     */
+    public void paste(double targetX, double targetY) {
+        if (clipboard.isEmpty()) return;
+
+        double anchorX = Double.POSITIVE_INFINITY;
+        double anchorY = Double.POSITIVE_INFINITY;
+        for (var p : clipboard.positions()) {
+            if (p.x() < anchorX) anchorX = p.x();
+            if (p.y() < anchorY) anchorY = p.y();
+        }
+        if (!Double.isFinite(anchorX)) { anchorX = targetX; anchorY = targetY; }
+        double dx = targetX - anchorX;
+        double dy = targetY - anchorY;
+
+        var existingNames = new java.util.HashSet<String>();
+        for (var c : doc().components()) existingNames.add(c.name());
+        var oldToNew = new java.util.HashMap<ComponentId, ComponentId>();
+
+        var doc = doc();
+        for (var original : clipboard.components()) {
+            var cloneId = new ComponentId(original.id().value() + "-paste-" + UUID.randomUUID());
+            var cloneName = uniqueName(existingNames, original.name());
+            existingNames.add(cloneName);
+            var clone = original.withName(cloneName).withId(cloneId);
+            oldToNew.put(original.id(), cloneId);
+            doc = doc.addComponent(clone, null);
+        }
+        var layout = doc.layout();
+        for (var p : clipboard.positions()) {
+            var newId = oldToNew.get(p.id());
+            if (newId == null) continue;
+            layout = layout.with(new ComponentPosition(newId,
+                p.x() + dx, p.y() + dy, p.rotationQuarters(), p.mirrored()));
+        }
+        doc = doc.withLayout(layout);
+        for (var w : clipboard.internalWires()) {
+            var newFrom = oldToNew.get(w.from().componentId());
+            var newTo = oldToNew.get(w.to().componentId());
+            if (newFrom == null || newTo == null) continue;
+            doc = doc.addWire(new Wire("wire-" + UUID.randomUUID(),
+                new ComponentTerminal(newFrom, w.from().port()),
+                new ComponentTerminal(newTo, w.to().port())));
+        }
+
+        replaceDocument(doc);
+        selectedComponents.clear();
+        selectedComponents.addAll(oldToNew.values());
+    }
+
     private static CircuitComponent withId(CircuitComponent source, ComponentId newId) {
-        return switch (source) {
-            case CircuitComponent.VoltageSource v -> new CircuitComponent.VoltageSource(
-                newId, v.name(), v.kind(), v.carrierHz(),
-                v.minAmplitude(), v.maxAmplitude(), v.outputImpedanceOhms());
-            case CircuitComponent.SwitchComponent s -> new CircuitComponent.SwitchComponent(
-                newId, s.name(), s.closedOhms(), s.openOhms(), s.thresholdVolts(), s.invertCtl());
-            case CircuitComponent.Multiplexer m -> new CircuitComponent.Multiplexer(
-                newId, m.name(), m.closedOhms(), m.openOhms(), m.thresholdVolts());
-            case CircuitComponent.Coil c -> new CircuitComponent.Coil(
-                newId, c.name(), c.eigenfieldId(), c.selfInductanceHenry(), c.seriesResistanceOhms());
-            case CircuitComponent.Probe p -> new CircuitComponent.Probe(
-                newId, p.name(), p.gain(), p.carrierHz(), p.demodPhaseDeg(), p.loadImpedanceOhms());
-            case CircuitComponent.Resistor r -> new CircuitComponent.Resistor(newId, r.name(), r.resistanceOhms());
-            case CircuitComponent.Capacitor c -> new CircuitComponent.Capacitor(newId, c.name(), c.capacitanceFarads());
-            case CircuitComponent.Inductor l -> new CircuitComponent.Inductor(newId, l.name(), l.inductanceHenry());
-            case CircuitComponent.ShuntResistor r -> new CircuitComponent.ShuntResistor(newId, r.name(), r.resistanceOhms());
-            case CircuitComponent.ShuntCapacitor c -> new CircuitComponent.ShuntCapacitor(newId, c.name(), c.capacitanceFarads());
-            case CircuitComponent.ShuntInductor l -> new CircuitComponent.ShuntInductor(newId, l.name(), l.inductanceHenry());
-            case CircuitComponent.IdealTransformer t -> new CircuitComponent.IdealTransformer(newId, t.name(), t.turnsRatio());
-        };
+        return source.withId(newId);
     }
 
     private static String uniqueName(java.util.Set<String> existing, String base) {

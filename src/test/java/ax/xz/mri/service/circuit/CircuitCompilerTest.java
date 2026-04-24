@@ -6,6 +6,7 @@ import ax.xz.mri.model.circuit.CircuitLayout;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
+import ax.xz.mri.model.circuit.compile.CtlBinding;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
@@ -66,7 +67,7 @@ class CircuitCompilerTest {
 
         assertEquals(1, compiled.mna().switchCount());
         var ctl = compiled.mna().switchCtl()[0];
-        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceOut.class, ctl);
+        assertInstanceOf(CtlBinding.FromSourceOut.class, ctl);
     }
 
     @Test
@@ -84,7 +85,7 @@ class CircuitCompilerTest {
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
         var ctl = compiled.mna().switchCtl()[0];
-        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceActive.class, ctl);
+        assertInstanceOf(CtlBinding.FromSourceActive.class, ctl);
     }
 
     @Test
@@ -101,7 +102,7 @@ class CircuitCompilerTest {
         var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
 
         var ctl = compiled.mna().switchCtl()[0];
-        assertInstanceOf(MnaNetwork.CtlBinding.AlwaysOpen.class, ctl);
+        assertInstanceOf(CtlBinding.AlwaysOpen.class, ctl);
     }
 
     @Test
@@ -127,7 +128,7 @@ class CircuitCompilerTest {
         // Both share the same ctl binding.
         var ctl0 = compiled.mna().switchCtl()[0];
         var ctl1 = compiled.mna().switchCtl()[1];
-        assertInstanceOf(MnaNetwork.CtlBinding.FromSourceActive.class, ctl0);
+        assertInstanceOf(CtlBinding.FromSourceActive.class, ctl0);
         assertEquals(ctl0, ctl1);
     }
 
@@ -171,6 +172,40 @@ class CircuitCompilerTest {
             }
         }
         assertTrue(foundPassive, "passive inductor should produce a PASSIVE_INDUCTOR branch");
+    }
+
+    @Test
+    void mixerStampsABranchAndExposesItsInAndLoHz() {
+        // The mixer is an electrical element — a buffered VCVS with a
+        // time-varying complex gain. The compiler should place a MIXER_OUT
+        // branch on its out-port and register its in-node + loHz for the
+        // solver to resolve each step.
+        var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_234);
+        var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var wires = List.of(
+            wire("w1", src.id(), "out", coil.id(), "in"),
+            wire("w2", coil.id(), "in", mixer.id(), "in"),
+            wire("w3", mixer.id(), "out", probe.id(), "in")
+        );
+        var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(src, coil, mixer, probe), wires, CircuitLayout.empty());
+        var compiled = CircuitCompiler.compile(circuit, ProjectRepository.untitled(), R, Z);
+        var mna = compiled.mna();
+
+        assertEquals(1, mna.mixerCount());
+        assertEquals(1_234, mna.mixerLoHz()[0], 1e-12);
+        int b = mna.mixerOutBranch()[0];
+        assertEquals(MnaNetwork.VBranchKind.MIXER_OUT, mna.branchKind()[b]);
+        // Mixer's in-node and the coil's node must be the same — they are
+        // wired together, and no virtual-alias trickery intervenes.
+        int coilNode = mna.branchNodeA()[mna.coilBranch()[0]];
+        assertEquals(coilNode, mna.mixerInNode()[0]);
+        // The probe's node and the mixer-out node are the same — they're
+        // wired together too.
+        assertEquals(mna.branchNodeA()[b], mna.probeNode()[0]);
     }
 
     private static CircuitComponent.VoltageSource voltageSource(

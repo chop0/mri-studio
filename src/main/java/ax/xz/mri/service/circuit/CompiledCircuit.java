@@ -11,19 +11,20 @@ import java.util.List;
  *
  * <p>The compiler resolves the graph once and produces:
  * <ul>
- *   <li>Parallel lists describing sources, coils, probes, and switches — their
- *       user-facing metadata (names, carrier, gain, etc.).</li>
+ *   <li>Typed metadata lists for sources, coils, and probes — the bits the
+ *       simulator needs beyond raw MNA topology (channel offsets, sampled
+ *       eigenfields, demod carriers, …).</li>
  *   <li>An {@link MnaNetwork} that drives per-step Modified Nodal Analysis in
  *       {@link ax.xz.mri.service.circuit.mna.MnaSolver}: resistor / capacitor /
  *       switch / voltage-branch stamps, plus node / branch index tables.</li>
  * </ul>
  *
- * <p>The simulator never re-walks the graph; it just reads the MNA network
- * each step.
+ * <p>Switches deliberately don't have a typed metadata entry — their
+ * user-visible parameters (closed / open ohms, threshold, ctl binding, invert)
+ * all live in the MNA stamps where the solver actually reads them.
  */
 public record CompiledCircuit(
     List<CompiledSource> sources,
-    List<CompiledSwitch> switches,
     List<CompiledCoil> coils,
     List<CompiledProbe> probes,
     MnaNetwork mna,
@@ -31,7 +32,6 @@ public record CompiledCircuit(
 ) {
     public CompiledCircuit {
         sources = List.copyOf(sources == null ? List.of() : sources);
-        switches = List.copyOf(switches == null ? List.of() : switches);
         coils = List.copyOf(coils == null ? List.of() : coils);
         probes = List.copyOf(probes == null ? List.of() : probes);
     }
@@ -54,21 +54,6 @@ public record CompiledCircuit(
     }
 
     /**
-     * A switch. The runtime {@link ax.xz.mri.service.circuit.mna.MnaSolver}
-     * reads the corresponding {@link MnaNetwork} entry to figure out its ctl
-     * binding and invert flag; this record exists purely to hold user-visible
-     * metadata (id, name, and the thresholds for inspection).
-     */
-    public record CompiledSwitch(
-        ComponentId id,
-        String name,
-        double closedOhms,
-        double openOhms,
-        double thresholdVolts,
-        boolean invertCtl
-    ) {}
-
-    /**
      * A coil compiled onto the (r, z) grid. {@code ex[ri][zi]} / {@code ey} /
      * {@code ez} are the eigenfield components per grid point, pre-multiplied
      * by the eigenfield's {@code defaultMagnitude}.
@@ -87,7 +72,6 @@ public record CompiledCircuit(
         ComponentId id,
         String name,
         double gain,
-        double carrierHz,
         double demodPhaseDeg,
         double loadImpedanceOhms
     ) {}

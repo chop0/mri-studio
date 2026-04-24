@@ -81,7 +81,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 evaluator.evaluate(step.controls(), dt, emfRe, emfIm, tSeconds, omegaSim);
                 applyStep(geometry, evaluator, dt, mx, my, mz);
                 double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
-                double[] signal = probeSignal(geometry, primaryIdx, evaluator);
+                double[] signal = probeSignal(geometry, primaryIdx, evaluator, tSeconds);
                 double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                 double sxOut = weightedSum(geometry.wOut(), mx);
                 double syOut = weightedSum(geometry.wOut(), my);
@@ -264,18 +264,28 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         }
     }
 
-    /** Complex signal observed by the probe, read directly from the MNA solve's node voltage. */
+    /**
+     * Complex signal observed by the probe in the lab frame. The MNA solves
+     * in a rotating frame at {@code ω_sim}, so we multiply the probe's node
+     * voltage by {@code exp(+j·ω_sim·t)} before applying the probe's demod
+     * phase and gain. Matches {@link ax.xz.mri.service.simulation.SignalTraceComputer}.
+     */
     protected static double[] probeSignal(ProblemGeometry geometry, int probeIndex,
-                                          CircuitStepEvaluator evaluator) {
+                                          CircuitStepEvaluator evaluator,
+                                          double tSeconds) {
         if (probeIndex < 0) return new double[]{0, 0};
         var probe = geometry.circuit().probes().get(probeIndex);
-        double sr = evaluator.probeVoltageReal(probeIndex);
-        double si = evaluator.probeVoltageImag(probeIndex);
+        double simR = evaluator.probeVoltageReal(probeIndex);
+        double simI = evaluator.probeVoltageImag(probeIndex);
+        double labPhase = geometry.omegaSim() * tSeconds;
+        double cLab = Math.cos(labPhase), sLab = Math.sin(labPhase);
+        double labR = simR * cLab - simI * sLab;
+        double labI = simR * sLab + simI * cLab;
         double rad = probe.demodPhaseDeg() * Math.PI / 180.0;
         double c = Math.cos(rad);
         double s = Math.sin(rad);
-        double phasedR = (sr * c - si * s) * probe.gain();
-        double phasedI = (sr * s + si * c) * probe.gain();
+        double phasedR = (labR * c - labI * s) * probe.gain();
+        double phasedI = (labR * s + labI * c) * probe.gain();
         return new double[]{phasedR, phasedI};
     }
 

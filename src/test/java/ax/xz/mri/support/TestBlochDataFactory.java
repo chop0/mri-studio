@@ -162,7 +162,7 @@ public final class TestBlochDataFactory {
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", gxEfId, 0, 0);
         var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", gzEfId, 0, 0);
         var probe = new CircuitComponent.Probe(new ComponentId("probe-rx"),
-            "Primary RX", 1.0, 0.0, 0.0, Double.POSITIVE_INFINITY);
+            "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
 
         var wires = List.of(
             new Wire("w-rf", new ComponentTerminal(rfSrc.id(), "out"), new ComponentTerminal(rfCoil.id(), "in")),

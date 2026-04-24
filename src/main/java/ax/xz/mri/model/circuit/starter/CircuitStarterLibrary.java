@@ -2,6 +2,7 @@ package ax.xz.mri.model.circuit.starter;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.Coil;
+import ax.xz.mri.model.circuit.CircuitComponent.Mixer;
 import ax.xz.mri.model.circuit.CircuitComponent.Multiplexer;
 import ax.xz.mri.model.circuit.CircuitComponent.Probe;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
@@ -89,36 +90,43 @@ public final class CircuitStarterLibrary {
             var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
             var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
 
-            // T/R mux: common -> RF coil, a -> RF source, b -> probe, ctl -> RF.active.
+            // T/R mux: common -> RF coil, a -> RF source, b -> Mixer, ctl -> RF.active.
             // closed resistance deliberately tiny so the mux doesn't form a
             // noticeable voltage divider against the 1 Ω default coil R.
             var trMux = new Multiplexer(new ComponentId("mux-tr"), "T/R Mux",
                 1e-6, 1e9, 0.5);
-            // Probe demodulates at the Larmor carrier so the reported signal
-            // is baseband relative to the RF drive.
+            // Mixer between the mux's RX port and the probe. Its LO is set
+            // to the Larmor carrier so the probe's complex trace comes back
+            // baseband relative to the RF drive — Point.real = I,
+            // Point.imag = Q of the demodulated envelope.
+            var rxMixer = new Mixer(new ComponentId("dc-rx"), "I/Q Demod", larmorHz);
+            // Probe is a pure voltmeter — demod lives in the Mixer block.
             var probe = new Probe(new ComponentId("probe-rx"), "Primary RX",
-                1.0, larmorHz, 0.0, Double.POSITIVE_INFINITY);
+                1.0, 0.0, Double.POSITIVE_INFINITY);
 
             var components = List.<CircuitComponent>of(
                 b0Src, rfSrc, gxSrc, gzSrc,
                 b0Coil, rfCoil, gxCoil, gzCoil,
-                trMux, probe);
+                trMux, rxMixer, probe);
 
             var wires = new ArrayList<Wire>();
             wires.add(wire("w-b0-drive", b0Src.id(), "out", b0Coil.id(), "in"));
             wires.add(wire("w-gx-drive", gxSrc.id(), "out", gxCoil.id(), "in"));
             wires.add(wire("w-gz-drive", gzSrc.id(), "out", gzCoil.id(), "in"));
 
-            // T/R routing.
-            wires.add(wire("w-rf-mux",    rfSrc.id(), "out", trMux.id(), "a"));
-            wires.add(wire("w-probe-mux", probe.id(), "in",  trMux.id(), "b"));
-            wires.add(wire("w-mux-coil",  trMux.id(), "common", rfCoil.id(), "in"));
-            wires.add(wire("w-mux-ctl",   rfSrc.id(), "active", trMux.id(), "ctl"));
+            // T/R routing. Receive path: RF coil -> mux.common, mux.b -> mixer.in,
+            // mixer.out -> probe.in. The mixer is a buffered VCVS — its
+            // output is a low-impedance frame-shifted copy of its input.
+            wires.add(wire("w-rf-mux",      rfSrc.id(), "out", trMux.id(), "a"));
+            wires.add(wire("w-mux-mixer",   trMux.id(), "b", rxMixer.id(), "in"));
+            wires.add(wire("w-mixer-probe", rxMixer.id(), "out", probe.id(), "in"));
+            wires.add(wire("w-mux-coil",    trMux.id(), "common", rfCoil.id(), "in"));
+            wires.add(wire("w-mux-ctl",     rfSrc.id(), "active", trMux.id(), "ctl"));
 
             var layout = LowFieldLayout.arrange(
                 List.of(b0Src, rfSrc, gxSrc, gzSrc),
                 List.of(b0Coil, rfCoil, gxCoil, gzCoil),
-                trMux, probe);
+                trMux, rxMixer, probe);
 
             return new CircuitDocument(id, name, components, wires, layout);
         }

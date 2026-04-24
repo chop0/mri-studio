@@ -34,9 +34,13 @@ import java.util.Map;
  *       {@code V_p} (both as complex {@code (I, Q)} pairs).</li>
  *   <li>Use the coil currents to update magnetisation via Rodrigues
  *       rotation + exponential T1/T2 decay at every grid point.</li>
- *   <li>Emit the downconverted probe voltage — mix the complex node voltage
- *       by the probe's carrier, rotate by its demod phase, scale by gain —
- *       as a {@link SignalTrace.Point} on its own trace.</li>
+ *   <li>Emit the probe voltage <em>in the lab frame</em>: the MNA runs in a
+ *       rotating frame at {@code ω_sim = γ·B0ref} for numerical stability,
+ *       so the node voltages come out rotating-frame; multiplying by
+ *       {@code exp(+j·ω_sim·t)} projects them back to the lab frame, which
+ *       is the frame the schematic presents to the user. The probe's
+ *       {@code demodPhaseDeg} rotation and {@code gain} are applied
+ *       afterwards.</li>
  * </ol>
  */
 public final class SignalTraceComputer {
@@ -86,16 +90,6 @@ public final class SignalTraceComputer {
 
         var evaluator = new CircuitStepEvaluator(circuit);
         double omegaSim = f.gamma * f.b0Ref;
-
-        // Each probe downconverts at its carrier: the simulator's rotating-
-        // frame signal is re-expressed in the probe's frame via
-        // exp(j·(omegaSim − omegaC)·t). carrierHz == 0 means "report the raw
-        // rotating-frame value" (no extra mixing).
-        double[] deltaOmega = new double[nProbes];
-        for (int k = 0; k < nProbes; k++) {
-            double ch = circuit.probes().get(k).carrierHz();
-            deltaOmega[k] = ch == 0.0 ? 0.0 : omegaSim - 2 * Math.PI * ch;
-        }
 
         // Reciprocity coupling integrals and per-step EMFs.
         double[] sCoilRePrev = new double[nCoils];
@@ -173,21 +167,23 @@ public final class SignalTraceComputer {
                 t += dt;
                 double tUs = Math.round(t * 1e7) / 10.0;
 
-                // 4. Emit per-probe complex voltage, downconverted at the probe's carrier.
+                // 4. Emit per-probe complex voltage in the LAB frame.
+                //    The MNA solves in a rotating frame at ω_sim for numerical
+                //    stability; the schematic presents the lab frame to the
+                //    user. Multiplying the probe's node voltage by
+                //    exp(+j·ω_sim·t) undoes the rotating-frame projection so
+                //    an oscilloscope hooked to the node would see the same
+                //    complex sample the trace records.
+                double labPhase = omegaSim * t;
+                double cLab = Math.cos(labPhase), sLab = Math.sin(labPhase);
                 for (int pk = 0; pk < nProbes; pk++) {
-                    double sr = evaluator.probeVoltageReal(pk);
-                    double si2 = evaluator.probeVoltageImag(pk);
-                    if (deltaOmega[pk] != 0.0) {
-                        double phase = deltaOmega[pk] * t;
-                        double cd = Math.cos(phase), sd = Math.sin(phase);
-                        double r2 = sr * cd - si2 * sd;
-                        double i2 = sr * sd + si2 * cd;
-                        sr = r2;
-                        si2 = i2;
-                    }
+                    double simR = evaluator.probeVoltageReal(pk);
+                    double simI = evaluator.probeVoltageImag(pk);
+                    double labR = simR * cLab - simI * sLab;
+                    double labI = simR * sLab + simI * cLab;
                     var probe = circuit.probes().get(pk);
-                    double phasedR = (sr * cosPhase[pk] - si2 * sinPhase[pk]) * probe.gain();
-                    double phasedI = (sr * sinPhase[pk] + si2 * cosPhase[pk]) * probe.gain();
+                    double phasedR = (labR * cosPhase[pk] - labI * sinPhase[pk]) * probe.gain();
+                    double phasedI = (labR * sinPhase[pk] + labI * cosPhase[pk]) * probe.gain();
                     traces.get(pk).add(new Point(tUs, phasedR, phasedI));
                 }
 
