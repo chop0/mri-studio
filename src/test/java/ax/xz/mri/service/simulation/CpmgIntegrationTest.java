@@ -110,7 +110,7 @@ class CpmgIntegrationTest {
         String script = String.format("return Vec3.of(0, 0, 1 + %s * z);", normalisedSlope);
         var eigen = new EigenfieldDocument(
             new ProjectNodeId("ef-test-" + suffix), "B0 linear " + suffix, "test off-resonance",
-            script, "T", 1.0);
+            script, "T");
         repo.addEigenfield(eigen);
 
         // Find the B0 coil (first coil wired to a STATIC source in the low-field template: coil-b0)

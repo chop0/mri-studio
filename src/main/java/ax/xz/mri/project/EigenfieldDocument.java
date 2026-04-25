@@ -2,7 +2,6 @@ package ax.xz.mri.project;
 
 import ax.xz.mri.model.simulation.FieldSymmetry;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Project-level eigenfield definition.
@@ -11,13 +10,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * a physical field source (magnet, gradient coil, RF coil, receive coil).
  * The DSL source is the entire definition; there is no "preset" enum.
  *
- * <h3>Physical calibration</h3>
- * <ul>
- *   <li>{@link #defaultMagnitude()} — peak |Vec3| the script returns at unit
- *       amplitude, in the declared {@link #units()}.</li>
- *   <li>{@link #units()} — physical units of the peak (e.g. {@code "T"},
- *       {@code "T/m"}, {@code "Hz"}). Empty for dimensionless.</li>
- * </ul>
+ * <p>The script is dimensionless: it returns the field's spatial <em>shape</em>,
+ * normalized so that the peak {@code |Vec3|} at the reference position is
+ * approximately {@code 1}. Each {@link ax.xz.mri.model.circuit.CircuitComponent.Coil}
+ * that references this eigenfield supplies its own
+ * {@code sensitivityT_per_A} — the actual peak Tesla per amp that
+ * <em>that</em> coil produces. The physics is then
+ * {@code B(r) = I_coil · sensitivity · shape(r)}.
+ *
+ * <p>The declared {@link #units()} live on the eigenfield only as a label
+ * for UI display (axis readouts, colour-bar legends, etc.) — the simulator
+ * doesn't multiply by them. Empty string for dimensionless.
  *
  * <h3>Spatial symmetry</h3>
  * {@link #symmetry()} tells the simulator which grid to sample the script on.
@@ -31,7 +34,6 @@ public record EigenfieldDocument(
     String description,
     String script,
     String units,
-    @JsonProperty("default_magnitude") double defaultMagnitude,
     FieldSymmetry symmetry
 ) implements ProjectNode {
 
@@ -40,15 +42,13 @@ public record EigenfieldDocument(
             throw new IllegalArgumentException("EigenfieldDocument requires a non-blank script");
         if (units == null)
             throw new IllegalArgumentException("EigenfieldDocument.units must be non-null (empty is allowed for dimensionless)");
-        if (!(defaultMagnitude > 0) || !Double.isFinite(defaultMagnitude))
-            throw new IllegalArgumentException("EigenfieldDocument.defaultMagnitude must be finite and positive, got " + defaultMagnitude);
         if (symmetry == null) symmetry = FieldSymmetry.AXISYMMETRIC_Z;
     }
 
     /** Convenience constructor that defaults {@link FieldSymmetry} to {@link FieldSymmetry#AXISYMMETRIC_Z}. */
     public EigenfieldDocument(ProjectNodeId id, String name, String description, String script,
-                              String units, double defaultMagnitude) {
-        this(id, name, description, script, units, defaultMagnitude, FieldSymmetry.AXISYMMETRIC_Z);
+                              String units) {
+        this(id, name, description, script, units, FieldSymmetry.AXISYMMETRIC_Z);
     }
 
     @Override
@@ -57,31 +57,23 @@ public record EigenfieldDocument(
         return ProjectNodeKind.EIGENFIELD;
     }
 
-    public double physicalPeak(double amplitude) {
-        return amplitude * defaultMagnitude;
-    }
-
     public EigenfieldDocument withName(String newName) {
-        return new EigenfieldDocument(id, newName, description, script, units, defaultMagnitude, symmetry);
+        return new EigenfieldDocument(id, newName, description, script, units, symmetry);
     }
 
     public EigenfieldDocument withDescription(String newDescription) {
-        return new EigenfieldDocument(id, name, newDescription, script, units, defaultMagnitude, symmetry);
+        return new EigenfieldDocument(id, name, newDescription, script, units, symmetry);
     }
 
     public EigenfieldDocument withScript(String newScript) {
-        return new EigenfieldDocument(id, name, description, newScript, units, defaultMagnitude, symmetry);
+        return new EigenfieldDocument(id, name, description, newScript, units, symmetry);
     }
 
     public EigenfieldDocument withUnits(String newUnits) {
-        return new EigenfieldDocument(id, name, description, script, newUnits, defaultMagnitude, symmetry);
-    }
-
-    public EigenfieldDocument withDefaultMagnitude(double newMagnitude) {
-        return new EigenfieldDocument(id, name, description, script, units, newMagnitude, symmetry);
+        return new EigenfieldDocument(id, name, description, script, newUnits, symmetry);
     }
 
     public EigenfieldDocument withSymmetry(FieldSymmetry newSymmetry) {
-        return new EigenfieldDocument(id, name, description, script, units, defaultMagnitude, newSymmetry);
+        return new EigenfieldDocument(id, name, description, script, units, newSymmetry);
     }
 }

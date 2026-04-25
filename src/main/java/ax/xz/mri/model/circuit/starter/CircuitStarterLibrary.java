@@ -92,10 +92,23 @@ public final class CircuitStarterLibrary {
             var gzSrc = new VoltageSource(new ComponentId("src-gz"), "Gradient Z",
                 AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
 
-            var b0Coil = new Coil(new ComponentId("coil-b0"), "B0 Coil", b0Eigen.id(), 0, 0);
-            var rfCoil = new Coil(new ComponentId("coil-rf"), "RF Coil", rfEigen.id(), 0, 0);
-            var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(), 0, 0);
-            var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(), 0, 0);
+            // Each coil makes its impedance and sensitivity explicit. R = 1 Ω
+            // and sensitivity = 1 T/A means the source amplitude (in volts)
+            // numerically equals the coil current (in amps), which equals the
+            // peak |B| (in tesla) — a useful default that keeps the legible
+            // "amplitude in tesla" UX of the old hidden defaults but exposes
+            // both knobs in the inspector for users who want a different
+            // calibration.
+            double coilR = 1.0;
+            double coilSensitivity = 1.0;
+            var b0Coil = new Coil(new ComponentId("coil-b0"), "B0 Coil", b0Eigen.id(),
+                0, coilR, coilSensitivity);
+            var rfCoil = new Coil(new ComponentId("coil-rf"), "RF Coil", rfEigen.id(),
+                0, coilR, coilSensitivity);
+            var gxCoil = new Coil(new ComponentId("coil-gx"), "Gx Coil", gxEigen.id(),
+                0, coilR, coilSensitivity);
+            var gzCoil = new Coil(new ComponentId("coil-gz"), "Gz Coil", gzEigen.id(),
+                0, coilR, coilSensitivity);
 
             // Modulator composes the I/Q envelopes into an upconverted RF
             // signal at the Larmor carrier. Its "out" drives the T/R mux;
@@ -158,7 +171,7 @@ public final class CircuitStarterLibrary {
         ProjectRepository repo, String name, String starterId
     ) {
         var s = EigenfieldStarterLibrary.byId(starterId).orElseThrow();
-        return ObjectFactory.findOrCreateEigenfield(repo, name, s.description(), s.source(), s.units(), s.defaultMagnitude());
+        return ObjectFactory.findOrCreateEigenfield(repo, name, s.description(), s.source(), s.units());
     }
 
     private static Wire wire(String id, ComponentId a, String pa, ComponentId b, String pb) {

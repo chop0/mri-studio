@@ -50,7 +50,7 @@ class MnaSolverTest {
         var rfI = voltageSource("src-i", "I", AmplitudeKind.REAL, 1.0);
         var rfQ = voltageSource("src-q", "Q", AmplitudeKind.REAL, 1.0);
         var mod = new CircuitComponent.Modulator(new ComponentId("mod"), "Mod", 0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1.0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var wires = List.of(
             wire("w-i-mod", rfI.id(), "out", mod.id(), "in0"),
             wire("w-q-mod", rfQ.id(), "out", mod.id(), "in1"),
@@ -114,7 +114,10 @@ class MnaSolverTest {
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 1.0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 0);
+        // Tiny but non-zero R so the MNA has a finite I↔V relation; with
+        // mux.closedR ≈ 1 µΩ the source-to-coil branch is effectively a
+        // short and coil current ≈ V_in regardless of this R.
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux",
             1e-6, 1e9, 0.5);
@@ -152,7 +155,7 @@ class MnaSolverTest {
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 2.0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 0);
         var load = new CircuitComponent.ShuntResistor(new ComponentId("load"), "Rp", 10);
         var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
@@ -189,7 +192,7 @@ class MnaSolverTest {
         var repo = ProjectRepository.untitled();
         var efId = addEigenfield(repo, "ef");
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1.0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_000_000);
         var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
             1.0, 0.0, Double.POSITIVE_INFINITY);
@@ -252,7 +255,7 @@ class MnaSolverTest {
     private static ProjectNodeId addEigenfield(ProjectRepository repo, String id) {
         var nodeId = new ProjectNodeId(id);
         repo.addEigenfield(new EigenfieldDocument(nodeId, id, "",
-            "return Vec3.of(1, 0, 0);", "T", 1.0));
+            "return Vec3.of(1, 0, 0);", "T"));
         return nodeId;
     }
 }

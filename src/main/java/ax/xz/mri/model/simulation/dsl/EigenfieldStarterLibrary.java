@@ -23,7 +23,7 @@ public final class EigenfieldStarterLibrary {
             // (x, y, z) are in metres. Amplitude scales the return value.
             return Vec3.ZERO;
             """,
-            "T", 1.0),
+            "T"),
 
         new EigenfieldStarter(
             "uniform-bz",
@@ -33,7 +33,7 @@ public final class EigenfieldStarterLibrary {
             // Perfectly homogeneous z-directed field.
             return Vec3.of(0, 0, 1);
             """,
-            "T", 1.0),
+            "T"),
 
         new EigenfieldStarter(
             "helmholtz-b0",
@@ -57,7 +57,7 @@ public final class EigenfieldStarterLibrary {
             double peak = 1.0 / pow(1 + (d / R) * (d / R), 1.5);
             return Vec3.of(0, 0, (bz0 + curvature) / peak);
             """,
-            "T", 1.0),
+            "T"),
 
         new EigenfieldStarter(
             "gradient-x",
@@ -67,7 +67,7 @@ public final class EigenfieldStarterLibrary {
             // Linear x-gradient of Bz.
             return Vec3.of(0, 0, x);
             """,
-            "T/m", 1.0),
+            "T/m"),
 
         new EigenfieldStarter(
             "gradient-z",
@@ -77,7 +77,7 @@ public final class EigenfieldStarterLibrary {
             // Linear z-gradient of Bz.
             return Vec3.of(0, 0, z);
             """,
-            "T/m", 1.0),
+            "T/m"),
 
         new EigenfieldStarter(
             "uniform-b-perp",
@@ -85,10 +85,11 @@ public final class EigenfieldStarterLibrary {
             "Perfectly uniform transverse (x-directed) B1. Ideal RF coil.",
             """
             // Uniform transverse B1 — ideal RF coil pointing along +x.
-            // Pair with a quadrature (QUADRATURE) amplitude at the Larmor carrier.
+            // Pair two REAL sources (I, Q) through a Modulator at the Larmor
+            // carrier to drive a coil that uses this eigenfield.
             return Vec3.of(1, 0, 0);
             """,
-            "T", 1.0),
+            "T"),
 
         new EigenfieldStarter(
             "surface-loop-rx",
@@ -105,7 +106,7 @@ public final class EigenfieldStarterLibrary {
             double amp = depthFall * radialFall;
             return Vec3.of(amp, 0, 0);
             """,
-            "T", 1.0)
+            "T")
     );
 
     public static List<EigenfieldStarter> all() {

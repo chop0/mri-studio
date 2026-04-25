@@ -25,7 +25,7 @@ class ProjectSerialiserTest {
         var serialiser = new ProjectSerialiser();
         var eigen = new EigenfieldDocument(
             new ProjectNodeId("ef-1"), "E",
-            "A uniform field", "return Vec3.of(0,0,1);", "T", 1.0);
+            "A uniform field", "return Vec3.of(0,0,1);", "T");
         var path = tempDir.resolve("eigen.json");
         serialiser.writeJson(path, eigen);
         var restored = serialiser.readJson(path, EigenfieldDocument.class);
@@ -33,6 +33,6 @@ class ProjectSerialiserTest {
         assertEquals(eigen.name(), restored.name());
         assertEquals(eigen.script(), restored.script());
         assertEquals(eigen.units(), restored.units());
-        assertEquals(eigen.defaultMagnitude(), restored.defaultMagnitude());
+        assertEquals(eigen, restored);
     }
 }

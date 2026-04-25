@@ -80,7 +80,7 @@ public final class ComponentPresenters {
 
             // Coils + probes
             new ComponentPaletteEntry("Coils + probes", "Coil", "Bridges circuit and FOV",
-                () -> new CircuitComponent.Coil(newId("coil"), "Coil", null, 0, 0)),
+                () -> new CircuitComponent.Coil(newId("coil"), "Coil", null, 0, 1)),
             new ComponentPaletteEntry("Coils + probes", "Probe", "Voltage measurement",
                 () -> new CircuitComponent.Probe(newId("probe"), "Probe",
                     1, 0, Double.POSITIVE_INFINITY)),

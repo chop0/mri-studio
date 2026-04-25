@@ -21,23 +21,23 @@ class CircuitDocumentTest {
 
     @Test
     void duplicateComponentId_isRejected() {
-        var a = new CircuitComponent.Coil(new ComponentId("c0"), "A", null, 0, 0);
-        var b = new CircuitComponent.Coil(new ComponentId("c0"), "B", null, 0, 0);
+        var a = new CircuitComponent.Coil(new ComponentId("c0"), "A", null, 0, 1);
+        var b = new CircuitComponent.Coil(new ComponentId("c0"), "B", null, 0, 1);
         assertThrows(IllegalArgumentException.class, () ->
             new CircuitDocument(new ProjectNodeId("c-3"), "c", List.of(a, b), List.of(), CircuitLayout.empty()));
     }
 
     @Test
     void duplicateComponentName_isRejected() {
-        var a = new CircuitComponent.Coil(new ComponentId("c0"), "Same", null, 0, 0);
-        var b = new CircuitComponent.Coil(new ComponentId("c1"), "Same", null, 0, 0);
+        var a = new CircuitComponent.Coil(new ComponentId("c0"), "Same", null, 0, 1);
+        var b = new CircuitComponent.Coil(new ComponentId("c1"), "Same", null, 0, 1);
         assertThrows(IllegalArgumentException.class, () ->
             new CircuitDocument(new ProjectNodeId("c-4"), "c", List.of(a, b), List.of(), CircuitLayout.empty()));
     }
 
     @Test
     void wireReferencingUnknownComponent_isRejected() {
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var badWire = new Wire("w-bad",
             new ComponentTerminal(new ComponentId("nope"), "in"),
             new ComponentTerminal(coil.id(), "in"));
@@ -47,7 +47,7 @@ class CircuitDocumentTest {
 
     @Test
     void wireReferencingUnknownPort_isRejected() {
-        var coil = new CircuitComponent.Coil(new ComponentId("c"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("c"), "C", null, 0, 1);
         var src = new CircuitComponent.VoltageSource(new ComponentId("s"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
         var badWire = new Wire("w-bad",
@@ -84,7 +84,7 @@ class CircuitDocumentTest {
     void removeComponent_alsoStripsWiresAndLayout() {
         var src = new CircuitComponent.VoltageSource(new ComponentId("s"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var w = new Wire("w1", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"));
         var layout = CircuitLayout.empty()
             .with(new ComponentPosition(src.id(), 0, 0, 0))
@@ -104,7 +104,7 @@ class CircuitDocumentTest {
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "RF",
             AmplitudeKind.REAL, 63e6, 0, 200e-6, 0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "RF Coil",
-            new ProjectNodeId("ef-rf"), 0, 0);
+            new ProjectNodeId("ef-rf"), 0, 1);
         var wires = List.of(
             new Wire("w1", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"))
         );

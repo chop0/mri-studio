@@ -456,12 +456,17 @@ public final class TimelineRenderer {
         return 1.0;
     }
 
-    /** Format an amplitude as a physical value with SI prefix, for axis labels. */
+    /** Format an amplitude as a physical value with SI prefix, for axis labels.
+     *  Eigenfields hold shape only — the displayed value is the raw source
+     *  amplitude tagged with the eigenfield's units label. The physical
+     *  magnitude that the simulator sees is multiplied by each coil's
+     *  sensitivity (T/A); the timeline axis intentionally stays in source
+     *  units so the user reads the controls they edit, not the cascaded
+     *  product of every downstream coil. */
     public static String formatAxisValue(SequenceEditSession session, SequenceChannel channel, double amplitude) {
         var ef = session.eigenfieldForChannel(channel);
-        double physical = ef != null ? amplitude * ef.defaultMagnitude() : amplitude;
         String units = ef != null ? ef.units() : "";
-        return formatWithUnits(physical, units);
+        return formatWithUnits(amplitude, units);
     }
 
     private static String formatWithUnits(double value, String units) {

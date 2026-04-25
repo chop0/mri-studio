@@ -36,21 +36,21 @@ class AcquisitionGateAndSymmetryTest {
 
     private static ProjectNodeId addEigenfield(ProjectRepository repo, String name, String script, FieldSymmetry sym) {
         var id = new ProjectNodeId("ef-" + name);
-        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T", 1.0, sym));
+        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T", sym));
         return id;
     }
 
     @Test
     void eigenfieldSymmetryDefaultsToAxisymmetric() {
         var doc = new EigenfieldDocument(new ProjectNodeId("ef-0"),
-            "B0", "", "return Vec3.of(0, 0, 1);", "T", 1.0);
+            "B0", "", "return Vec3.of(0, 0, 1);", "T");
         assertEquals(FieldSymmetry.AXISYMMETRIC_Z, doc.symmetry());
     }
 
     @Test
     void eigenfieldSymmetrySurvivesWithMutators() {
         var doc = new EigenfieldDocument(new ProjectNodeId("ef-1"),
-            "Gx", "", "return Vec3.of(0, 0, x);", "T", 1.0, FieldSymmetry.CARTESIAN_3D);
+            "Gx", "", "return Vec3.of(0, 0, x);", "T", FieldSymmetry.CARTESIAN_3D);
         assertEquals(FieldSymmetry.CARTESIAN_3D, doc.symmetry());
         assertEquals(FieldSymmetry.CARTESIAN_3D, doc.withName("Renamed").symmetry());
         assertEquals(FieldSymmetry.AXISYMMETRIC_Z,
@@ -67,8 +67,8 @@ class AcquisitionGateAndSymmetryTest {
             "B0", AmplitudeKind.STATIC, 0, 0, B0, 0);
         var rxGate = new CircuitComponent.VoltageSource(new ComponentId("src-rxgate"),
             "RX Gate", AmplitudeKind.GATE, 0, 0, 1, 0);
-        var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", b0Id, 0, 0);
-        var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxId, 0, 0);
+        var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", b0Id, 0, 1);
+        var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxId, 0, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "RX Switch", 0.5, 1e9, 0.5);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
 

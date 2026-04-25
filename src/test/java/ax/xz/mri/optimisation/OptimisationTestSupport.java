@@ -41,18 +41,18 @@ public final class OptimisationTestSupport {
     /**
      * Single-point geometry for simple objective tests. Three drive sources
      * wired one-to-one to three coils (RF, Gx, Gz), sampled on a 1×1 grid.
-     * The RF coil's eigenfield is {@code Vec3.of(1, 0, 0)} with
-     * {@code defaultMagnitude = rxWeight} so the signal reduces to
+     * The RF coil's eigenfield is the dimensionless shape {@code Vec3.of(1, 0, 0)};
+     * its {@code sensitivityT_per_A = rxWeight} so the signal reduces to
      * {@code rxWeight · Mx}. Probe is wired to the RF coil directly; no mux.
      */
     public static ProblemGeometry singlePointGeometry(double rxWeight, double outWeight) {
         var repo = ProjectRepository.untitled();
         var rfEfId = new ProjectNodeId("ef-rf");
         repo.addEigenfield(new EigenfieldDocument(rfEfId, "ef-rf", "",
-            "return Vec3.of(1, 0, 0);", "T", Math.max(rxWeight, 1e-30)));
+            "return Vec3.of(1, 0, 0);", "T"));
         var zeroEfId = new ProjectNodeId("ef-zero");
         repo.addEigenfield(new EigenfieldDocument(zeroEfId, "ef-zero", "",
-            "return Vec3.ZERO;", "T", 1.0));
+            "return Vec3.ZERO;", "T"));
 
         // RF drive is two REAL envelopes (I and Q) piped through a
         // Modulator at loHz=0 — the sources appear as "RF I" / "RF Q" in
@@ -68,9 +68,15 @@ public final class OptimisationTestSupport {
             "Gz", AmplitudeKind.REAL, 0, -1, 1, 0);
         var rfModulator = new CircuitComponent.Modulator(new ComponentId("mod-rf"),
             "RF Mod", 0);
-        var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", rfEfId, 0, 0);
-        var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", zeroEfId, 0, 0);
-        var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", zeroEfId, 0, 0);
+        // RF coil's sensitivity carries the rxWeight calibration. Other coils
+        // get a default sensitivity of 1 (their eigenfield is zero anyway).
+        // R = 1 Ω so the MNA has a finite I↔V relation per the new Coil
+        // contract; the absolute value cancels in the optimiser-side weight
+        // chain that produced these tests.
+        var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", rfEfId,
+            0, 1, Math.max(rxWeight, 1e-30));
+        var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", zeroEfId, 0, 1);
+        var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", zeroEfId, 0, 1);
         var probe = new CircuitComponent.Probe(new ComponentId("probe-rx"),
             "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
 

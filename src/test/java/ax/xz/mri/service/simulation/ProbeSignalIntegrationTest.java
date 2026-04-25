@@ -40,8 +40,8 @@ class ProbeSignalIntegrationTest {
 
         var b0Src = voltageSource("src-b0", "B0", AmplitudeKind.STATIC, 0, B0);
         var gate = voltageSource("src-gate", "RX Gate", AmplitudeKind.GATE, 0, 1);
-        var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", b0Ef, 0, 0);
-        var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxEf, 0, 0);
+        var b0Coil = new CircuitComponent.Coil(new ComponentId("coil-b0"), "B0 Coil", b0Ef, 0, 1);
+        var rxCoil = new CircuitComponent.Coil(new ComponentId("coil-rx"), "RX Coil", rxEf, 0, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "SW", 0.5, 1e9, 0.5);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
 
@@ -99,7 +99,7 @@ class ProbeSignalIntegrationTest {
 
     private static ProjectNodeId addEigenfield(ProjectRepository repo, String name, String script) {
         var id = new ProjectNodeId("ef-" + name);
-        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T", 1.0));
+        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T"));
         return id;
     }
 }

@@ -165,9 +165,9 @@ public final class TestBlochDataFactory {
             "Gz", AmplitudeKind.REAL, 0, -1, 1, 0);
         var rfModulator = new CircuitComponent.Modulator(new ComponentId("mod-rf"),
             "RF Mod", 0);
-        var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", rfEfId, 0, 0);
-        var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", gxEfId, 0, 0);
-        var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", gzEfId, 0, 0);
+        var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"), "RF Coil", rfEfId, 0, 1);
+        var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"), "Gx Coil", gxEfId, 0, 1);
+        var gzCoil = new CircuitComponent.Coil(new ComponentId("coil-gz"), "Gz Coil", gzEfId, 0, 1);
         var probe = new CircuitComponent.Probe(new ComponentId("probe-rx"),
             "Primary RX", 1.0, 0.0, Double.POSITIVE_INFINITY);
 
@@ -188,7 +188,7 @@ public final class TestBlochDataFactory {
 
     private static ProjectNodeId addEigenfield(ProjectRepository repo, String id, String script) {
         var nodeId = new ProjectNodeId(id);
-        repo.addEigenfield(new EigenfieldDocument(nodeId, id, "", script, "T", 1.0));
+        repo.addEigenfield(new EigenfieldDocument(nodeId, id, "", script, "T"));
         return nodeId;
     }
 }

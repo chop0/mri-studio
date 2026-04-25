@@ -106,11 +106,13 @@ public interface CircuitStampContext {
     /**
      * Register a coil. The context stamps one COIL branch between
      * {@code inPort} and ground carrying the user's series R / self-L,
-     * samples the eigenfield onto the compile-time grid, and appends a
-     * {@code CompiledCoil} entry.
+     * samples the eigenfield shape onto the compile-time grid scaled by
+     * {@code sensitivityT_per_A} (the coil's Tesla-per-amp calibration),
+     * and appends a {@code CompiledCoil} entry.
      */
     void registerCoil(ComponentId id, String name, ProjectNodeId eigenfieldId,
                       double selfInductanceHenry, double seriesResistanceOhms,
+                      double sensitivityT_per_A,
                       Node inPort);
 
     /**

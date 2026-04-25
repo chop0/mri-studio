@@ -54,7 +54,6 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
     private final TextField nameField = new TextField();
     private final TextField descriptionField = new TextField();
     private final TextField unitsField = new TextField();
-    private final TextField defaultMagnitudeField = new TextField();
     private final Label statusLabel = new Label("Ready");
     private final Button compileButton = new Button("Compile");
 
@@ -126,27 +125,17 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         unitsField.setPromptText("T · T/m · Hz · …");
         unitsField.setPrefColumnCount(7);
         unitsField.setTooltip(new javafx.scene.control.Tooltip(
-            "Physical units of the field peak produced by this eigenfield."));
+            "Physical units label for UI readouts. The script itself is " +
+            "dimensionless — each coil scales its sensitivity (T/A) to pick " +
+            "the actual magnitude."));
         unitsField.focusedProperty().addListener((obs, o, focused) -> {
             if (!focused) applyUnits(unitsField.getText());
         });
         unitsField.setOnAction(e -> applyUnits(unitsField.getText()));
 
-        defaultMagnitudeField.setPromptText("1.0");
-        defaultMagnitudeField.setPrefColumnCount(6);
-        defaultMagnitudeField.setTooltip(new javafx.scene.control.Tooltip(
-            "Peak |Vec3| returned by evaluate() at amplitude = 1 (in units). "
-                + "For unit-normalised scripts this is 1. "
-                + "A field definition's amplitude A maps to a peak physical field of A × defaultMagnitude × units."));
-        defaultMagnitudeField.focusedProperty().addListener((obs, o, focused) -> {
-            if (!focused) applyDefaultMagnitude(defaultMagnitudeField.getText());
-        });
-        defaultMagnitudeField.setOnAction(e -> applyDefaultMagnitude(defaultMagnitudeField.getText()));
-
         var row = new HBox(8,
             new Label("Name"), nameField,
             new Separator(Orientation.VERTICAL),
-            new Label("Default magnitude"), defaultMagnitudeField,
             new Label("Units"), unitsField,
             new Separator(Orientation.VERTICAL),
             new Label("Description"), descriptionField);
@@ -253,17 +242,10 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
             nameField.setText(document.name());
             descriptionField.setText(document.description() == null ? "" : document.description());
             unitsField.setText(document.units());
-            defaultMagnitudeField.setText(formatMagnitude(document.defaultMagnitude()));
             scriptEditor.setText(document.script());
         } finally {
             suppressScriptListener = false;
         }
-    }
-
-    private static String formatMagnitude(double v) {
-        if (v == 1.0) return "1";
-        if (v == (long) v) return Long.toString((long) v);
-        return Double.toString(v);
     }
 
     private void onScriptEdited() {
@@ -309,27 +291,6 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         document = document.withUnits(newUnits);
         persistToRepository();
         notifyTitleChanged();
-    }
-
-    private void applyDefaultMagnitude(String text) {
-        if (text == null) return;
-        double parsed;
-        try {
-            parsed = Double.parseDouble(text.strip());
-        } catch (NumberFormatException ex) {
-            defaultMagnitudeField.setText(formatMagnitude(document.defaultMagnitude()));
-            return;
-        }
-        if (!(parsed > 0) || !Double.isFinite(parsed)) {
-            defaultMagnitudeField.setText(formatMagnitude(document.defaultMagnitude()));
-            return;
-        }
-        if (parsed == document.defaultMagnitude()) return;
-        pushUndo();
-        document = document.withDefaultMagnitude(parsed);
-        persistToRepository();
-        notifyTitleChanged();
-        defaultMagnitudeField.setText(formatMagnitude(document.defaultMagnitude()));
     }
 
     private void compileScript() {

@@ -33,9 +33,11 @@ public final class ObjectFactory {
         );
     }
 
-    /** Find or create an eigenfield matching name + script. */
+    /** Find or create an eigenfield matching name + script. Eigenfields are
+     *  pure shape now — magnitude lives on each coil's sensitivity, so this
+     *  method no longer takes a magnitude parameter. */
     public static EigenfieldDocument findOrCreateEigenfield(
-            ProjectRepository repo, String name, String description, String script, String units, double defaultMagnitude) {
+            ProjectRepository repo, String name, String description, String script, String units) {
         for (var id : repo.eigenfieldIds()) {
             var node = repo.node(id);
             if (node instanceof EigenfieldDocument ef && ef.name().equals(name) && ef.script().equals(script)) {
@@ -43,7 +45,7 @@ public final class ObjectFactory {
             }
         }
         var eigen = new EigenfieldDocument(
-            new ProjectNodeId("ef-" + UUID.randomUUID()), name, description, script, units, defaultMagnitude);
+            new ProjectNodeId("ef-" + UUID.randomUUID()), name, description, script, units);
         repo.addEigenfield(eigen);
         return eigen;
     }

@@ -67,7 +67,7 @@ class SchematicEditSessionUiTest {
     @Test
     void addComponentAutoRenamesToAvoidCollision() {
         var session = new CircuitEditSession(simpleCircuit());
-        var duplicate = new CircuitComponent.Coil(new ComponentId("coil-2"), "Coil", null, 0, 0);
+        var duplicate = new CircuitComponent.Coil(new ComponentId("coil-2"), "Coil", null, 0, 1);
         session.addComponent(duplicate, new ComponentPosition(duplicate.id(), 400, 400, 0));
         var names = session.doc().components().stream().map(CircuitComponent::name).toList();
         assertTrue(names.contains("Coil"));
@@ -78,8 +78,8 @@ class SchematicEditSessionUiTest {
     void addWireBumpsRevisionAndRejectsDuplicates() {
         var blank = CircuitDocument.empty(new ProjectNodeId("blank"), "Blank");
         var session = new CircuitEditSession(blank);
-        var coil1 = new CircuitComponent.Coil(new ComponentId("c1"), "C1", null, 0, 0);
-        var coil2 = new CircuitComponent.Coil(new ComponentId("c2"), "C2", null, 0, 0);
+        var coil1 = new CircuitComponent.Coil(new ComponentId("c1"), "C1", null, 0, 1);
+        var coil2 = new CircuitComponent.Coil(new ComponentId("c2"), "C2", null, 0, 1);
         session.addComponent(coil1, new ComponentPosition(coil1.id(), 100, 100, 0));
         session.addComponent(coil2, new ComponentPosition(coil2.id(), 300, 100, 0));
         int rev = session.revision.get();
@@ -121,7 +121,7 @@ class SchematicEditSessionUiTest {
     private static CircuitDocument simpleCircuit() {
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var wires = List.of(
             new Wire("w-drive", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"))
         );

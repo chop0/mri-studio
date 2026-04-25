@@ -39,9 +39,15 @@ import java.util.Map;
  *
  * <p>Adding a new component type means adding a record with its own
  * {@code stamp}. The compiler does not change.
+ *
+ * <p>Coils report their own Tesla-per-amp sensitivity; the compiler samples
+ * the eigenfield shape into {@code ex/ey/ez} arrays scaled by that
+ * sensitivity. There is no silent "R = 1 Ω" fallback — a coil with both
+ * {@code seriesResistanceOhms == 0} and {@code selfInductanceHenry == 0}
+ * is rejected at the {@link CircuitComponent.Coil} record level, so a
+ * singular MNA row can never reach this class.
  */
 public final class CircuitCompiler {
-    private static final double DEFAULT_SERIES_R_OHMS = 1.0;
 
     private CircuitCompiler() {}
 
@@ -342,16 +348,17 @@ public final class CircuitCompiler {
         @Override
         public void registerCoil(ComponentId id, String name, ProjectNodeId eigenfieldId,
                                  double selfInductanceHenry, double seriesResistanceOhms,
+                                 double sensitivityT_per_A,
                                  Node inPort) {
-            double r = seriesResistanceOhms;
-            double l = selfInductanceHenry;
-            if (r == 0 && l == 0) r = DEFAULT_SERIES_R_OHMS;
-            var sample = sampleEigenfield(eigenfieldId, repository, rMm, zMm);
+            // Coil's constructor validates that at least one of R or L is
+            // non-zero, so the MNA row stamps verbatim — no silent default
+            // resistance, no division-by-zero risk.
+            var sample = sampleEigenfield(eigenfieldId, repository, rMm, zMm, sensitivityT_per_A);
             int index = coils.size();
             coils.add(new CompiledCoil(id, name, selfInductanceHenry, seriesResistanceOhms,
                 sample[0], sample[1], sample[2]));
             coilBranch.add(addBranch(inPort.index(), Node.GROUND.index(),
-                VBranchKind.COIL, index, r, l));
+                VBranchKind.COIL, index, seriesResistanceOhms, selfInductanceHenry));
         }
 
         @Override
@@ -465,7 +472,8 @@ public final class CircuitCompiler {
 
     private static double[][][] sampleEigenfield(ProjectNodeId eigenfieldId,
                                                  ProjectRepository repository,
-                                                 double[] rMm, double[] zMm) {
+                                                 double[] rMm, double[] zMm,
+                                                 double coilSensitivityT_per_A) {
         int nR = rMm.length;
         int nZ = zMm.length;
         double[][] ex = new double[nR][nZ];
@@ -483,7 +491,8 @@ public final class CircuitCompiler {
         } catch (RuntimeException compileFailure) {
             return new double[][][]{ex, ey, ez};
         }
-        double scale = doc.defaultMagnitude();
+        // Shape only from the eigenfield; magnitude comes from the coil.
+        double scale = coilSensitivityT_per_A;
 
         for (int ri = 0; ri < nR; ri++) {
             double x = rMm[ri] * 1e-3;

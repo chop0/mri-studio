@@ -97,7 +97,7 @@ public final class SequenceEditSession {
     public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
     private ProjectNodeId originalSimConfigId;
 
-    /** Repository supplier — used to resolve eigenfield metadata (units, defaultMagnitude). */
+    /** Repository supplier — used to resolve eigenfield metadata (display units). */
     private Supplier<ProjectRepository> repositorySupplier = () -> null;
 
     // ── Snapping ─────────────────────────────────────────────────────────────

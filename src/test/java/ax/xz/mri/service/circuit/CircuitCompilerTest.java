@@ -30,7 +30,7 @@ class CircuitCompilerTest {
     @Test
     void simpleSourceDrivingCoilProducesOneOutBranchAndOneCoilBranch() {
         var src = voltageSource("src", "RF", AmplitudeKind.REAL, 1);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var wires = List.of(
             wire("w", src.id(), "out", coil.id(), "in")
         );
@@ -45,8 +45,24 @@ class CircuitCompilerTest {
         assertEquals(2, mna.branchCount());
         assertEquals(0, mna.sourceOutBranch()[0]);
         assertEquals(1, mna.coilBranch()[0]);
-        // Default series resistance kicks in for R=0 L=0 coils.
+        // The coil's seriesResistanceOhms is what the MNA stamps — the
+        // compiler no longer silently substitutes a default for R = L = 0
+        // (those coils now fail Coil's own validation; see
+        // {@link #coilWithBothRAndLZeroFailsValidation}).
         assertEquals(1.0, mna.branchR()[mna.coilBranch()[0]], 1e-12);
+    }
+
+    @Test
+    void coilWithBothRAndLZeroFailsValidation() {
+        // The MNA can't model a coil with both R = 0 and L = 0 — any drive
+        // voltage demands infinite current. Coil's canonical constructor
+        // rejects this up-front rather than letting the compiler patch it
+        // with a magic default.
+        var ex = assertThrows(IllegalArgumentException.class,
+            () -> new CircuitComponent.Coil(new ComponentId("c"), "Bad coil", null, 0, 0));
+        assertTrue(ex.getMessage().contains("seriesResistanceOhms")
+                || ex.getMessage().contains("selfInductanceHenry"),
+            "Validation message must point the user at the coil's R/L knobs: " + ex.getMessage());
     }
 
     @Test
@@ -54,7 +70,7 @@ class CircuitCompilerTest {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 0.001);
         var gate = voltageSource("src-gate", "Gate", AmplitudeKind.GATE, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in"),
@@ -75,7 +91,7 @@ class CircuitCompilerTest {
         // Metadata tap references the source by name (not by wire).
         var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var wires = List.of(
             wire("w1", rfSrc.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in"),
@@ -93,7 +109,7 @@ class CircuitCompilerTest {
     void floatingSwitchControlResolvesAsAlwaysOpen() {
         var src = voltageSource("src", "RF", AmplitudeKind.REAL, 1);
         var sw = new CircuitComponent.SwitchComponent(new ComponentId("sw"), "Sw", 0.5, 1e9, 0.5);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var wires = List.of(
             wire("w1", src.id(), "out", sw.id(), "a"),
             wire("w2", sw.id(), "b", coil.id(), "in")
@@ -110,7 +126,7 @@ class CircuitCompilerTest {
     void multiplexerExpandsIntoTwoOppositePolaritySwitchStamps() {
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 0.001);
         var meta = new CircuitComponent.VoltageMetadata(new ComponentId("meta"), "RF active", "RF");
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", null, 0, 1);
         var probe = new CircuitComponent.Probe(new ComponentId("probe"), "RX", 1, 0, Double.POSITIVE_INFINITY);
         var mux = new CircuitComponent.Multiplexer(new ComponentId("mux"), "TRmux", 0.5, 1e9, 0.5);
         var wires = List.of(
@@ -137,7 +153,7 @@ class CircuitCompilerTest {
     @Test
     void shuntResistorStampsOneResistorToGround() {
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var rShunt = new CircuitComponent.ShuntResistor(new ComponentId("rshunt"), "Rp", 100);
         var wires = List.of(
             wire("w1", src.id(), "out", coil.id(), "in"),
@@ -155,7 +171,7 @@ class CircuitCompilerTest {
     @Test
     void passiveInductorGetsItsOwnBranch() {
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var l = new CircuitComponent.Inductor(new ComponentId("l"), "L", 1e-6);
         var wires = List.of(
             wire("w1", src.id(), "out", l.id(), "a"),
@@ -183,7 +199,7 @@ class CircuitCompilerTest {
         // compiler should place a MIXER_OUT_0 and MIXER_OUT_1 branch on
         // out0/out1 and register its in-node + loHz for the solver.
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_234);
         var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "I",
             1.0, 0.0, Double.POSITIVE_INFINITY);

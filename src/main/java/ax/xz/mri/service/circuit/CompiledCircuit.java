@@ -59,7 +59,8 @@ public record CompiledCircuit(
     /**
      * A coil compiled onto the (r, z) grid. {@code ex[ri][zi]} / {@code ey} /
      * {@code ez} are the eigenfield components per grid point, pre-multiplied
-     * by the eigenfield's {@code defaultMagnitude}.
+     * by the coil's {@code sensitivityT_per_A} (Tesla per amp). The eigenfield
+     * itself is dimensionless shape; calibration lives on the coil.
      */
     public record CompiledCoil(
         ComponentId id,

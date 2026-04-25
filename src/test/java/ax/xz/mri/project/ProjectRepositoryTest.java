@@ -46,7 +46,7 @@ class ProjectRepositoryTest {
     void removeEigenfield() {
         var repo = ProjectRepository.untitled();
         var ef = new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "E", "desc", "return Vec3.ZERO;", "T", 1.0);
+            new ProjectNodeId("ef-1"), "E", "desc", "return Vec3.ZERO;", "T");
         repo.addEigenfield(ef);
         assertNotNull(repo.node(ef.id()));
         repo.removeEigenfield(ef.id());
@@ -64,7 +64,7 @@ class ProjectRepositoryTest {
         assertEquals(original, repo.circuit(id));
 
         var coil = new CircuitComponent.Coil(
-            new ComponentId("coil-0"), "C0", null, 0, 0);
+            new ComponentId("coil-0"), "C0", null, 0, 1);
         var updated = original.addComponent(coil, null);
         repo.updateCircuit(updated);
         assertEquals(updated, repo.circuit(id));

@@ -635,8 +635,11 @@ public final class ClipInspectorSection {
 
     private String formatPeak(SignalClip clip, EigenfieldDocument ef) {
         if (ef == null) return "";
-        double physical = clip.amplitude() * ef.defaultMagnitude();
-        return "\u2248 " + formatSI(physical, ef.units());
+        // Eigenfield carries shape only now; the actual physical magnitude
+        // depends on which coil this drive routes to. We can't pin a unique
+        // T/A here without walking the circuit, so just report the source
+        // amplitude tagged with the eigenfield's units label.
+        return "\u2248 " + formatSI(clip.amplitude(), ef.units());
     }
 
     private static String formatSI(double value, String units) {

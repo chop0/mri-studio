@@ -46,9 +46,9 @@ class SequenceStarterLibraryTest {
         var gxSrc = new CircuitComponent.VoltageSource(new ComponentId("src-gx"),
             "Gradient X", AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
         var rfCoil = new CircuitComponent.Coil(new ComponentId("coil-rf"),
-            "RF Coil", new ProjectNodeId("ef-rf"), 0, 0);
+            "RF Coil", new ProjectNodeId("ef-rf"), 0, 1);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
-            "Gx Coil", new ProjectNodeId("ef-gx"), 0, 0);
+            "Gx Coil", new ProjectNodeId("ef-gx"), 0, 1);
         var wires = List.of(
             new Wire("w-rfi", new ComponentTerminal(rfISrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in0")),
             new Wire("w-rfq", new ComponentTerminal(rfQSrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in1")),
@@ -63,7 +63,7 @@ class SequenceStarterLibraryTest {
         var gxSrc = new CircuitComponent.VoltageSource(new ComponentId("src-gx"),
             "Gradient X", AmplitudeKind.REAL, 0, -0.030, 0.030, 0);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
-            "Gx Coil", new ProjectNodeId("ef-gx"), 0, 0);
+            "Gx Coil", new ProjectNodeId("ef-gx"), 0, 1);
         var wires = List.of(
             new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in"))
         );

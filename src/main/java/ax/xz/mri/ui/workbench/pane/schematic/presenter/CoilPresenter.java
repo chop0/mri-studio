@@ -100,6 +100,16 @@ final class CoilPresenter implements ComponentPresenter {
         container.getChildren().add(InspectorFields.doubleField(
             "Series R (ohms)", c.seriesResistanceOhms(),
             v -> env.session().replaceComponent(c.withSeriesResistanceOhms(v))));
+        container.getChildren().add(InspectorFields.doubleField(
+            "Sensitivity (T/A)", c.sensitivityT_per_A(),
+            v -> env.session().replaceComponent(c.withSensitivityT_per_A(v))));
+        var sensHint = new javafx.scene.control.Label(
+            "Peak Tesla per amp of coil current. The eigenfield provides shape " +
+            "only; this scalar turns {I × shape} into a real B field. " +
+            "B(r) = I_coil · sensitivity · shape(r).");
+        sensHint.setWrapText(true);
+        sensHint.getStyleClass().add("schematic-inspector-hint");
+        container.getChildren().add(sensHint);
     }
 
     @Override public int autoLayoutColumn() { return 2; }

@@ -257,19 +257,35 @@ public sealed interface CircuitComponent {
     // ─── Coil ─────────────────────────────────────────────────────────────────
 
     /**
-     * A physical coil — the bridge between the circuit and the FOV. Carries
-     * an {@linkplain #eigenfieldId() eigenfield} describing the B-field
-     * shape at unit current. Current into {@code in} produces a B
-     * contribution; the magnetisation's time-derivative (reciprocity)
-     * induces an EMF at {@code in}. The return side is always ground, so
-     * coils expose only one wireable terminal.
+     * A physical coil — the bridge between the circuit and the FOV.
+     *
+     * <p>Three independent properties:
+     * <ul>
+     *   <li>{@linkplain #eigenfieldId() shape} — which
+     *       {@link ax.xz.mri.project.EigenfieldDocument} the coil produces.
+     *       The script is dimensionless (peak |Vec3| ≈ 1 at a reference).</li>
+     *   <li>{@link #sensitivityT_per_A} — Tesla per amp. The coil-specific
+     *       calibration; a real coil's turns × geometry × material compressed
+     *       into one scalar. Peak-field in the FOV for current {@code I} is
+     *       {@code I · sensitivity · shape(r)}.</li>
+     *   <li>{@link #seriesResistanceOhms} + {@link #selfInductanceHenry} —
+     *       the impedance the MNA uses to translate voltage drive into
+     *       current. At least one must be positive so the MNA row is
+     *       well-posed.</li>
+     * </ul>
+     *
+     * <p>Current into {@code in} produces a B contribution; the
+     * magnetisation's time-derivative (reciprocity) induces an EMF at
+     * {@code in}. The return side is always ground — coils expose one
+     * wireable terminal.
      */
     record Coil(
         ComponentId id,
         String name,
         @JsonProperty("eigenfield_id") ProjectNodeId eigenfieldId,
         @JsonProperty("self_inductance_henry") double selfInductanceHenry,
-        @JsonProperty("series_resistance_ohms") double seriesResistanceOhms
+        @JsonProperty("series_resistance_ohms") double seriesResistanceOhms,
+        @JsonProperty("sensitivity_t_per_a") double sensitivityT_per_A
     ) implements CircuitComponent {
         public Coil {
             if (id == null) throw new IllegalArgumentException("Coil.id must not be null");
@@ -278,36 +294,55 @@ public sealed interface CircuitComponent {
                 throw new IllegalArgumentException("Coil.selfInductanceHenry must be finite non-negative");
             if (!(seriesResistanceOhms >= 0) || !Double.isFinite(seriesResistanceOhms))
                 throw new IllegalArgumentException("Coil.seriesResistanceOhms must be finite non-negative");
+            if (!Double.isFinite(sensitivityT_per_A))
+                throw new IllegalArgumentException("Coil.sensitivityT_per_A must be finite, got " + sensitivityT_per_A);
+            if (seriesResistanceOhms == 0 && selfInductanceHenry == 0) {
+                throw new IllegalArgumentException(
+                    "Coil '" + name + "' needs either seriesResistanceOhms > 0 or " +
+                    "selfInductanceHenry > 0 — with both zero, the MNA would have to " +
+                    "push infinite current to satisfy any drive voltage. Set one of " +
+                    "them in the coil inspector.");
+            }
+        }
+
+        /** Convenience: defaults {@code sensitivityT_per_A = 1}. */
+        public Coil(ComponentId id, String name, ProjectNodeId eigenfieldId,
+                    double selfInductanceHenry, double seriesResistanceOhms) {
+            this(id, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms, 1.0);
         }
 
         @Override public List<String> ports() { return List.of("in"); }
 
         @Override
         public Coil withName(String newName) {
-            return new Coil(id, newName, eigenfieldId, selfInductanceHenry, seriesResistanceOhms);
+            return new Coil(id, newName, eigenfieldId, selfInductanceHenry, seriesResistanceOhms, sensitivityT_per_A);
         }
 
         @Override
         public Coil withId(ComponentId newId) {
-            return new Coil(newId, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms);
+            return new Coil(newId, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms, sensitivityT_per_A);
         }
 
         @Override
         public void stamp(CircuitStampContext ctx) {
             ctx.registerCoil(id, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms,
-                ctx.port("in"));
+                sensitivityT_per_A, ctx.port("in"));
         }
 
         public Coil withEigenfieldId(ProjectNodeId newId) {
-            return new Coil(id, name, newId, selfInductanceHenry, seriesResistanceOhms);
+            return new Coil(id, name, newId, selfInductanceHenry, seriesResistanceOhms, sensitivityT_per_A);
         }
 
         public Coil withSelfInductanceHenry(double v) {
-            return new Coil(id, name, eigenfieldId, v, seriesResistanceOhms);
+            return new Coil(id, name, eigenfieldId, v, seriesResistanceOhms, sensitivityT_per_A);
         }
 
         public Coil withSeriesResistanceOhms(double v) {
-            return new Coil(id, name, eigenfieldId, selfInductanceHenry, v);
+            return new Coil(id, name, eigenfieldId, selfInductanceHenry, v, sensitivityT_per_A);
+        }
+
+        public Coil withSensitivityT_per_A(double v) {
+            return new Coil(id, name, eigenfieldId, selfInductanceHenry, seriesResistanceOhms, v);
         }
     }
 

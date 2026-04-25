@@ -191,7 +191,7 @@ class SchematicCanvasInteractionTest {
     private static CircuitDocument lowCircuit() {
         var src = new CircuitComponent.VoltageSource(new ComponentId("src"), "S",
             AmplitudeKind.REAL, 0, 0, 1, 0);
-        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 0);
+        var coil = new CircuitComponent.Coil(new ComponentId("coil"), "C", null, 0, 1);
         var wires = List.of(
             new Wire("w1", new ComponentTerminal(src.id(), "out"), new ComponentTerminal(coil.id(), "in"))
         );

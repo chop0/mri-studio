@@ -354,9 +354,9 @@ public final class ProjectSessionViewModel {
         return doc;
     }
 
-    public EigenfieldDocument createEigenfield(String name, String description, String script, String units, double defaultMagnitude) {
+    public EigenfieldDocument createEigenfield(String name, String description, String script, String units) {
         var repo = repository.get();
-        var ef = ObjectFactory.findOrCreateEigenfield(repo, name, description, script, units, defaultMagnitude);
+        var ef = ObjectFactory.findOrCreateEigenfield(repo, name, description, script, units);
         explorer.refresh();
         saveProjectQuietly();
         return ef;
