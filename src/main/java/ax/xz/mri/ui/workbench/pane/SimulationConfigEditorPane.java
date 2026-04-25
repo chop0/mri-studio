@@ -86,6 +86,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private final Tab schematicTab = new Tab("Schematic");
 
     private CircuitEditSession circuitSession;
+    private SchematicPane schematicPane;
     private Runnable onTitleChanged;
 
     public SimulationConfigEditorPane(PaneContext paneContext, SimulationConfigDocument document) {
@@ -449,10 +450,24 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             paneContext.session().project.explorer.markContentChanged();
         });
 
-        return new SchematicPane(circuitSession,
+        schematicPane = new SchematicPane(circuitSession,
             () -> paneContext.session().project.repository.get(),
             eigenfieldId -> paneContext.session().project.openNode(eigenfieldId));
+        return schematicPane;
     }
+
+    /** Switch the editor's tab control to the Schematic tab. */
+    public void selectSchematicTab() {
+        tabs.getSelectionModel().select(schematicTab);
+    }
+
+    /**
+     * The {@link SchematicPane} embedded in the Schematic tab. Lazily created
+     * the first time {@link #buildSchematicTab()} runs — null until the
+     * editor is fully constructed (it is, by the time the constructor
+     * returns, since {@code buildSchematicTab} is called in the ctor).
+     */
+    public SchematicPane schematicPane() { return schematicPane; }
 
     // ───────── Helpers ─────────
 

@@ -232,6 +232,14 @@ public final class SequenceEditSession {
         return null;
     }
 
+    /** Resolve a specific coil's {@link EigenfieldDocument}, or {@code null} if unknown. */
+    public EigenfieldDocument eigenfieldFor(CircuitComponent.Coil coil) {
+        if (coil == null || coil.eigenfieldId() == null) return null;
+        var repo = repositorySupplier.get();
+        if (repo == null) return null;
+        return repo.node(coil.eigenfieldId()) instanceof EigenfieldDocument ef ? ef : null;
+    }
+
     /** Resolve the eigenfield document reachable from a channel's source (through switches), or {@code null}. */
     public EigenfieldDocument eigenfieldForChannel(SequenceChannel channel) {
         var src = sourceForChannel(channel);

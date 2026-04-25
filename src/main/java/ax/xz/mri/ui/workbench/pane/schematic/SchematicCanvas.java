@@ -43,6 +43,10 @@ public final class SchematicCanvas extends Canvas {
     private static final Color WIRE = Color.web("#1f2933");
     private static final Color WIRE_PENDING = Color.web("#1976d2");
     private static final Color WIRE_SELECTED = Color.web("#1976d2");
+    /** Amber used by the path-highlight overlay (matches ComponentRenderer.HIGHLIGHT). */
+    private static final Color WIRE_HIGHLIGHT = Color.web("#f59e0b");
+    /** Soft amber underlay so highlighted wires read clearly even when overlapping. */
+    private static final Color WIRE_HIGHLIGHT_GLOW = Color.web("#f59e0b").deriveColor(0, 1, 1, 0.35);
 
     private final CircuitEditSession session;
 
@@ -81,6 +85,8 @@ public final class SchematicCanvas extends Canvas {
         InvalidationListener selectionListener = o -> redraw();
         session.selectedComponents.addListener(selectionListener);
         session.selectedWires.addListener(selectionListener);
+        session.highlightedComponents.addListener(selectionListener);
+        session.highlightedWires.addListener(selectionListener);
 
         setOnMouseMoved(this::onMouseMoved);
         setOnMouseDragged(this::onMouseDragged);
@@ -161,22 +167,46 @@ public final class SchematicCanvas extends Canvas {
 
     /** Pan and scale so the document's bounding box fits inside the canvas with a margin. */
     public void fitToView() {
+        fitToBoundsOf(session.doc().components().stream().map(c -> c.id()).toList());
+    }
+
+    /**
+     * Pan and scale to fit the current path-highlight overlay
+     * ({@link CircuitEditSession#highlightedComponents}). No-op if the
+     * overlay is empty.
+     */
+    public void fitToHighlight() {
+        if (session.highlightedComponents.isEmpty()) return;
+        fitToBoundsOf(session.highlightedComponents);
+    }
+
+    /**
+     * Pan and scale so the union of the given components' bounding boxes fits
+     * inside the canvas with a margin. Falls back to {@link #resetZoom()} if
+     * the set is empty or the canvas isn't laid out yet.
+     */
+    private void fitToBoundsOf(java.util.Collection<ComponentId> ids) {
         var doc = session.doc();
-        if (doc.components().isEmpty() || getWidth() <= 0 || getHeight() <= 0) {
+        if (ids.isEmpty() || doc.components().isEmpty() || getWidth() <= 0 || getHeight() <= 0) {
             resetZoom();
             return;
         }
         double minX = Double.POSITIVE_INFINITY, minY = Double.POSITIVE_INFINITY;
         double maxX = Double.NEGATIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
-        for (var c : doc.components()) {
-            var pos = doc.layout().positionOf(c.id()).orElse(null);
+        boolean any = false;
+        for (var id : ids) {
+            var c = doc.component(id).orElse(null);
+            if (c == null) continue;
+            var pos = doc.layout().positionOf(id).orElse(null);
             if (pos == null) continue;
             var geom = ComponentGeometry.of(c);
             minX = Math.min(minX, pos.x() - geom.halfWidth());
             minY = Math.min(minY, pos.y() - geom.halfHeight());
             maxX = Math.max(maxX, pos.x() + geom.halfWidth());
             maxY = Math.max(maxY, pos.y() + geom.halfHeight());
+            any = true;
         }
+        if (!any) { resetZoom(); return; }
         double margin = 60;
         double worldWidth = Math.max(1, maxX - minX);
         double worldHeight = Math.max(1, maxY - minY);
@@ -236,13 +266,31 @@ public final class SchematicCanvas extends Canvas {
 
     private void drawWires(GraphicsContext g) {
         var doc = session.doc();
+        // Pass 1: amber underlay for highlighted wires so they read clearly
+        // even when crossed by other wires drawn afterwards.
+        for (var w : doc.wires()) {
+            if (!session.highlightedWires.contains(w.id())) continue;
+            var from = terminalWorld(w.from());
+            var to = terminalWorld(w.to());
+            if (from == null || to == null) continue;
+            var path = WireRouter.route(from[0], from[1], to[0], to[1]);
+            double[] xs = new double[path.size()];
+            double[] ys = new double[path.size()];
+            for (int i = 0; i < path.size(); i++) { xs[i] = path.get(i)[0]; ys[i] = path.get(i)[1]; }
+            g.setStroke(WIRE_HIGHLIGHT_GLOW);
+            g.setLineWidth(7.0);
+            g.strokePolyline(xs, ys, xs.length);
+        }
+        // Pass 2: regular wires.
         for (var w : doc.wires()) {
             var from = terminalWorld(w.from());
             var to = terminalWorld(w.to());
             if (from == null || to == null) continue;
             boolean selected = session.selectedWires.contains(w.id());
-            g.setStroke(selected ? WIRE_SELECTED : WIRE);
-            g.setLineWidth(selected ? 2.4 : 1.6);
+            boolean highlighted = session.highlightedWires.contains(w.id());
+            Color stroke = selected ? WIRE_SELECTED : highlighted ? WIRE_HIGHLIGHT : WIRE;
+            g.setStroke(stroke);
+            g.setLineWidth(selected ? 2.4 : highlighted ? 2.4 : 1.6);
             var path = WireRouter.route(from[0], from[1], to[0], to[1]);
             double[] xs = new double[path.size()];
             double[] ys = new double[path.size()];
@@ -259,7 +307,8 @@ public final class SchematicCanvas extends Canvas {
             boolean selected = session.selectedComponents.contains(c.id());
             boolean hovered = c.id().equals(hoveredComponent)
                 && (hoveredTerminal == null || !hoveredTerminal.kind().isTerminal());
-            ComponentRenderer.draw(g, c, pos, selected, hovered);
+            boolean highlighted = session.highlightedComponents.contains(c.id());
+            ComponentRenderer.draw(g, c, pos, selected, hovered, highlighted);
         }
     }
 

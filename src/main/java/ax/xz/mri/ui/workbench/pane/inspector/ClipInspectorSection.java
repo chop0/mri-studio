@@ -6,8 +6,15 @@ import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
+import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.service.circuit.path.ClipPathAnalyzer;
+import ax.xz.mri.service.circuit.path.CoilPath;
+import ax.xz.mri.service.circuit.path.FieldPreview;
 import ax.xz.mri.ui.model.IsochromatEntry;
+import ax.xz.mri.ui.preview.FieldPreviewWindow;
+import ax.xz.mri.ui.preview.SchematicHighlightRequest;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
@@ -61,12 +68,21 @@ public final class ClipInspectorSection {
     private final ListChangeListener<IsochromatEntry> poiListener;
     private Runnable poiRefresher;
 
+    /** Optional consumer for "Show in schematic" click — wired by the InspectorPane. */
+    private final Consumer<SchematicHighlightRequest> showInSchematic;
+
     public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip) {
-        this(session, initialClip, null);
+        this(session, initialClip, null, null);
     }
 
     public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip,
                                  ObservableList<IsochromatEntry> poiEntries) {
+        this(session, initialClip, poiEntries, null);
+    }
+
+    public ClipInspectorSection(SequenceEditSession session, SignalClip initialClip,
+                                 ObservableList<IsochromatEntry> poiEntries,
+                                 Consumer<SchematicHighlightRequest> showInSchematic) {
         this.session = session;
         this.clipId = initialClip.id();
         this.builtForKind = initialClip.shape().kind();
@@ -75,6 +91,7 @@ public final class ClipInspectorSection {
             if (poiRefresher != null) poiRefresher.run();
         };
         if (poiEntries != null) poiEntries.addListener(poiListener);
+        this.showInSchematic = showInSchematic;
         build(initialClip);
     }
 
@@ -123,6 +140,7 @@ public final class ClipInspectorSection {
             buildTimingRows(clip),
             buildShapeParams(clip),
             buildPoiRotationSection(),
+            buildFieldPreviewSection(),
             new Separator(),
             buildActionRow()
         );
@@ -588,6 +606,196 @@ public final class ClipInspectorSection {
             (int) Math.round(c.getRed() * 255),
             (int) Math.round(c.getGreen() * 255),
             (int) Math.round(c.getBlue() * 255));
+    }
+
+    // ── Field preview (per reachable coil) ──────────────────────────────────
+
+    /**
+     * Container for the "if I crank the amplitude up to X, what field do I
+     * get?" preview. The header is built once; the body rebuilds on every
+     * refresh because the set of reachable coils, their currents, and the
+     * peak |B| all depend on the live circuit + the clip's amplitude.
+     *
+     * <p>Buttons inside the section don't carry caret state, so rebuilding
+     * the body every keystroke costs nothing UX-wise — there's no focus to
+     * preserve.
+     */
+    private Node buildFieldPreviewSection() {
+        var box = new VBox(4);
+        var title = new Label("Field preview");
+        title.getStyleClass().add("clip-inspector-section");
+        box.getChildren().add(title);
+
+        var body = new VBox(8);
+        box.getChildren().add(body);
+
+        pullers.add(c -> rebuildFieldPreviewBody(box, body, c));
+        return box;
+    }
+
+    private void rebuildFieldPreviewBody(VBox container, VBox body, SignalClip clip) {
+        body.getChildren().clear();
+        if (clip == null) { container.setVisible(false); container.setManaged(false); return; }
+        var track = session.findTrack(clip.trackId());
+        if (track == null) {
+            showInactivePreview(container, body, "Track not found.");
+            return;
+        }
+        var src = session.sourceForChannel(track.outputChannel());
+        if (src == null) {
+            showInactivePreview(container, body, "Track has no driving voltage source.");
+            return;
+        }
+        if (src.kind() == AmplitudeKind.GATE) {
+            // Gate-only sources don't drive a coil — they enable other paths.
+            showInactivePreview(container, body, "Gate signals don't drive coils — wire them to a switch's ctl.");
+            return;
+        }
+        var circuit = session.activeCircuit();
+        if (circuit == null) {
+            showInactivePreview(container, body, "No active circuit on this sequence.");
+            return;
+        }
+
+        var paths = ClipPathAnalyzer.analyze(circuit, src);
+        if (paths.isEmpty()) {
+            showInactivePreview(container, body, "Source isn't wired to any coil — nothing to preview.");
+            return;
+        }
+
+        container.setVisible(true);
+        container.setManaged(true);
+        for (var p : paths) {
+            body.getChildren().add(buildCoilPreviewRow(clip, p, circuit.id()));
+        }
+    }
+
+    private void showInactivePreview(VBox container, VBox body, String message) {
+        // We leave the section visible so the user knows the feature exists
+        // — it's just empty for this clip.
+        container.setVisible(true);
+        container.setManaged(true);
+        var msg = new Label(message);
+        msg.getStyleClass().add("clip-inspector-hint");
+        msg.setWrapText(true);
+        body.getChildren().add(msg);
+    }
+
+    private Node buildCoilPreviewRow(SignalClip clip, CoilPath path,
+                                      ax.xz.mri.project.ProjectNodeId circuitId) {
+        var coil = path.coil();
+        var ef = session.eigenfieldFor(coil);
+        double current = path.currentAmpsAt(clip.amplitude());
+
+        // Compute peak |B| if we have a script. Compile errors fall back to
+        // the dimensionless shape and the popup will show the same error.
+        FieldPreview.Result fieldResult = null;
+        String compileError = null;
+        if (ef != null) {
+            try {
+                EigenfieldScript script = EigenfieldScriptEngine.compile(ef.script());
+                fieldResult = FieldPreview.compute(script, coil.sensitivityT_per_A(), current);
+            } catch (Throwable t) {
+                compileError = t.getMessage();
+            }
+        }
+
+        var row = new VBox(2);
+        row.getStyleClass().add("clip-inspector-poi-row");
+
+        // Header: coil name + carrier frequency (e.g. "RF Coil — 655 kHz").
+        var header = new Label(coil.name() + " — " + formatHz(path.frequencyHz()));
+        header.getStyleClass().add("clip-inspector-poi-name");
+        row.getChildren().add(header);
+
+        // Current and peak |B|.
+        String peakLine;
+        if (fieldResult != null) {
+            peakLine = String.format("I_coil ≈ %s   ·   peak |B| ≈ %s",
+                formatAmps(current),
+                FieldPreview.formatTesla(fieldResult.peakField()));
+        } else if (compileError != null) {
+            peakLine = String.format("I_coil ≈ %s   ·   peak |B| unavailable (script error)",
+                formatAmps(current));
+        } else {
+            peakLine = String.format("I_coil ≈ %s   ·   peak |B| unavailable (no eigenfield)",
+                formatAmps(current));
+        }
+        var summary = new Label(peakLine);
+        summary.getStyleClass().add("clip-inspector-hint");
+        row.getChildren().add(summary);
+
+        // Peak vector — only meaningful when we successfully sampled.
+        if (fieldResult != null) {
+            var vec = fieldResult.peakVector();
+            var v = new Label(String.format("Peak B = (%s, %s, %s)",
+                FieldPreview.formatTesla(vec.x()),
+                FieldPreview.formatTesla(vec.y()),
+                FieldPreview.formatTesla(vec.z())));
+            v.getStyleClass().add("clip-inspector-hint");
+            v.setWrapText(true);
+            row.getChildren().add(v);
+
+            var loc = new Label(String.format("at (%s, %s, %s)",
+                formatMm(fieldResult.peakX()),
+                formatMm(fieldResult.peakY()),
+                formatMm(fieldResult.peakZ())));
+            loc.getStyleClass().add("clip-inspector-hint");
+            row.getChildren().add(loc);
+        }
+
+        // Warnings (open switches, shunts, etc.).
+        for (var warn : path.warnings()) {
+            var w = new Label("⚠ " + warn);
+            w.getStyleClass().add("clip-inspector-hint");
+            w.setWrapText(true);
+            row.getChildren().add(w);
+        }
+
+        // Action buttons.
+        var view3D = new Button("View 3D");
+        view3D.setDisable(ef == null);
+        final EigenfieldDocument efFinal = ef;
+        view3D.setOnAction(e -> FieldPreviewWindow.show(efFinal, coil, path, clip.amplitude()));
+
+        var showBtn = new Button("Show in schematic");
+        showBtn.setDisable(showInSchematic == null || circuitId == null);
+        showBtn.setOnAction(e -> {
+            if (showInSchematic == null || circuitId == null) return;
+            showInSchematic.accept(new SchematicHighlightRequest(
+                circuitId,
+                path.componentsOnPath(),
+                path.wireIdsOnPath(),
+                "Path to " + coil.name()));
+        });
+
+        var btnRow = new HBox(6, view3D, showBtn);
+        btnRow.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().add(btnRow);
+
+        return row;
+    }
+
+    private static String formatAmps(double a) {
+        double abs = Math.abs(a);
+        if (abs == 0) return "0 A";
+        if (abs >= 1) return String.format("%.3f A", a);
+        if (abs >= 1e-3) return String.format("%.2f mA", a * 1e3);
+        if (abs >= 1e-6) return String.format("%.2f µA", a * 1e6);
+        return String.format("%.3g A", a);
+    }
+
+    private static String formatHz(double hz) {
+        double abs = Math.abs(hz);
+        if (abs == 0) return "DC";
+        if (abs >= 1e9) return String.format("%.3f GHz", hz / 1e9);
+        if (abs >= 1e6) return String.format("%.3f MHz", hz / 1e6);
+        if (abs >= 1e3) return String.format("%.3f kHz", hz / 1e3);
+        return String.format("%.3f Hz", hz);
+    }
+
+    private static String formatMm(double metres) {
+        return String.format("%+.0f mm", metres * 1000);
     }
 
     // ── Action row ──────────────────────────────────────────────────────────

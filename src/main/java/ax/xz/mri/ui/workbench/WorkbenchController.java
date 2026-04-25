@@ -269,6 +269,24 @@ public class WorkbenchController {
         }
     }
 
+    /**
+     * Find the live {@link SimConfigEditorProvider} for an open sim config
+     * tab, if any. Used by the inspector's "Show in schematic" affordance to
+     * push a highlight overlay onto the schematic canvas of an already-open
+     * (or freshly-opened) tab.
+     */
+    public java.util.Optional<SimConfigEditorProvider> findSimConfigEditor(
+            ax.xz.mri.project.ProjectNodeId simConfigId) {
+        if (simConfigId == null) return java.util.Optional.empty();
+        for (var tab : openTabs) {
+            if (tab.id().equals(simConfigId.value())
+                    && tab.editor() instanceof SimConfigEditorProvider provider) {
+                return java.util.Optional.of(provider);
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     /** Get all open simulation sessions (for pushing config updates). */
     public java.util.Collection<SequenceSimulationSession> allSimSessions() {
         return openTabs.stream()

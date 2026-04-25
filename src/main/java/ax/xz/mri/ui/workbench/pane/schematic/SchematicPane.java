@@ -128,8 +128,37 @@ public final class SchematicPane extends BorderPane {
 
     public SchematicCanvas canvas() { return canvas; }
 
+    public CircuitEditSession session() { return session; }
+
     public void replaceDocument(CircuitDocument document) {
         session.loadDocument(document);
+    }
+
+    /**
+     * Set the path-highlight overlay to the given components and wires, then
+     * fit the canvas viewport to that path. Used by the clip inspector's
+     * "Show in schematic" affordance to land the user looking right at the
+     * route between a clip's source and the coil it eventually feeds.
+     *
+     * <p>Run on the FX thread; the fit has to happen after the canvas has
+     * actually been laid out, so we defer one tick if width/height are zero.
+     */
+    public void showPathHighlight(java.util.Collection<ax.xz.mri.model.circuit.ComponentId> components,
+                                   java.util.Collection<String> wireIds) {
+        session.setHighlight(components, wireIds);
+        Runnable fit = () -> {
+            if (canvas.getWidth() <= 0 || canvas.getHeight() <= 0) {
+                javafx.application.Platform.runLater(canvas::fitToHighlight);
+            } else {
+                canvas.fitToHighlight();
+            }
+        };
+        fit.run();
+    }
+
+    /** Drop the highlight overlay (no-op if none is set). */
+    public void clearPathHighlight() {
+        session.clearHighlight();
     }
 
     /**

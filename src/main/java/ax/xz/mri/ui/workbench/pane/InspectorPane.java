@@ -87,7 +87,8 @@ public final class InspectorPane extends WorkbenchPane {
             if (primaryClip != null) {
                 activeClipSection = new ClipInspectorSection(
                     editSession, primaryClip,
-                    paneContext.session().points.entries);
+                    paneContext.session().points.entries,
+                    this::handleSchematicHighlightRequest);
                 content.getChildren().add(activeClipSection.view());
             } else {
                 var empty = new Label("No clip selected.");
@@ -241,6 +242,45 @@ public final class InspectorPane extends WorkbenchPane {
             .filter(s -> s.editSession == editSession)
             .findFirst()
             .orElse(null);
+    }
+
+    /**
+     * Handle a "show this path in the schematic" request from the clip
+     * inspector. Resolves the request's {@code circuitId} to its owning sim
+     * config, opens (or focuses) that tab, switches to the Schematic sub-tab,
+     * and pushes the highlight overlay onto the schematic canvas.
+     *
+     * <p>If the circuit has no owning sim config (orphaned), falls back to
+     * just searching open tabs — and if nothing matches, no-ops with a
+     * status nudge.
+     */
+    private void handleSchematicHighlightRequest(ax.xz.mri.ui.preview.SchematicHighlightRequest request) {
+        if (request == null) return;
+        var controller = paneContext.controller();
+        var repo = paneContext.session().project.repository.get();
+        if (repo == null) return;
+
+        // Find a sim config whose circuitId matches.
+        SimulationConfigDocument owningConfig = null;
+        for (var id : repo.simConfigIds()) {
+            if (repo.node(id) instanceof SimulationConfigDocument cfg
+                    && cfg.config() != null
+                    && request.circuitId().equals(cfg.config().circuitId())) {
+                owningConfig = cfg;
+                break;
+            }
+        }
+        if (owningConfig == null) return;
+
+        controller.openSimConfigTab(owningConfig);
+        var provider = controller.findSimConfigEditor(owningConfig.id()).orElse(null);
+        if (provider == null) return;
+        var editor = provider.editorPane();
+        editor.selectSchematicTab();
+        var schematic = editor.schematicPane();
+        if (schematic != null) {
+            schematic.showPathHighlight(request.components(), request.wireIds());
+        }
     }
 
     private void populateSequence(SequenceDocument sequence) {

@@ -37,6 +37,16 @@ public final class CircuitEditSession {
     public final IntegerProperty revision = new SimpleIntegerProperty(0);
     public final ObservableSet<ComponentId> selectedComponents = FXCollections.observableSet(new LinkedHashSet<>());
     public final ObservableSet<String> selectedWires = FXCollections.observableSet(new LinkedHashSet<>());
+    /**
+     * Components belonging to a "look at this path" highlight overlay
+     * (distinct from selection). The schematic canvas paints these with an
+     * amber halo so the user can spot the route without losing whatever they
+     * had selected. Set by, for example, the clip inspector's
+     * "Show in schematic" affordance.
+     */
+    public final ObservableSet<ComponentId> highlightedComponents = FXCollections.observableSet(new LinkedHashSet<>());
+    /** Wire ids belonging to the same highlight overlay as {@link #highlightedComponents}. */
+    public final ObservableSet<String> highlightedWires = FXCollections.observableSet(new LinkedHashSet<>());
     public final StringProperty statusMessage = new SimpleStringProperty("");
 
     private final java.util.Deque<CircuitDocument> undoStack = new java.util.ArrayDeque<>();
@@ -130,6 +140,25 @@ public final class CircuitEditSession {
     public void clearSelection() {
         selectedComponents.clear();
         selectedWires.clear();
+    }
+
+    /**
+     * Replace the highlight set with the given components and wires. Clears
+     * existing highlights first. Pass empty collections (or call
+     * {@link #clearHighlight()}) to remove the overlay.
+     */
+    public void setHighlight(java.util.Collection<ComponentId> components,
+                             java.util.Collection<String> wires) {
+        highlightedComponents.clear();
+        highlightedWires.clear();
+        if (components != null) highlightedComponents.addAll(components);
+        if (wires != null) highlightedWires.addAll(wires);
+    }
+
+    /** Drop the path-highlight overlay. */
+    public void clearHighlight() {
+        highlightedComponents.clear();
+        highlightedWires.clear();
     }
 
     public void deleteSelection() {
