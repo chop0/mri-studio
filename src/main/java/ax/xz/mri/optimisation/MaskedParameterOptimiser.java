@@ -20,16 +20,15 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
     @Override
     public OptimisationResult optimise(OptimisationRequest request, ObjectiveEngine engine) {
         double[] initialFull = PulseParameterCodec.flatten(request.initialSegments());
-        boolean[] freeMask = request.freeMask().clone();
-        int[] freeIndices = freeIndices(freeMask);
-        double[] lowerFree = pick(request.lowerBounds(), freeIndices);
-        double[] upperFree = pick(request.upperBounds(), freeIndices);
-        double[] initialFree = pick(initialFull, freeIndices);
+        var mask = MaskedVector.of(request.freeMask());
+        double[] lowerFree = mask.pick(request.lowerBounds());
+        double[] upperFree = mask.pick(request.upperBounds());
+        double[] initialFree = mask.pick(initialFull);
 
         var snapshots = new LinkedHashMap<Integer, List<PulseSegment>>();
         snapshots.put(0, request.parameterisation().expandSegments(request.initialSegments()));
 
-        if (freeIndices.length == 0) {
+        if (mask.size() == 0) {
             var expanded = request.parameterisation().expandSegments(request.initialSegments());
             return new OptimisationResult(
                 request.initialSegments(),
@@ -59,12 +58,12 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
             );
             var stageResult = solver.solve(
                 xFree -> {
-                    double[] full = merge(initialFull, xFree, freeIndices);
+                    double[] full = mask.merge(initialFull, xFree);
                     List<PulseSegment> segments = PulseParameterCodec.split(full, request.problem().sequenceTemplate());
                     double value = engine.evaluate(stageProblem, segments).value();
                     double[] gradientFull = engine.gradient(stageProblem, segments);
                     evaluations[0]++;
-                    return new LbfgsbSolver.ValueGradient(value, pick(gradientFull, freeIndices));
+                    return new LbfgsbSolver.ValueGradient(value, mask.pick(gradientFull));
                 },
                 currentFree,
                 lowerFree,
@@ -74,7 +73,7 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
                     if (request.stopRequested().get()) return true;
                     int globalIteration = iterationBase + iteration;
                     if (globalIteration % request.snapshotEvery() == 0) {
-                        double[] full = merge(initialFull, x, freeIndices);
+                        double[] full = mask.merge(initialFull, x);
                         snapshots.put(globalIteration, request.parameterisation().expandSegments(
                             PulseParameterCodec.split(full, request.problem().sequenceTemplate())
                         ));
@@ -84,7 +83,7 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
             );
             currentFree = stageResult.x().clone();
             totalIterations += stageResult.iterations();
-            double[] full = merge(initialFull, currentFree, freeIndices);
+            double[] full = mask.merge(initialFull, currentFree);
             List<PulseSegment> segments = PulseParameterCodec.split(full, request.problem().sequenceTemplate());
             double value = engine.evaluate(stageProblem, segments).value();
             if (value < bestValue) {
@@ -110,32 +109,5 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
             success,
             message
         );
-    }
-
-    private static int[] freeIndices(boolean[] freeMask) {
-        int count = 0;
-        for (boolean value : freeMask) if (value) count++;
-        int[] indices = new int[count];
-        int offset = 0;
-        for (int index = 0; index < freeMask.length; index++) {
-            if (freeMask[index]) indices[offset++] = index;
-        }
-        return indices;
-    }
-
-    private static double[] pick(double[] values, int[] indices) {
-        double[] out = new double[indices.length];
-        for (int i = 0; i < indices.length; i++) {
-            out[i] = values[indices[i]];
-        }
-        return out;
-    }
-
-    private static double[] merge(double[] frozenFull, double[] freeValues, int[] freeIndices) {
-        double[] merged = frozenFull.clone();
-        for (int i = 0; i < freeIndices.length; i++) {
-            merged[freeIndices[i]] = freeValues[i];
-        }
-        return merged;
     }
 }
