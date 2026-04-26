@@ -1,56 +1,35 @@
 package ax.xz.mri;
 
-import ax.xz.mri.ui.aerofx.AeroFX;
 import ax.xz.mri.ui.workbench.StudioShell;
 import javafx.application.Application;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 import software.coley.bentofx.Bento;
 
-/**
- * MRI Studio — entry point.
- * Uses AeroFX win7.css as the user-agent stylesheet (replaces Modena).
- * The CSS includes all necessary lookup color definitions.
- */
+import java.io.File;
+import java.util.Optional;
+
+/** MRI Studio entry point. */
 public class MriStudioApp extends Application {
     private StudioShell shell;
 
     @Override
     public void start(Stage stage) {
-        // Replace Modena entirely with AeroFX + our Modena-compat definitions
-//        AeroFX.style();
-
         shell = new StudioShell();
         var scene = new Scene(shell, 1600, 980);
-
-        var bentoCss = Bento.class.getResource("/bento.css");
-        if (bentoCss != null) scene.getStylesheets().add(bentoCss.toExternalForm());
-        var css = getClass().getResource("/ax/xz/mri/ui/theme/studio.css");
-        if (css != null) scene.getStylesheets().add(css.toExternalForm());
+        addStylesheet(scene, Bento.class.getResource("/bento.css"));
+        addStylesheet(scene, getClass().getResource("/ax/xz/mri/ui/theme/studio.css"));
 
         stage.setTitle("MRI Studio");
         stage.setScene(scene);
         shell.initialize(stage);
         stage.show();
 
-        var params = getParameters().getUnnamed();
-        if (!params.isEmpty()) {
-            var f = new java.io.File(params.get(0));
-            if (f.exists()) {
-                java.io.File manifestDir = null;
-                if (f.isDirectory() && new java.io.File(f, "mri-project.toml").exists()) {
-                    manifestDir = f;
-                } else if (f.getName().equals("mri-project.toml") && f.getParentFile() != null) {
-                    manifestDir = f.getParentFile();
-                }
-                if (manifestDir != null) {
-                    try { shell.controller().openProjectDirectory(manifestDir); }
-                    catch (Exception ex) {
-                        shell.controller().session().messages.logError("Startup", "Failed to auto-open " + manifestDir, ex);
-                    }
-                }
-            }
-        }
+        getParameters().getUnnamed().stream()
+            .findFirst()
+            .map(File::new)
+            .flatMap(MriStudioApp::resolveProjectDir)
+            .ifPresent(this::autoOpen);
     }
 
     @Override
@@ -60,5 +39,24 @@ public class MriStudioApp extends Application {
 
     public static void main(String[] args) {
         launch(args);
+    }
+
+    private static void addStylesheet(Scene scene, java.net.URL url) {
+        if (url != null) scene.getStylesheets().add(url.toExternalForm());
+    }
+
+    /** Treat the argument as a project directory, or as a manifest file inside one. */
+    private static Optional<File> resolveProjectDir(File f) {
+        if (!f.exists()) return Optional.empty();
+        if (f.isDirectory() && new File(f, "mri-project.toml").exists()) return Optional.of(f);
+        if (f.getName().equals("mri-project.toml") && f.getParentFile() != null) return Optional.of(f.getParentFile());
+        return Optional.empty();
+    }
+
+    private void autoOpen(File dir) {
+        try { shell.controller().openProjectDirectory(dir); }
+        catch (Exception ex) {
+            shell.controller().session().messages.logError("Startup", "Failed to auto-open " + dir, ex);
+        }
     }
 }
