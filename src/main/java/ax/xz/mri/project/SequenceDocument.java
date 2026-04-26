@@ -23,6 +23,7 @@ public record SequenceDocument(
     ProjectNodeId activeSimConfigId
 ) implements ProjectNode {
     public SequenceDocument {
+        if (clipSequence == null) throw new IllegalArgumentException("SequenceDocument.clipSequence must not be null");
         segments = List.copyOf(segments);
         pulse = List.copyOf(pulse);
     }

@@ -3,6 +3,7 @@ package ax.xz.mri.project;
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.ComponentId;
+import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import org.junit.jupiter.api.Test;
 
@@ -17,7 +18,9 @@ class ProjectRepositoryTest {
         var repo = ProjectRepository.untitled();
         var seq = new SequenceDocument(
             new ProjectNodeId("seq-1"), "My Seq",
-            List.of(), List.of(), null, null);
+            List.of(), List.of(),
+            new ClipSequence(1.0, 100.0, List.of(), List.of()),
+            null);
         repo.addSequence(seq);
 
         assertEquals(List.of(seq.id()), repo.sequenceIds());

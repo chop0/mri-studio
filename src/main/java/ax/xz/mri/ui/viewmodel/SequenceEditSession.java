@@ -129,13 +129,7 @@ public final class SequenceEditSession {
         originalDocument.set(document);
 
         var circuit = activeCircuit();
-        ClipSequence clipSeq = document.clipSequence();
-        if (clipSeq == null) {
-            // A sequence created through the wizard always carries a clip
-            // sequence; legacy documents without one start empty with the
-            // circuit's default tracks.
-            clipSeq = new ClipSequence(10.0, 1000.0, ClipBaker.defaultTracksFor(circuit), List.of());
-        }
+        var clipSeq = document.clipSequence();
         var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(circuit) : clipSeq.tracks();
         tracks.setAll(loadedTracks);
         clips.setAll(clipSeq.clips());
@@ -170,13 +164,11 @@ public final class SequenceEditSession {
         var orig = originalDocument.get();
         if (orig == null) return false;
         if (!Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
-        if (orig.clipSequence() != null) {
-            return !clips.equals(orig.clipSequence().clips())
-                || !tracks.equals(orig.clipSequence().tracks())
-                || dt.get() != orig.clipSequence().dt()
-                || totalDuration.get() != orig.clipSequence().totalDuration();
-        }
-        return true;
+        var origClipSeq = orig.clipSequence();
+        return !clips.equals(origClipSeq.clips())
+            || !tracks.equals(origClipSeq.tracks())
+            || dt.get() != origClipSeq.dt()
+            || totalDuration.get() != origClipSeq.totalDuration();
     }
 
     /** Establish the "last-saved" config baseline after a load. */
