@@ -1,7 +1,5 @@
 package ax.xz.mri.model.circuit;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 /**
  * Reference to one named port on a specific component.
  *
@@ -10,8 +8,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * {@code "b"}, and {@code "ctl"}.
  */
 public record ComponentTerminal(
-    @JsonProperty("component") ComponentId componentId,
-    @JsonProperty("port") String port
+    ComponentId componentId,
+    String port
 ) {
     public ComponentTerminal {
         if (componentId == null) throw new IllegalArgumentException("ComponentTerminal.componentId must not be null");

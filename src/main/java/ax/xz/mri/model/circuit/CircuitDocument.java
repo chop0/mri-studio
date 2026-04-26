@@ -4,7 +4,6 @@ import ax.xz.mri.project.ProjectNode;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectNodeKind;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -35,7 +34,7 @@ public record CircuitDocument(
     String name,
     List<CircuitComponent> components,
     List<Wire> wires,
-    @JsonProperty("layout") CircuitLayout layout
+    CircuitLayout layout
 ) implements ProjectNode {
     public CircuitDocument {
         if (id == null) throw new IllegalArgumentException("CircuitDocument.id must not be null");

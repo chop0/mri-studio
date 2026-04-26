@@ -3,7 +3,6 @@ package ax.xz.mri.project;
 import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.Segment;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
@@ -20,8 +19,8 @@ public record SequenceDocument(
     String name,
     List<Segment> segments,
     List<PulseSegment> pulse,
-    @JsonProperty("clip_sequence") ClipSequence clipSequence,
-    @JsonProperty("active_sim_config_id") ProjectNodeId activeSimConfigId
+    ClipSequence clipSequence,
+    ProjectNodeId activeSimConfigId
 ) implements ProjectNode {
     public SequenceDocument {
         segments = List.copyOf(segments);

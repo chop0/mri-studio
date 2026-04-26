@@ -1,7 +1,5 @@
 package ax.xz.mri.model.sequence;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 /**
  * An output signal slot identified by a named voltage source in the active
  * circuit plus an in-source sub-index.
@@ -17,8 +15,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * </ul>
  */
 public record SequenceChannel(
-    @JsonProperty("source") String sourceName,
-    @JsonProperty("sub") int subIndex
+    String sourceName,
+    int subIndex
 ) {
     public SequenceChannel {
         if (sourceName == null || sourceName.isEmpty())

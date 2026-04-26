@@ -6,7 +6,6 @@ import ax.xz.mri.model.circuit.compile.SwitchParams;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
@@ -85,10 +84,10 @@ public sealed interface CircuitComponent {
         ComponentId id,
         String name,
         AmplitudeKind kind,
-        @JsonProperty("carrier_hz") double carrierHz,
-        @JsonProperty("min_amplitude") double minAmplitude,
-        @JsonProperty("max_amplitude") double maxAmplitude,
-        @JsonProperty("output_impedance_ohms") double outputImpedanceOhms
+        double carrierHz,
+        double minAmplitude,
+        double maxAmplitude,
+        double outputImpedanceOhms
     ) implements CircuitComponent {
         public VoltageSource {
             if (id == null) throw new IllegalArgumentException("VoltageSource.id must not be null");
@@ -164,10 +163,10 @@ public sealed interface CircuitComponent {
     record SwitchComponent(
         ComponentId id,
         String name,
-        @JsonProperty("closed_ohms") double closedOhms,
-        @JsonProperty("open_ohms") double openOhms,
-        @JsonProperty("threshold_volts") double thresholdVolts,
-        @JsonProperty("invert_ctl") boolean invertCtl
+        double closedOhms,
+        double openOhms,
+        double thresholdVolts,
+        boolean invertCtl
     ) implements CircuitComponent {
         public SwitchComponent {
             if (id == null) throw new IllegalArgumentException("Switch.id must not be null");
@@ -219,9 +218,9 @@ public sealed interface CircuitComponent {
     record Multiplexer(
         ComponentId id,
         String name,
-        @JsonProperty("closed_ohms") double closedOhms,
-        @JsonProperty("open_ohms") double openOhms,
-        @JsonProperty("threshold_volts") double thresholdVolts
+        double closedOhms,
+        double openOhms,
+        double thresholdVolts
     ) implements CircuitComponent {
         public Multiplexer {
             if (id == null) throw new IllegalArgumentException("Multiplexer.id must not be null");
@@ -282,10 +281,10 @@ public sealed interface CircuitComponent {
     record Coil(
         ComponentId id,
         String name,
-        @JsonProperty("eigenfield_id") ProjectNodeId eigenfieldId,
-        @JsonProperty("self_inductance_henry") double selfInductanceHenry,
-        @JsonProperty("series_resistance_ohms") double seriesResistanceOhms,
-        @JsonProperty("sensitivity_t_per_a") double sensitivityT_per_A
+        ProjectNodeId eigenfieldId,
+        double selfInductanceHenry,
+        double seriesResistanceOhms,
+        double sensitivityT_per_A
     ) implements CircuitComponent {
         public Coil {
             if (id == null) throw new IllegalArgumentException("Coil.id must not be null");
@@ -367,8 +366,8 @@ public sealed interface CircuitComponent {
         ComponentId id,
         String name,
         double gain,
-        @JsonProperty("demod_phase_deg") double demodPhaseDeg,
-        @JsonProperty("load_impedance_ohms") double loadImpedanceOhms
+        double demodPhaseDeg,
+        double loadImpedanceOhms
     ) implements CircuitComponent {
         public Probe {
             if (id == null) throw new IllegalArgumentException("Probe.id must not be null");
@@ -411,7 +410,7 @@ public sealed interface CircuitComponent {
 
     // ─── Passives ─────────────────────────────────────────────────────────────
 
-    record Resistor(ComponentId id, String name, @JsonProperty("resistance_ohms") double resistanceOhms) implements CircuitComponent {
+    record Resistor(ComponentId id, String name, double resistanceOhms) implements CircuitComponent {
         public Resistor {
             if (id == null) throw new IllegalArgumentException("Resistor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Resistor.name must be non-blank");
@@ -434,7 +433,7 @@ public sealed interface CircuitComponent {
         public Resistor withResistanceOhms(double v) { return new Resistor(id, name, v); }
     }
 
-    record Capacitor(ComponentId id, String name, @JsonProperty("capacitance_farads") double capacitanceFarads) implements CircuitComponent {
+    record Capacitor(ComponentId id, String name, double capacitanceFarads) implements CircuitComponent {
         public Capacitor {
             if (id == null) throw new IllegalArgumentException("Capacitor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Capacitor.name must be non-blank");
@@ -457,7 +456,7 @@ public sealed interface CircuitComponent {
         public Capacitor withCapacitanceFarads(double v) { return new Capacitor(id, name, v); }
     }
 
-    record Inductor(ComponentId id, String name, @JsonProperty("inductance_henry") double inductanceHenry) implements CircuitComponent {
+    record Inductor(ComponentId id, String name, double inductanceHenry) implements CircuitComponent {
         public Inductor {
             if (id == null) throw new IllegalArgumentException("Inductor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Inductor.name must be non-blank");
@@ -482,7 +481,7 @@ public sealed interface CircuitComponent {
 
     // ─── Shunt passives: one terminal, other side is ground ─────────────────
 
-    record ShuntResistor(ComponentId id, String name, @JsonProperty("resistance_ohms") double resistanceOhms) implements CircuitComponent {
+    record ShuntResistor(ComponentId id, String name, double resistanceOhms) implements CircuitComponent {
         public ShuntResistor {
             if (id == null) throw new IllegalArgumentException("ShuntResistor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntResistor.name must be non-blank");
@@ -497,7 +496,7 @@ public sealed interface CircuitComponent {
         public ShuntResistor withResistanceOhms(double v) { return new ShuntResistor(id, name, v); }
     }
 
-    record ShuntCapacitor(ComponentId id, String name, @JsonProperty("capacitance_farads") double capacitanceFarads) implements CircuitComponent {
+    record ShuntCapacitor(ComponentId id, String name, double capacitanceFarads) implements CircuitComponent {
         public ShuntCapacitor {
             if (id == null) throw new IllegalArgumentException("ShuntCapacitor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntCapacitor.name must be non-blank");
@@ -512,7 +511,7 @@ public sealed interface CircuitComponent {
         public ShuntCapacitor withCapacitanceFarads(double v) { return new ShuntCapacitor(id, name, v); }
     }
 
-    record ShuntInductor(ComponentId id, String name, @JsonProperty("inductance_henry") double inductanceHenry) implements CircuitComponent {
+    record ShuntInductor(ComponentId id, String name, double inductanceHenry) implements CircuitComponent {
         public ShuntInductor {
             if (id == null) throw new IllegalArgumentException("ShuntInductor.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("ShuntInductor.name must be non-blank");
@@ -550,7 +549,7 @@ public sealed interface CircuitComponent {
     record Mixer(
         ComponentId id,
         String name,
-        @JsonProperty("lo_hz") double loHz,
+        double loHz,
         ComplexPairFormat format
     ) implements CircuitComponent {
         public Mixer {
@@ -605,7 +604,7 @@ public sealed interface CircuitComponent {
     record Modulator(
         ComponentId id,
         String name,
-        @JsonProperty("lo_hz") double loHz,
+        double loHz,
         ComplexPairFormat format
     ) implements CircuitComponent {
         public Modulator {
@@ -699,7 +698,7 @@ public sealed interface CircuitComponent {
     record VoltageMetadata(
         ComponentId id,
         String name,
-        @JsonProperty("source_name") String sourceName,
+        String sourceName,
         Mode mode
     ) implements CircuitComponent {
         public enum Mode {
@@ -742,7 +741,7 @@ public sealed interface CircuitComponent {
     }
 
     /** Ideal two-port transformer with ports {@code pa}, {@code pb} (primary) and {@code sa}, {@code sb} (secondary). */
-    record IdealTransformer(ComponentId id, String name, @JsonProperty("turns_ratio") double turnsRatio) implements CircuitComponent {
+    record IdealTransformer(ComponentId id, String name, double turnsRatio) implements CircuitComponent {
         public IdealTransformer {
             if (id == null) throw new IllegalArgumentException("IdealTransformer.id must not be null");
             if (name == null || name.isBlank()) throw new IllegalArgumentException("IdealTransformer.name must be non-blank");

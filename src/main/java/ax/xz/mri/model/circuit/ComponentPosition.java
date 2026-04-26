@@ -1,7 +1,5 @@
 package ax.xz.mri.model.circuit;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 /**
  * Cosmetic position of a component on the schematic canvas.
  *
@@ -14,7 +12,7 @@ public record ComponentPosition(
     ComponentId id,
     double x,
     double y,
-    @JsonProperty("rotation_quarters") int rotationQuarters,
+    int rotationQuarters,
     boolean mirrored
 ) {
     public ComponentPosition {

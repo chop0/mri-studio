@@ -2,7 +2,6 @@ package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.project.ProjectNodeId;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * User-editable simulation environment configuration.
@@ -15,21 +14,21 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * sees; {@code SimulationConfig} is everything else.
  */
 public record SimulationConfig(
-    @JsonProperty("t1_ms") double t1Ms,
-    @JsonProperty("t2_ms") double t2Ms,
+    double t1Ms,
+    double t2Ms,
     double gamma,
 
-    @JsonProperty("slice_half_mm") double sliceHalfMm,
-    @JsonProperty("fov_z_mm") double fovZMm,
-    @JsonProperty("fov_r_mm") double fovRMm,
-    @JsonProperty("n_z") int nZ,
-    @JsonProperty("n_r") int nR,
+    double sliceHalfMm,
+    double fovZMm,
+    double fovRMm,
+    int nZ,
+    int nR,
 
-    @JsonProperty("reference_b0_tesla") double referenceB0Tesla,
+    double referenceB0Tesla,
 
-    @JsonProperty("dt_seconds") double dtSeconds,
+    double dtSeconds,
 
-    @JsonProperty("circuit_id") ProjectNodeId circuitId
+    ProjectNodeId circuitId
 ) {
     public SimulationConfig {
         if (!(dtSeconds > 0) || !Double.isFinite(dtSeconds)) {

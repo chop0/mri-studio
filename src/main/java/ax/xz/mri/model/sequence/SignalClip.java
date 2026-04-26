@@ -1,7 +1,5 @@
 package ax.xz.mri.model.sequence;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.util.UUID;
 
 /**
@@ -31,13 +29,13 @@ import java.util.UUID;
  */
 public record SignalClip(
     String id,
-    @JsonProperty("track_id") String trackId,
+    String trackId,
     ClipShape shape,
-    @JsonProperty("start_time") double startTime,
+    double startTime,
     double duration,
     double amplitude,
-    @JsonProperty("media_offset") double mediaOffset,
-    @JsonProperty("media_duration") double mediaDuration
+    double mediaOffset,
+    double mediaDuration
 ) {
     public SignalClip {
         if (id == null) id = UUID.randomUUID().toString();
