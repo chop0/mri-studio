@@ -1,10 +1,10 @@
 package ax.xz.mri.optimisation;
 
-import ax.xz.mri.model.hardware.HardwareLimits;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.service.circuit.CircuitStepEvaluator;
+import ax.xz.mri.service.simulation.math.BlochStep;
 import ax.xz.mri.util.MathUtil;
 
 import java.util.ArrayList;
@@ -159,6 +159,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
      */
     protected static void applyStep(ProblemGeometry geometry, CircuitStepEvaluator evaluator, double dt,
                                     double[] mx, double[] my, double[] mz) {
+        double gamma = geometry.gamma();
         double e2 = Math.exp(-dt / geometry.t2());
         double e1 = Math.exp(-dt / geometry.t1());
         int nCoils = geometry.circuit().coils().size();
@@ -166,6 +167,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         double[][] ex = geometry.coilExFlat();
         double[][] ey = geometry.coilEyFlat();
         double[][] ez = geometry.coilEzFlat();
+        double[] staticBz = geometry.staticBz();
 
         double[] iDrive = new double[nCoils];
         double[] qDrive = new double[nCoils];
@@ -175,40 +177,19 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
         }
 
         for (int p = 0; p < nPoints; p++) {
-            double bx = 0, by = 0, bz = geometry.staticBz()[p];
+            double bx = 0, by = 0, bz = staticBz[p];
             for (int c = 0; c < nCoils; c++) {
-                double I = iDrive[c];
-                double Q = qDrive[c];
                 double exp = ex[c][p], eyp = ey[c][p], ezp = ez[c][p];
-                bx += I * exp - Q * eyp;
-                by += I * eyp + Q * exp;
-                bz += I * ezp;
+                bx += iDrive[c] * exp - qDrive[c] * eyp;
+                by += iDrive[c] * eyp + qDrive[c] * exp;
+                bz += iDrive[c] * ezp;
             }
-            double bPerp2 = bx * bx + by * by;
-            if (bPerp2 < 1e-30) {
-                double th = geometry.gamma() * bz * dt;
-                double c = Math.cos(th), s = Math.sin(th);
-                double nmx = (mx[p] * c - my[p] * s) * e2;
-                double nmy = (mx[p] * s + my[p] * c) * e2;
-                mx[p] = nmx;
-                my[p] = nmy;
-                mz[p] = 1.0 + (mz[p] - 1.0) * e1;
-            } else {
-                double bm = Math.sqrt(bx * bx + by * by + bz * bz + HardwareLimits.EPSILON);
-                double nx = bx / bm, ny = by / bm, nz = bz / bm;
-                double th = geometry.gamma() * bm * dt;
-                double c = Math.cos(th), s = Math.sin(th), omc = 1.0 - c;
-                double nd = nx * mx[p] + ny * my[p] + nz * mz[p];
-                double cx = ny * mz[p] - nz * my[p];
-                double cy = nz * mx[p] - nx * mz[p];
-                double cz = nx * my[p] - ny * mx[p];
-                double nmx = (mx[p] * c + cx * s + nx * nd * omc) * e2;
-                double nmy = (my[p] * c + cy * s + ny * nd * omc) * e2;
-                double nmz = 1.0 + (mz[p] * c + cz * s + nz * nd * omc - 1.0) * e1;
-                mx[p] = nmx;
-                my[p] = nmy;
-                mz[p] = nmz;
-            }
+            var next = (bx * bx + by * by) < BlochStep.B_PERP_SQ_FLOOR
+                ? BlochStep.zOnly(bz, gamma, dt, e1, e2, mx[p], my[p], mz[p])
+                : BlochStep.rodrigues(bx, by, bz, gamma, dt, e1, e2, mx[p], my[p], mz[p]);
+            mx[p] = next.mx();
+            my[p] = next.my();
+            mz[p] = next.mz();
         }
     }
 

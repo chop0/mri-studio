@@ -9,6 +9,7 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
 import ax.xz.mri.service.circuit.CircuitStepEvaluator;
+import ax.xz.mri.service.simulation.math.BlochStep;
 import ax.xz.mri.util.LruCache;
 
 import java.util.List;
@@ -182,46 +183,15 @@ public final class BlochSimulator {
         double[] iRow = compiled.coilDriveI()[stepIndex];
         double[] qRow = compiled.coilDriveQ()[stepIndex];
         for (int c = 0; c < nCoils; c++) {
-            double I = iRow[c], Q = qRow[c];
             double ex = point.coilEx()[c], ey = point.coilEy()[c], ez = point.coilEz()[c];
-            bx += I * ex - Q * ey;
-            by += I * ey + Q * ex;
-            bz += I * ez;
+            bx += iRow[c] * ex - qRow[c] * ey;
+            by += iRow[c] * ey + qRow[c] * ex;
+            bz += iRow[c] * ez;
         }
-        double bPerp2 = bx * bx + by * by;
-        if (!kernel.rfOn() && bPerp2 < 1e-30) {
-            double om = field.gamma * bz;
-            double th = om * kernel.dt();
-            double c = Math.cos(th);
-            double s = Math.sin(th);
-            double nmx = (mx * c - my * s) * kernel.e2();
-            double nmy = (mx * s + my * c) * kernel.e2();
-            return new MagnetisationState(nmx, nmy, 1 + (mz - 1) * kernel.e1());
+        if (!kernel.rfOn() && (bx * bx + by * by) < BlochStep.B_PERP_SQ_FLOOR) {
+            return BlochStep.zOnly(bz, field.gamma, kernel.dt(), kernel.e1(), kernel.e2(), mx, my, mz);
         }
-        return rodrigues(bx, by, bz, field.gamma, kernel.dt(), mx, my, mz, kernel.e2(), kernel.e1());
-    }
-
-    private static MagnetisationState rodrigues(double bx, double by, double bz,
-                                                double gamma, double dt,
-                                                double mx, double my, double mz,
-                                                double e2, double e1) {
-        double bm = Math.sqrt(bx * bx + by * by + bz * bz + 1e-60);
-        double th = gamma * bm * dt;
-        double nx = bx / bm;
-        double ny = by / bm;
-        double nz = bz / bm;
-        double c = Math.cos(th);
-        double s = Math.sin(th);
-        double oc = 1 - c;
-        double nd = nx * mx + ny * my + nz * mz;
-        double cx = ny * mz - nz * my;
-        double cy = nz * mx - nx * mz;
-        double cz = nx * my - ny * mx;
-        return new MagnetisationState(
-            (mx * c + cx * s + nx * nd * oc) * e2,
-            (my * c + cy * s + ny * nd * oc) * e2,
-            1 + (mz * c + cz * s + nz * nd * oc - 1) * e1
-        );
+        return BlochStep.rodrigues(bx, by, bz, field.gamma, kernel.dt(), kernel.e1(), kernel.e2(), mx, my, mz);
     }
 
     private static SimulationKey simulationKey(FieldMap field, List<PulseSegment> pulse, double rMm, double zMm) {
