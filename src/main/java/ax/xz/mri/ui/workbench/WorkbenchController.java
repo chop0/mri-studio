@@ -873,15 +873,8 @@ public class WorkbenchController {
         analysisLeaf.setPruneWhenEmpty(false);
         for (var paneId : ANALYSIS_PANE_IDS) {
             if (paneId == PaneId.TIMELINE) continue; // timeline gets its own leaf
-            var dockable = builder.dockable(paneId.name());
-            dockable.setTitle(paneId.title());
-            dockable.setNode(panes.get(paneId));
-            dockable.setClosable(false);
-            dockable.setCanBeDragged(true);
-            dockable.setCanBeDroppedToNewWindow(true);
-            dockable.setDragGroup(STUDIO_DRAG_GROUP);
-            dockable.setContextMenuFactory(ignored -> buildToolWindowMenu(paneId));
-            dockables.put(paneId, dockable);
+            var dockable = createDockable(builder, paneId);
+            if (dockable == null) continue;
             homeLeaves.put(paneId, analysisLeaf);
             analysisLeaf.addDockable(dockable);
         }
@@ -920,18 +913,12 @@ public class WorkbenchController {
     private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
         var leaf = builder.leaf(paneId.name().toLowerCase());
         leaf.setPruneWhenEmpty(true);
-        var dockable = builder.dockable(paneId.name());
-        dockable.setTitle(paneId.title());
-        dockable.setNode(panes.get(paneId));
-        dockable.setClosable(false);
-        dockable.setCanBeDragged(true);
-        dockable.setCanBeDroppedToNewWindow(true);
-        dockable.setDragGroup(STUDIO_DRAG_GROUP);
-        dockable.setContextMenuFactory(ignored -> buildToolWindowMenu(paneId));
-        dockables.put(paneId, dockable);
-        homeLeaves.put(paneId, leaf);
-        leaf.addDockable(dockable);
-        leaf.selectDockable(dockable);
+        var dockable = createDockable(builder, paneId);
+        if (dockable != null) {
+            homeLeaves.put(paneId, leaf);
+            leaf.addDockable(dockable);
+            leaf.selectDockable(dockable);
+        }
         return leaf;
     }
 
