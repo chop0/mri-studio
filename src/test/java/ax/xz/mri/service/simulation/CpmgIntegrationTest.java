@@ -12,7 +12,7 @@ import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
-import ax.xz.mri.service.ObjectFactory;
+import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
 import org.junit.jupiter.api.Test;
 
@@ -126,7 +126,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-check",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
         CircuitDocument circuit = repo.circuit(config.circuitId());
@@ -169,7 +169,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-90",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
 
@@ -203,7 +203,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-180Y",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
         installZAxisOffResonance(repo, config, "y-flip", 50e-6);
@@ -237,7 +237,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-echo",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
         installZAxisOffResonance(repo, config, "echo", 2e-3);
@@ -300,7 +300,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-multi",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
         installZAxisOffResonance(repo, config, "multi", 200e-6);
@@ -341,7 +341,7 @@ class CpmgIntegrationTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("CPMG-long",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
 

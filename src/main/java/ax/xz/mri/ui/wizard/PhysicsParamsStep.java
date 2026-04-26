@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.wizard;
 
-import ax.xz.mri.service.ObjectFactory;
+import ax.xz.mri.model.simulation.PhysicsParams;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.geometry.Insets;
@@ -26,10 +26,10 @@ public final class PhysicsParamsStep implements WizardStep {
 	private final VBox root;
 
 	public PhysicsParamsStep() {
-		this(ObjectFactory.PhysicsParams.DEFAULTS);
+		this(PhysicsParams.DEFAULTS);
 	}
 
-	public PhysicsParamsStep(ObjectFactory.PhysicsParams defaults) {
+	public PhysicsParamsStep(PhysicsParams defaults) {
 		gammaSpinner = dblSpinner(1e6, 1e9, defaults.gamma(), 1e6);
 		t1Spinner = dblSpinner(0.1, 10000, defaults.t1Ms(), 10);
 		t2Spinner = dblSpinner(0.1, 10000, defaults.t2Ms(), 10);
@@ -66,8 +66,8 @@ public final class PhysicsParamsStep implements WizardStep {
 	@Override public Node content() { return root; }
 	@Override public BooleanBinding validProperty() { return valid; }
 
-	public ObjectFactory.PhysicsParams getValue() {
-		return new ObjectFactory.PhysicsParams(
+	public PhysicsParams getValue() {
+		return new PhysicsParams(
 			gammaSpinner.getValue(),
 			t1Spinner.getValue(), t2Spinner.getValue(),
 			sliceSpinner.getValue(), fovZSpinner.getValue(), fovRSpinner.getValue(),

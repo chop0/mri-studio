@@ -3,7 +3,7 @@ package ax.xz.mri.project;
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
-import ax.xz.mri.service.ObjectFactory;
+import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,7 +22,7 @@ class ProjectPersistenceIntegrationTest {
     void lowFieldProjectRoundTrips(@TempDir Path root) throws Exception {
         var session = new ProjectSessionViewModel();
         var config = session.createSimConfig("Round-trip",
-            SimConfigTemplate.LOW_FIELD_MRI, ObjectFactory.PhysicsParams.DEFAULTS);
+            SimConfigTemplate.LOW_FIELD_MRI, PhysicsParams.DEFAULTS);
 
         // Mutate the circuit: add a resistor, save again.
         var repo = session.repository.get();

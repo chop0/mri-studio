@@ -12,7 +12,8 @@ import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.project.ProjectSerialiser;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
-import ax.xz.mri.service.ObjectFactory;
+import ax.xz.mri.model.simulation.PhysicsParams;
+import ax.xz.mri.model.simulation.SimulationConfig;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
@@ -349,10 +350,10 @@ public final class ProjectSessionViewModel {
         try { saveProject(root); } catch (IOException ex) { errorSink.accept(ex); }
     }
 
-    public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, ObjectFactory.PhysicsParams params) {
+    public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, PhysicsParams params) {
         var repo = repository.get();
         var circuitId = template.createCircuit(repo, name + " circuit");
-        var config = ObjectFactory.buildConfig(params, template.referenceB0Tesla(), circuitId);
+        var config = SimulationConfig.fromPhysics(params, template.referenceB0Tesla(), circuitId);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         repo.addSimConfig(doc);
@@ -362,8 +363,7 @@ public final class ProjectSessionViewModel {
     }
 
     public EigenfieldDocument createEigenfield(String name, String description, String script, String units) {
-        var repo = repository.get();
-        var ef = ObjectFactory.findOrCreateEigenfield(repo, name, description, script, units);
+        var ef = repository.get().findOrCreateEigenfield(name, description, script, units);
         explorer.refresh();
         saveProjectQuietly();
         return ef;

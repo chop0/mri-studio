@@ -36,6 +36,18 @@ public record SimulationConfig(
         }
     }
 
+    /** Build a config from a {@link PhysicsParams} bundle plus the chosen circuit and reference field. */
+    public static SimulationConfig fromPhysics(PhysicsParams p, double referenceB0Tesla, ProjectNodeId circuitId) {
+        return new SimulationConfig(
+            p.t1Ms(), p.t2Ms(), p.gamma(),
+            p.sliceHalfMm(), p.fovZMm(), p.fovRMm(),
+            Math.max(2, p.nZ()), Math.max(2, p.nR()),
+            referenceB0Tesla,
+            p.dtSeconds(),
+            circuitId
+        );
+    }
+
     @JsonIgnore
     public double omegaSim() {
         return gamma * referenceB0Tesla;

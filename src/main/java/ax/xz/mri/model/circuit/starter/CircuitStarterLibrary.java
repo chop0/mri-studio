@@ -16,7 +16,6 @@ import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
-import ax.xz.mri.service.ObjectFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -171,7 +170,7 @@ public final class CircuitStarterLibrary {
         ProjectRepository repo, String name, String starterId
     ) {
         var s = EigenfieldStarterLibrary.byId(starterId).orElseThrow();
-        return ObjectFactory.findOrCreateEigenfield(repo, name, s.description(), s.source(), s.units());
+        return repo.findOrCreateEigenfield(name, s.description(), s.source(), s.units());
     }
 
     private static Wire wire(String id, ComponentId a, String pa, ComponentId b, String pb) {

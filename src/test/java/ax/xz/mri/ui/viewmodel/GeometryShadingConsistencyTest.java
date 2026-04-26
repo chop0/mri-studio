@@ -5,7 +5,7 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.BlochDataFactory;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
-import ax.xz.mri.service.ObjectFactory;
+import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.service.simulation.BlochSimulator;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot.CellSample;
 import ax.xz.mri.ui.viewmodel.ReferenceFrameViewModel;
@@ -69,7 +69,7 @@ class GeometryShadingConsistencyTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("consistency",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
 
@@ -116,7 +116,7 @@ class GeometryShadingConsistencyTest {
         var session = new ProjectSessionViewModel();
         var doc = session.createSimConfig("density",
             SimConfigTemplate.LOW_FIELD_MRI,
-            ObjectFactory.PhysicsParams.DEFAULTS);
+            PhysicsParams.DEFAULTS);
         var config = doc.config();
         var repo = session.repository.get();
         var train = buildSimpleCpmg(0);

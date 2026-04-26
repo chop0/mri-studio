@@ -2,7 +2,6 @@ package ax.xz.mri.ui.wizard;
 
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.project.SimulationConfigDocument;
-import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
 import javafx.stage.Stage;
 

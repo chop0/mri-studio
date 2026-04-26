@@ -37,6 +37,15 @@ import java.util.List;
  *
  * Adding a new kind of component is, on the simulation side, a single
  * {@code record} with those two methods.
+ *
+ * <h2>Why keep the typed {@code with*()} methods?</h2>
+ * Each record has typed wither methods (e.g. {@code withGain}, {@code withClosedOhms})
+ * that look like boilerplate. Don't replace them with reflection or a
+ * generic builder — Jackson's record-based deserialisation depends on the
+ * canonical constructors, and a reflective wither would break Janino's
+ * sandboxed compilation environment used for eigenfield scripts. The withers
+ * are also each called by exactly one Inspector presenter, where the typed
+ * shape gives us compile-time safety; the trade is intentional.
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({

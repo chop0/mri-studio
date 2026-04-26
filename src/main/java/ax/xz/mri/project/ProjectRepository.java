@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /** In-memory semantic project repository over project-owned nodes. */
 public final class ProjectRepository {
@@ -126,6 +127,25 @@ public final class ProjectRepository {
         if (!eigenfieldIds.contains(eigenfield.id())) {
             eigenfieldIds.add(eigenfield.id());
         }
+    }
+
+    /**
+     * Look up an existing eigenfield by name + script (treating those as the
+     * identity for deduplication), or create a fresh one with a new id and
+     * register it.
+     */
+    public EigenfieldDocument findOrCreateEigenfield(String name, String description, String script, String units) {
+        for (var id : eigenfieldIds) {
+            if (nodes.get(id) instanceof EigenfieldDocument ef
+                && ef.name().equals(name) && ef.script().equals(script)) {
+                return ef;
+            }
+        }
+        var fresh = new EigenfieldDocument(
+            new ProjectNodeId("ef-" + UUID.randomUUID()),
+            name, description, script, units);
+        addEigenfield(fresh);
+        return fresh;
     }
 
     public void removeEigenfield(ProjectNodeId eigenfieldId) {
