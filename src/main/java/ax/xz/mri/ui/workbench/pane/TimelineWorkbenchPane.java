@@ -65,44 +65,19 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         super(paneContext);
         setPaneTitle("Timeline");
         setToolNodes();
+        var viewport = paneContext.session().viewport;
+        var timelineCtl = paneContext.session().timeline.viewportController;
         overviewInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.HORIZONTAL,
-            new AxisScrubBar.WindowModel() {
-                @Override
-                public double domainStart() {
-                    return 0;
-                }
-
-                @Override
-                public double domainEnd() {
-                    return Math.max(paneContext.session().viewport.maxTime.get(), 1);
-                }
-
-                @Override
-                public double windowStart() {
-                    return paneContext.session().viewport.vS.get();
-                }
-
-                @Override
-                public double windowEnd() {
-                    return paneContext.session().viewport.vE.get();
-                }
-
-                @Override
-                public void setWindow(double start, double end) {
-                    paneContext.session().timeline.viewportController.setViewport(start, end);
-                }
-
-                @Override
-                public void zoomAround(double anchor, double factor) {
-                    paneContext.session().timeline.viewportController.zoomViewportAround(anchor, factor);
-                }
-
-                @Override
-                public void resetWindow() {
-                    paneContext.session().timeline.viewportController.fitViewportToData();
-                }
-            }
+            AxisScrubBar.WindowModel.of(
+                () -> 0,
+                () -> Math.max(viewport.maxTime.get(), 1),
+                viewport.vS::get, viewport.vE::get,
+                timelineCtl::setViewport,
+                timelineCtl::zoomViewportAround,
+                timelineCtl::fitViewportToData,
+                null
+            )
         );
 
         bindRedraw(

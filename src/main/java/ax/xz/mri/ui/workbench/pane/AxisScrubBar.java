@@ -107,6 +107,36 @@ public final class AxisScrubBar {
         default String resetLabel() {
             return "Zoom Out to Full Range";
         }
+
+        /**
+         * Build a {@code WindowModel} from supplier/consumer hooks — collapses
+         * the 30-line anonymous-class boilerplate that every analysis pane
+         * with an overview scrub bar otherwise repeats.
+         *
+         * @param resetLabel  context-menu label for the "fit to data" action;
+         *                    pass {@code null} for the default
+         */
+        static WindowModel of(
+            java.util.function.DoubleSupplier domainStart,
+            java.util.function.DoubleSupplier domainEnd,
+            java.util.function.DoubleSupplier windowStart,
+            java.util.function.DoubleSupplier windowEnd,
+            java.util.function.BiConsumer<Double, Double> setWindow,
+            java.util.function.BiConsumer<Double, Double> zoomAround,
+            Runnable resetWindow,
+            String resetLabel
+        ) {
+            return new WindowModel() {
+                @Override public double domainStart()                             { return domainStart.getAsDouble(); }
+                @Override public double domainEnd()                               { return domainEnd.getAsDouble(); }
+                @Override public double windowStart()                             { return windowStart.getAsDouble(); }
+                @Override public double windowEnd()                               { return windowEnd.getAsDouble(); }
+                @Override public void setWindow(double start, double end)         { setWindow.accept(start, end); }
+                @Override public void zoomAround(double anchor, double factor)    { zoomAround.accept(anchor, factor); }
+                @Override public void resetWindow()                               { resetWindow.run(); }
+                @Override public String resetLabel()                              { return resetLabel != null ? resetLabel : "Zoom Out to Full Range"; }
+            };
+        }
     }
 
     public static final class Interaction {

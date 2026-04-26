@@ -49,49 +49,17 @@ public class GeometryPane extends CanvasWorkbenchPane {
         labels.selectedProperty().bindBidirectional(paneContext.session().geometry.showLabels);
         setToolNodes(colourMenu, labels);
 
+        var geometry = paneContext.session().geometry;
         zRangeInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.VERTICAL,
-            new AxisScrubBar.WindowModel() {
-                @Override
-                public double domainStart() {
-                    return zDomainStart();
-                }
-
-                @Override
-                public double domainEnd() {
-                    return zDomainEnd();
-                }
-
-                @Override
-                public double windowStart() {
-                    return paneContext.session().geometry.visibleStart();
-                }
-
-                @Override
-                public double windowEnd() {
-                    return paneContext.session().geometry.visibleEnd();
-                }
-
-                @Override
-                public void setWindow(double start, double end) {
-                    paneContext.session().geometry.setVisibleRange(start, end, domainStart(), domainEnd());
-                }
-
-                @Override
-                public void zoomAround(double anchor, double factor) {
-                    paneContext.session().geometry.zoomVisibleRangeAround(anchor, factor, domainStart(), domainEnd());
-                }
-
-                @Override
-                public void resetWindow() {
-                    paneContext.session().geometry.fitVisibleRange(domainStart(), domainEnd());
-                }
-
-                @Override
-                public String resetLabel() {
-                    return "Zoom Out Z Axis";
-                }
-            }
+            AxisScrubBar.WindowModel.of(
+                this::zDomainStart, this::zDomainEnd,
+                geometry::visibleStart, geometry::visibleEnd,
+                (start, end) -> geometry.setVisibleRange(start, end, zDomainStart(), zDomainEnd()),
+                (anchor, factor) -> geometry.zoomVisibleRangeAround(anchor, factor, zDomainStart(), zDomainEnd()),
+                () -> geometry.fitVisibleRange(zDomainStart(), zDomainEnd()),
+                "Zoom Out Z Axis"
+            )
         );
 
         bindRedraw(

@@ -57,44 +57,18 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     protected AbstractTracePlotPane(PaneContext paneContext, TracePlotViewModel viewModel) {
         super(paneContext);
         this.viewModel = viewModel;
+        var viewport = paneContext.session().viewport;
         this.overviewInteraction = new AxisScrubBar.Interaction(
             AxisScrubBar.Orientation.HORIZONTAL,
-            new AxisScrubBar.WindowModel() {
-                @Override
-                public double domainStart() {
-                    return 0;
-                }
-
-                @Override
-                public double domainEnd() {
-                    return Math.max(paneContext.session().viewport.maxTime.get(), 1);
-                }
-
-                @Override
-                public double windowStart() {
-                    return paneContext.session().viewport.tS.get();
-                }
-
-                @Override
-                public double windowEnd() {
-                    return paneContext.session().viewport.tE.get();
-                }
-
-                @Override
-                public void setWindow(double start, double end) {
-                    paneContext.session().viewport.setAnalysisWindow(start, end);
-                }
-
-                @Override
-                public void zoomAround(double anchor, double factor) {
-                    paneContext.session().viewport.zoomAnalysisWindowAround(anchor, factor);
-                }
-
-                @Override
-                public void resetWindow() {
-                    paneContext.session().viewport.fitAnalysisToData();
-                }
-            }
+            AxisScrubBar.WindowModel.of(
+                () -> 0,
+                () -> Math.max(viewport.maxTime.get(), 1),
+                viewport.tS::get, viewport.tE::get,
+                viewport::setAnalysisWindow,
+                viewport::zoomAnalysisWindowAround,
+                viewport::fitAnalysisToData,
+                null
+            )
         );
         setPaneTitle(viewModel.title());
         bindRedraw(
