@@ -1,4 +1,4 @@
-package ax.xz.mri.model.simulation;
+package ax.xz.mri.ui.wizard.starters;
 
 import ax.xz.mri.ui.wizard.WizardStep;
 import javafx.beans.binding.Bindings;

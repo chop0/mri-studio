@@ -2,9 +2,9 @@ package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.sequence.ClipBaker;
-import ax.xz.mri.model.sequence.SequenceStarter;
-import ax.xz.mri.model.sequence.SequenceStarterLibrary;
-import ax.xz.mri.model.simulation.SimConfigTemplate;
+import ax.xz.mri.ui.wizard.starters.SequenceStarter;
+import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
+import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectManifest;
 import ax.xz.mri.project.ProjectNodeId;

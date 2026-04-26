@@ -4,7 +4,7 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.BlochDataFactory;
-import ax.xz.mri.model.simulation.SimConfigTemplate;
+import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.service.simulation.BlochSimulator;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot.CellSample;

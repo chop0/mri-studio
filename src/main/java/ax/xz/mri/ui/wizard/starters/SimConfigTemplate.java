@@ -1,7 +1,8 @@
-package ax.xz.mri.model.simulation;
+package ax.xz.mri.ui.wizard.starters;
 
 import ax.xz.mri.model.circuit.starter.CircuitStarter;
 import ax.xz.mri.model.circuit.starter.CircuitStarterLibrary;
+import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.ui.wizard.WizardStep;

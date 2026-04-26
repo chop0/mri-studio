@@ -2,7 +2,7 @@ package ax.xz.mri.project;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.ComponentId;
-import ax.xz.mri.model.simulation.SimConfigTemplate;
+import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
 import org.junit.jupiter.api.Test;

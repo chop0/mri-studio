@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.wizard;
 
-import ax.xz.mri.model.sequence.SequenceStarter;
-import ax.xz.mri.model.sequence.SequenceStarterLibrary;
+import ax.xz.mri.ui.wizard.starters.SequenceStarter;
+import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;

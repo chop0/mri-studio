@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.wizard;
 
-import ax.xz.mri.model.simulation.SimConfigTemplate;
+import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.project.SimulationConfigDocument;
 import ax.xz.mri.service.ObjectFactory;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;

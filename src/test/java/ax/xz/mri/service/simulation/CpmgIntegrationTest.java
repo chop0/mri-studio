@@ -7,7 +7,7 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.BlochDataFactory;
-import ax.xz.mri.model.simulation.SimConfigTemplate;
+import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;

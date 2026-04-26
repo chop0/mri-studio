@@ -10,6 +10,8 @@ import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.support.FxTestSupport;
+import ax.xz.mri.ui.wizard.starters.SequenceStarter;
+import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

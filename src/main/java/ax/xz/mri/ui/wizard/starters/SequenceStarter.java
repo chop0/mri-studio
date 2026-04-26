@@ -1,6 +1,7 @@
-package ax.xz.mri.model.sequence;
+package ax.xz.mri.ui.wizard.starters;
 
 import ax.xz.mri.model.circuit.CircuitDocument;
+import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.ui.wizard.WizardStep;
 
