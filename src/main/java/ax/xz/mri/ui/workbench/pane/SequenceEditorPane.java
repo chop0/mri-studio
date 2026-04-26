@@ -288,9 +288,6 @@ public final class SequenceEditorPane extends WorkbenchPane {
     /** Wire the simulation session (called by WorkbenchController after open). */
     public void wireSimSession(SequenceSimulationSession session) {
         this.simSession = session;
-        session.stale.addListener((obs, o, n) -> {
-            if (paneContext.controller() != null) paneContext.controller().markTimelineStale(n);
-        });
         editSession.applyActiveConfig(session.activeConfig.get());
         session.activeConfig.addListener((obs, o, n) -> editSession.applyActiveConfig(n));
     }

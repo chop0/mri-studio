@@ -36,7 +36,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
@@ -811,7 +810,4 @@ public final class SequenceEditSession {
         }
     }
 
-    // Retain the old ID-based identifier type for callers that pass auto-generated ids.
-    @SuppressWarnings("unused")
-    private static String newId() { return UUID.randomUUID().toString(); }
 }

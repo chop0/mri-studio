@@ -2,7 +2,6 @@ package ax.xz.mri.ui.workbench.pane.inspector;
 
 import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipShape;
-import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.AmplitudeKind;
@@ -28,7 +27,6 @@ import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 
 import java.util.ArrayList;
@@ -833,14 +831,6 @@ public final class ClipInspectorSection {
         return l;
     }
 
-    @SuppressWarnings("unused")
-    private String channelLabel(SequenceChannel channel) {
-        if (channel == null) return "\u2014";
-        var src = session.sourceForChannel(channel);
-        if (src == null) return channel.sourceName() + "[" + channel.subIndex() + "]";
-        return ax.xz.mri.model.sequence.ClipBaker.defaultTrackName(src, channel.subIndex());
-    }
-
     private String formatPeak(SignalClip clip, EigenfieldDocument ef) {
         if (ef == null) return "";
         // Eigenfield carries shape only now; the actual physical magnitude
@@ -864,11 +854,4 @@ public final class ClipInspectorSection {
         return String.format("%.3g %s", value, units);
     }
 
-    /** Spacer for horizontal flex. */
-    @SuppressWarnings("unused")
-    private static Region spacer() {
-        var r = new Region();
-        HBox.setHgrow(r, Priority.ALWAYS);
-        return r;
-    }
 }

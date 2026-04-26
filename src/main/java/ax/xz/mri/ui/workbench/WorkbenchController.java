@@ -609,10 +609,6 @@ public class WorkbenchController {
         return dockable;
     }
 
-    public void markTimelineStale(boolean stale) {
-        // No-op for now — per-doc timelines handle their own state
-    }
-
     // --- File operations ---
 
     public void openProjectChooser() {
