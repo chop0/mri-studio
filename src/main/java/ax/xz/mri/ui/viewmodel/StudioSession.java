@@ -39,6 +39,9 @@ public class StudioSession {
     public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
     public StudioSession() {
+        derived.setErrorSink(ex -> messages.logError("DerivedComputation", ex.getMessage(), ex));
+        points.setErrorSink(ex -> messages.logError("Isochromats", ex.getMessage(), ex));
+
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         reference.enabled.addListener((obs, oldValue, newValue) -> {
             refreshReferenceFrame();

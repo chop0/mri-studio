@@ -33,6 +33,7 @@ public class DerivedComputationViewModel {
     private final Consumer<Runnable> uiDispatcher;
     private final Runnable disposer;
     private final AtomicLong generation = new AtomicLong();
+    private Consumer<Throwable> errorSink = ex -> { };
 
     public DerivedComputationViewModel() {
         this(createExecutor(), Platform::runLater, null);
@@ -42,6 +43,11 @@ public class DerivedComputationViewModel {
         this.executor = executor;
         this.uiDispatcher = uiDispatcher;
         this.disposer = disposer != null ? disposer : () -> { };
+    }
+
+    /** Attach a diagnostics sink (typically MessagesViewModel::logError-bridging). */
+    public void setErrorSink(Consumer<Throwable> sink) {
+        this.errorSink = sink != null ? sink : ex -> { };
     }
 
     public void recompute(BlochData data, List<PulseSegment> pulse) {
@@ -71,8 +77,7 @@ public class DerivedComputationViewModel {
                     computing.set(false);
                 });
             } catch (Exception ex) {
-                System.err.println("DerivedComputationViewModel: computation failed: " + ex.getMessage());
-                ex.printStackTrace();
+                errorSink.accept(ex);
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     phaseMapZ.set(null);

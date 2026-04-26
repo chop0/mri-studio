@@ -45,7 +45,9 @@ public class MriStudioApp extends Application {
                 }
                 if (manifestDir != null) {
                     try { shell.controller().openProjectDirectory(manifestDir); }
-                    catch (Exception ex) { ex.printStackTrace(); }
+                    catch (Exception ex) {
+                        shell.controller().session().messages.logError("Startup", "Failed to auto-open " + manifestDir, ex);
+                    }
                 }
             }
         }

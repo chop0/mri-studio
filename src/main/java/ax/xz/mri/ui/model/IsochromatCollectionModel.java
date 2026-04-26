@@ -33,6 +33,7 @@ public class IsochromatCollectionModel {
     private final Runnable disposer;
     private final AtomicLong nextId = new AtomicLong(1);
     private final AtomicLong simulationGeneration = new AtomicLong();
+    private Consumer<Throwable> errorSink = ex -> { };
 
     private BlochData currentData;
     private List<PulseSegment> currentPulse;
@@ -54,6 +55,11 @@ public class IsochromatCollectionModel {
         this.disposer = disposer != null ? disposer : () -> { };
         entries.addListener((javafx.collections.ListChangeListener<IsochromatEntry>) change ->
             selectionModel.removeMissing(entries.stream().map(IsochromatEntry::id).toList()));
+    }
+
+    /** Attach a diagnostics sink (typically MessagesViewModel::logError-bridging). */
+    public void setErrorSink(Consumer<Throwable> sink) {
+        this.errorSink = sink != null ? sink : ex -> { };
     }
 
     public void setContext(BlochData data, List<PulseSegment> pulse) {
@@ -197,17 +203,11 @@ public class IsochromatCollectionModel {
                     results.add(entry.withTrajectory(trajectory));
                 }
                 uiDispatcher.accept(() -> {
-                    if (generation != simulationGeneration.get()) {
-                        System.err.println("IsochromatCollectionModel: generation mismatch, discarding " + results.size() + " results (had " + generation + ", now " + simulationGeneration.get() + ")");
-                        return;
-                    }
-                    for (var result : results) {
-                        replaceExisting(result);
-                    }
+                    if (generation != simulationGeneration.get()) return;
+                    for (var result : results) replaceExisting(result);
                 });
             } catch (Exception ex) {
-                System.err.println("IsochromatCollectionModel: simulation failed: " + ex.getMessage());
-                ex.printStackTrace();
+                errorSink.accept(ex);
             }
         });
     }
