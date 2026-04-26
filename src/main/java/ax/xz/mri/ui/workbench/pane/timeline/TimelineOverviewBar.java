@@ -6,6 +6,7 @@ import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.ui.workbench.pane.AxisScrubBar;
+import ax.xz.mri.util.MathUtil;
 import javafx.animation.AnimationTimer;
 import javafx.beans.property.DoubleProperty;
 import javafx.scene.canvas.GraphicsContext;
@@ -190,7 +191,7 @@ public final class TimelineOverviewBar extends ResizableCanvas {
             double fMax = maxes.get(ch);
             for (int px = 0; px < pixelCount; px++) {
                 double normalised = fMax > 0 ? cachedChannelSamples[ch][px] / fMax : 0;
-                normalised = Math.max(-1, Math.min(1, normalised));
+                normalised = MathUtil.clampUnit(normalised);
                 double y = midY - normalised * halfH;
                 if (px == 0) g.moveTo(bounds.x() + px * xScale, y);
                 else g.lineTo(bounds.x() + px * xScale, y);

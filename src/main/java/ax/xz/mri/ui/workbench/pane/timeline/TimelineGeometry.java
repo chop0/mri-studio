@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.workbench.pane.timeline;
 
 import ax.xz.mri.model.sequence.Track;
+import ax.xz.mri.util.MathUtil;
 
 import java.util.List;
 import java.util.Set;
@@ -121,7 +122,7 @@ public record TimelineGeometry(
         double top = trackTop(trackIndex);
         double h = trackHeight(trackIndex);
         double mid = top + h / 2;
-        double normalised = max > 0 ? Math.max(-1, Math.min(1, value / max)) : 0;
+        double normalised = max > 0 ? MathUtil.clampUnit(value / max) : 0;
         return mid - normalised * (h * 0.42);
     }
 

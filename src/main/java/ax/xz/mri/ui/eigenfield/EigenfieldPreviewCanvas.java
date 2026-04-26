@@ -4,6 +4,7 @@ import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
 import ax.xz.mri.ui.canvas.Projection;
 import ax.xz.mri.ui.framework.ResizableCanvas;
+import ax.xz.mri.util.MathUtil;
 import javafx.animation.AnimationTimer;
 import javafx.beans.InvalidationListener;
 import javafx.beans.Observable;
@@ -101,14 +102,14 @@ public final class EigenfieldPreviewCanvas extends StackPane {
         canvas.setOnMouseDragged(e -> {
             if (e.isPrimaryButtonDown()) {
                 theta.set(theta.get() + (e.getX() - dragX) * 0.008);
-                phi.set(clamp(phi.get() + (e.getY() - dragY) * 0.008, -1.4, 1.4));
+                phi.set(MathUtil.clamp(phi.get() + (e.getY() - dragY) * 0.008, -1.4, 1.4));
                 dragX = e.getX();
                 dragY = e.getY();
             }
         });
         canvas.setOnScroll(e -> {
             double factor = e.getDeltaY() > 0 ? 1.1 : 0.91;
-            zoom.set(clamp(zoom.get() * factor, 0.3, 6.0));
+            zoom.set(MathUtil.clamp(zoom.get() * factor, 0.3, 6.0));
         });
 
         timer.start();
@@ -330,7 +331,7 @@ public final class EigenfieldPreviewCanvas extends StackPane {
     }
 
     private Color magnitudeColour(double normalised) {
-        double t = clamp(normalised, 0, 1);
+        double t = MathUtil.clamp01(normalised);
         // Cool → warm gradient through teal, green, yellow, orange, red.
         double r = Math.min(1, 2 * t);
         double b = Math.max(0, 1 - 2 * t);
@@ -343,10 +344,6 @@ public final class EigenfieldPreviewCanvas extends StackPane {
         g.setFont(Font.font("System", 10));
         g.fillText(String.format("max |B| = %.3g   half = %.3g m   samples = %d³",
             cachedMaxMagnitude, halfExtentM.get(), samplesPerAxis.get()), 10, height - 10);
-    }
-
-    private static double clamp(double v, double lo, double hi) {
-        return Math.max(lo, Math.min(hi, v));
     }
 
     private record Sample(double x, double y, double z, Vec3 value, double magnitude) {}

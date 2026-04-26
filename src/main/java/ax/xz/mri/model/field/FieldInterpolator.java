@@ -1,5 +1,7 @@
 package ax.xz.mri.model.field;
 
+import ax.xz.mri.util.MathUtil;
+
 /**
  * Bilinear interpolation into the spatial field map.
  *
@@ -43,8 +45,8 @@ public final class FieldInterpolator {
         if (nr == 1 && nz == 1) return grid[0][0];
         double ri = nr > 1 ? (r - rArr[0]) / (rArr[nr - 1] - rArr[0]) * (nr - 1) : 0;
         double zi = nz > 1 ? (z - zArr[0]) / (zArr[nz - 1] - zArr[0]) * (nz - 1) : 0;
-        ri = Math.max(0, Math.min(nr - 1.001, ri));
-        zi = Math.max(0, Math.min(nz - 1.001, zi));
+        ri = MathUtil.clamp(ri, 0, nr - 1.001);
+        zi = MathUtil.clamp(zi, 0, nz - 1.001);
         int r0 = (int) ri, z0 = (int) zi;
         double fr = ri - r0, fz = zi - z0;
         int r1 = Math.min(r0 + 1, nr - 1), z1 = Math.min(z0 + 1, nz - 1);

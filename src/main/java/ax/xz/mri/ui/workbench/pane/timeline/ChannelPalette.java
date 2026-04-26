@@ -3,6 +3,7 @@ package ax.xz.mri.ui.workbench.pane.timeline;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.util.MathUtil;
 import javafx.scene.paint.Color;
 
 /**
@@ -53,7 +54,6 @@ public final class ChannelPalette {
 
     /** A translucent variant of the given colour. */
     public static Color tint(Color base, double alpha) {
-        return new Color(base.getRed(), base.getGreen(), base.getBlue(),
-            Math.max(0, Math.min(1, alpha)));
+        return new Color(base.getRed(), base.getGreen(), base.getBlue(), MathUtil.clamp01(alpha));
     }
 }

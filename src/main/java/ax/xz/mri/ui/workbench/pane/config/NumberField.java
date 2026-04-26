@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.workbench.pane.config;
 
+import ax.xz.mri.util.MathUtil;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.geometry.Pos;
@@ -177,7 +178,7 @@ public final class NumberField extends HBox {
 
     private double clampFinite(double v) {
         if (!Double.isFinite(v)) return 0;
-        return Math.max(min, Math.min(max, v));
+        return MathUtil.clamp(v, min, max);
     }
 
     private void adjust(int direction, double mult) {

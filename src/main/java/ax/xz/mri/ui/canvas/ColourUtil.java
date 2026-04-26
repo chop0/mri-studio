@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.canvas;
 
+import ax.xz.mri.util.MathUtil;
 import javafx.scene.paint.Color;
 
 /**
@@ -28,14 +29,14 @@ public final class ColourUtil {
             default-> { r = 1; g = 0; b = q; }
         }
         return Color.color(
-            clamp(r * brightness), clamp(g * brightness), clamp(b * brightness)
+            MathUtil.clamp01(r * brightness),
+            MathUtil.clamp01(g * brightness),
+            MathUtil.clamp01(b * brightness)
         );
     }
 
     /** Neutral ramp for brightness-only shading when phase hue is disabled. */
     public static Color monochrome(double brightness) {
-        return Color.hsb(210, 0.12, clamp(0.28 + 0.52 * clamp(brightness)));
+        return Color.hsb(210, 0.12, MathUtil.clamp01(0.28 + 0.52 * MathUtil.clamp01(brightness)));
     }
-
-    private static double clamp(double v) { return Math.max(0, Math.min(1, v)); }
 }

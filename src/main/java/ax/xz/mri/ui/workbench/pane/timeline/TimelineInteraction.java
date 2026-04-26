@@ -6,6 +6,7 @@ import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.util.MathUtil;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
 import javafx.scene.control.ContextMenu;
@@ -293,7 +294,7 @@ public final class TimelineInteraction {
         int ti = geom.trackAtY(my);
         if (ti < 0) ti = 0;
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
-        t = Math.max(0, Math.min(1, t));
+        t = MathUtil.clamp01(t);
         var outputChannel = geom.tracks().get(ti).outputChannel();
         double displayMax = TimelineRenderer.channelDisplayMax(session, outputChannel);
         double v = clip.amplitude() != 0 ? geom.yToValue(ti, my, displayMax) / clip.amplitude() : 0;
@@ -557,7 +558,7 @@ public final class TimelineInteraction {
 
     private void addSplinePointAt(SignalClip clip, TimelineGeometry geom, double mx, double my) {
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
-        t = Math.max(0, Math.min(1, t));
+        t = MathUtil.clamp01(t);
         int ti = geom.trackAtY(my);
         SequenceChannel outputChannel = ti >= 0 ? geom.tracks().get(ti).outputChannel() : null;
         double displayMax = outputChannel != null

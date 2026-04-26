@@ -5,6 +5,7 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.service.circuit.CircuitStepEvaluator;
+import ax.xz.mri.util.MathUtil;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -80,7 +81,7 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 computeEmfs(geometry, mx, my, dt, sCoilRePrev, sCoilImPrev, emfRe, emfIm);
                 evaluator.evaluate(step.controls(), dt, emfRe, emfIm, tSeconds, omegaSim);
                 applyStep(geometry, evaluator, dt, mx, my, mz);
-                double sigGate = 1.0 - clamp(step.rfGate(), 0.0, 1.0);
+                double sigGate = 1.0 - MathUtil.clamp(step.rfGate(), 0.0, 1.0);
                 double[] signal = probeSignal(geometry, primaryIdx, evaluator, tSeconds);
                 double sigMag2 = signal[0] * signal[0] + signal[1] * signal[1];
                 double sxOut = weightedSum(geometry.wOut(), mx);
@@ -150,10 +151,6 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
             if (segments.get(index).steps().size() != template.segments().get(index).totalSteps())
                 throw new IllegalArgumentException("step count does not match sequence template at segment " + index);
         }
-    }
-
-    protected static double clamp(double value, double low, double high) {
-        return Math.max(low, Math.min(high, value));
     }
 
     /**

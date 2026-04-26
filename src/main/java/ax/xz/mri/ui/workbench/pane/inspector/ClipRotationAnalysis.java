@@ -2,6 +2,7 @@ package ax.xz.mri.ui.workbench.pane.inspector;
 
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
+import ax.xz.mri.util.MathUtil;
 
 /**
  * Extracts the net rotation an RF clip applies to a point's magnetisation,
@@ -74,7 +75,7 @@ public record ClipRotationAnalysis(
         double bx = before.mx() / bMag, by = before.my() / bMag, bz = before.mz() / bMag;
         double ax = after.mx() / aMag, ay = after.my() / aMag, az = after.mz() / aMag;
 
-        double cos = Math.max(-1, Math.min(1, bx * ax + by * ay + bz * az));
+        double cos = MathUtil.clampUnit(bx * ax + by * ay + bz * az);
         double angle = Math.acos(cos);
 
         // axis = before × after (right-hand rule rotates before onto after)

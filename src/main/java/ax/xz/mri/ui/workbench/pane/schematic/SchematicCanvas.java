@@ -5,6 +5,7 @@ import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
+import ax.xz.mri.util.MathUtil;
 import javafx.beans.InvalidationListener;
 import javafx.scene.Cursor;
 import javafx.scene.canvas.Canvas;
@@ -212,14 +213,14 @@ public final class SchematicCanvas extends Canvas {
         double worldHeight = Math.max(1, maxY - minY);
         double sx = (getWidth() - 2 * margin) / worldWidth;
         double sy = (getHeight() - 2 * margin) / worldHeight;
-        scale = Math.max(0.1, Math.min(3.0, Math.min(sx, sy)));
+        scale = MathUtil.clamp(Math.min(sx, sy), 0.1, 3.0);
         offsetX = margin - minX * scale + (getWidth() - 2 * margin - worldWidth * scale) / 2;
         offsetY = margin - minY * scale + (getHeight() - 2 * margin - worldHeight * scale) / 2;
         redraw();
     }
 
     private void zoomAround(double factor, double cx, double cy) {
-        double newScale = Math.max(0.1, Math.min(4.0, scale * factor));
+        double newScale = MathUtil.clamp(scale * factor, 0.1, 4.0);
         double worldX = (cx - offsetX) / scale;
         double worldY = (cy - offsetY) / scale;
         scale = newScale;
@@ -430,7 +431,7 @@ public final class SchematicCanvas extends Canvas {
         double dx = x2 - x1, dy = y2 - y1;
         double lenSq = dx * dx + dy * dy;
         if (lenSq < 1e-9) return Math.hypot(px - x1, py - y1) <= tol;
-        double t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+        double t = MathUtil.clamp01(((px - x1) * dx + (py - y1) * dy) / lenSq);
         double cx = x1 + t * dx, cy = y1 + t * dy;
         return Math.hypot(px - cx, py - cy) <= tol;
     }

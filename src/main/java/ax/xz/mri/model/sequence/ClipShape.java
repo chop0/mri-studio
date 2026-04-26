@@ -1,5 +1,6 @@
 package ax.xz.mri.model.sequence;
 
+import ax.xz.mri.util.MathUtil;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
@@ -96,8 +97,7 @@ public sealed interface ClipShape
             double sinc = Math.abs(x) < 1e-12 ? 1.0 : Math.sin(x) / x;
             double window;
             if (u >= 0 && u <= 1) {
-                double w = 0.5 * (1.0 - Math.cos(2.0 * Math.PI * u * windowFactor));
-                window = Math.max(0, Math.min(1, w));
+                window = MathUtil.clamp01(0.5 * (1.0 - Math.cos(2.0 * Math.PI * u * windowFactor)));
             } else {
                 window = 1.0; // sinc continues unwindowed outside its authored media
             }
@@ -178,7 +178,7 @@ public sealed interface ClipShape
 
         @Override public double evaluate(double u, double mediaDurationMicros) {
             if (u < 0 || u > 1) return 0;
-            double peak = Math.max(0, Math.min(1, peakPosition));
+            double peak = MathUtil.clamp01(peakPosition);
             if (u <= peak) return peak > 0 ? u / peak : 1.0;
             double remaining = 1.0 - peak;
             return remaining > 0 ? (1.0 - u) / remaining : 1.0;

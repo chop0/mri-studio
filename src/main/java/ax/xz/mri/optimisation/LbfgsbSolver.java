@@ -1,5 +1,7 @@
 package ax.xz.mri.optimisation;
 
+import ax.xz.mri.util.MathUtil;
+
 import java.util.Arrays;
 
 /** Pure Java L-BFGS-B solver, ported from the current Python/JAX algorithm. */
@@ -203,7 +205,7 @@ public final class LbfgsbSolver {
 
     private static double[] project(double[] x, double[] lowerBounds, double[] upperBounds) {
         for (int index = 0; index < x.length; index++) {
-            x[index] = Math.max(lowerBounds[index], Math.min(upperBounds[index], x[index]));
+            x[index] = MathUtil.clamp(x[index], lowerBounds[index], upperBounds[index]);
         }
         return x;
     }
