@@ -8,6 +8,7 @@ import java.util.List;
 /** Java optimiser backend using masked controls, continuation, and L-BFGS-B. */
 public final class MaskedParameterOptimiser implements OptimiserBackend {
     private final LbfgsbSolver solver;
+    private final ContinuationOptimiser continuation = new ContinuationOptimiser();
 
     public MaskedParameterOptimiser() {
         this(new LbfgsbSolver());
@@ -19,20 +20,17 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
 
     @Override
     public OptimisationResult optimise(OptimisationRequest request, ObjectiveEngine engine) {
+        var template = request.problem().sequenceTemplate();
         double[] initialFull = PulseParameterCodec.flatten(request.initialSegments());
         var mask = MaskedVector.of(request.freeMask());
-        double[] lowerFree = mask.pick(request.lowerBounds());
-        double[] upperFree = mask.pick(request.upperBounds());
-        double[] initialFree = mask.pick(initialFull);
 
         var snapshots = new LinkedHashMap<Integer, List<PulseSegment>>();
         snapshots.put(0, request.parameterisation().expandSegments(request.initialSegments()));
 
         if (mask.size() == 0) {
-            var expanded = request.parameterisation().expandSegments(request.initialSegments());
             return new OptimisationResult(
                 request.initialSegments(),
-                expanded,
+                snapshots.get(0),
                 new SnapshotSeries(snapshots),
                 engine.simulateSignal(request.problem(), request.initialSegments()),
                 0,
@@ -43,71 +41,57 @@ public final class MaskedParameterOptimiser implements OptimiserBackend {
             );
         }
 
-        double[] currentFree = initialFree.clone();
-        double[] bestFull = initialFull.clone();
-        double bestValue = Double.POSITIVE_INFINITY;
-        int totalIterations = 0;
+        double[] lowerFree = mask.pick(request.lowerBounds());
+        double[] upperFree = mask.pick(request.upperBounds());
         int[] evaluations = {0};
-        boolean success = true;
-        String message = "Completed continuation";
 
-        for (var stage : request.continuationSchedule().stages()) {
-            final int iterationBase = totalIterations;
-            var stageProblem = request.problem().withObjectiveSpec(
-                request.problem().objectiveSpec().withRfSmoothMultiplier(stage.rfSmoothMultiplier())
-            );
-            var stageResult = solver.solve(
-                xFree -> {
-                    double[] full = mask.merge(initialFull, xFree);
-                    List<PulseSegment> segments = PulseParameterCodec.split(full, request.problem().sequenceTemplate());
-                    double value = engine.evaluate(stageProblem, segments).value();
-                    double[] gradientFull = engine.gradient(stageProblem, segments);
-                    evaluations[0]++;
-                    return new LbfgsbSolver.ValueGradient(value, mask.pick(gradientFull));
-                },
-                currentFree,
-                lowerFree,
-                upperFree,
-                stage.iterations(),
-                (iteration, x, value) -> {
-                    if (request.stopRequested().get()) return true;
-                    int globalIteration = iterationBase + iteration;
-                    if (globalIteration % request.snapshotEvery() == 0) {
-                        double[] full = mask.merge(initialFull, x);
-                        snapshots.put(globalIteration, request.parameterisation().expandSegments(
-                            PulseParameterCodec.split(full, request.problem().sequenceTemplate())
-                        ));
+        var result = continuation.run(
+            request.continuationSchedule(),
+            mask.pick(initialFull),
+            request.snapshotEvery(),
+            (stage, x0, listener) -> {
+                var stageProblem = request.problem().withObjectiveSpec(
+                    request.problem().objectiveSpec().withRfSmoothMultiplier(stage.rfSmoothMultiplier())
+                );
+                return solver.solve(
+                    xFree -> {
+                        var segments = expand(mask, initialFull, xFree, template);
+                        double value = engine.evaluate(stageProblem, segments).value();
+                        double[] gradient = engine.gradient(stageProblem, segments);
+                        evaluations[0]++;
+                        return new LbfgsbSolver.ValueGradient(value, mask.pick(gradient));
+                    },
+                    x0, lowerFree, upperFree, stage.iterations(),
+                    (iteration, x, value) -> {
+                        if (request.stopRequested().get()) return true;
+                        listener.onIteration(iteration, x, value);
+                        return false;
                     }
-                    return false;
-                }
-            );
-            currentFree = stageResult.x().clone();
-            totalIterations += stageResult.iterations();
-            double[] full = mask.merge(initialFull, currentFree);
-            List<PulseSegment> segments = PulseParameterCodec.split(full, request.problem().sequenceTemplate());
-            double value = engine.evaluate(stageProblem, segments).value();
-            if (value < bestValue) {
-                bestValue = value;
-                bestFull = full.clone();
+                );
             }
-            success &= stageResult.success();
-            message = stageResult.message();
-            snapshots.put(totalIterations, request.parameterisation().expandSegments(segments));
-            if (!stageResult.success()) break;
-        }
+        );
 
-        List<PulseSegment> bestSegments = PulseParameterCodec.split(bestFull, request.problem().sequenceTemplate());
-        List<PulseSegment> expanded = request.parameterisation().expandSegments(bestSegments);
+        // Fan out double[] snapshots → List<PulseSegment> snapshots.
+        result.snapshots().forEach((iteration, x) -> {
+            if (iteration == 0) return;
+            snapshots.put(iteration, request.parameterisation().expandSegments(expand(mask, initialFull, x, template)));
+        });
+
+        var bestSegments = expand(mask, initialFull, result.bestX(), template);
         return new OptimisationResult(
             bestSegments,
-            expanded,
+            request.parameterisation().expandSegments(bestSegments),
             new SnapshotSeries(snapshots),
             engine.simulateSignal(request.problem(), bestSegments),
-            totalIterations,
+            result.iterations(),
             evaluations[0],
-            bestValue,
-            success,
-            message
+            result.bestValue(),
+            result.success(),
+            result.message()
         );
+    }
+
+    private static List<PulseSegment> expand(MaskedVector mask, double[] initialFull, double[] xFree, SequenceTemplate template) {
+        return PulseParameterCodec.split(mask.merge(initialFull, xFree), template);
     }
 }
