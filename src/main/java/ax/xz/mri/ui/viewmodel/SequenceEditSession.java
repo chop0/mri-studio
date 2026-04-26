@@ -15,6 +15,7 @@ import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.project.SequenceDocument;
+import ax.xz.mri.util.MathUtil;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
 import javafx.beans.property.IntegerProperty;
@@ -284,10 +285,8 @@ public final class SequenceEditSession {
 
     /** Add a new track targeting a specific output channel. */
     public Track addTrack(SequenceChannel outputChannel, String name) {
-        pushUndo();
         var track = new Track(outputChannel, name != null ? name : defaultTrackNameFor(outputChannel));
-        tracks.add(track);
-        bumpRevision();
+        mutate(() -> tracks.add(track));
         return track;
     }
 
@@ -295,42 +294,32 @@ public final class SequenceEditSession {
     public void removeTrack(String trackId) {
         int idx = indexOfTrack(trackId);
         if (idx < 0) return;
-        pushUndo();
-        tracks.remove(idx);
-        clips.removeIf(c -> trackId.equals(c.trackId()));
-        selectedClipIds.removeIf(id -> {
-            var clip = findClip(id);
-            return clip == null;
+        mutate(() -> {
+            tracks.remove(idx);
+            clips.removeIf(c -> trackId.equals(c.trackId()));
+            selectedClipIds.removeIf(id -> findClip(id) == null);
+            if (primarySelectedClipId.get() != null && findClip(primarySelectedClipId.get()) == null) {
+                primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
+            }
         });
-        if (primarySelectedClipId.get() != null && findClip(primarySelectedClipId.get()) == null) {
-            primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
-        }
-        bumpRevision();
     }
 
     public void renameTrack(String trackId, String newName) {
         int idx = indexOfTrack(trackId);
         if (idx < 0) return;
-        pushUndo();
-        tracks.set(idx, tracks.get(idx).withName(newName == null ? "" : newName));
-        bumpRevision();
+        mutate(() -> tracks.set(idx, tracks.get(idx).withName(newName == null ? "" : newName)));
     }
 
     public void setTrackOutputChannel(String trackId, SequenceChannel newChannel) {
         int idx = indexOfTrack(trackId);
         if (idx < 0) return;
-        pushUndo();
-        tracks.set(idx, tracks.get(idx).withOutputChannel(newChannel));
-        bumpRevision();
+        mutate(() -> tracks.set(idx, tracks.get(idx).withOutputChannel(newChannel)));
     }
 
     public void reorderTrack(int fromIndex, int toIndex) {
         if (fromIndex < 0 || toIndex < 0 || fromIndex >= tracks.size() || toIndex >= tracks.size()) return;
         if (fromIndex == toIndex) return;
-        pushUndo();
-        var moved = tracks.remove(fromIndex);
-        tracks.add(toIndex, moved);
-        bumpRevision();
+        mutate(() -> tracks.add(toIndex, tracks.remove(fromIndex)));
     }
 
     /** Toggle collapsed state on a track (view-level, not undoable). */
@@ -446,185 +435,159 @@ public final class SequenceEditSession {
     // ══════════════════════════════════════════════════════════════════════════
 
     public void addClip(SignalClip clip) {
-        pushUndo();
-        clips.add(clip);
-        selectOnly(clip.id());
-        bumpRevision();
+        mutate(() -> { clips.add(clip); selectOnly(clip.id()); });
     }
 
     public void removeClip(String clipId) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        clips.remove(idx);
-        selectedClipIds.remove(clipId);
-        if (clipId.equals(primarySelectedClipId.get())) {
-            primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
-        }
-        bumpRevision();
+        mutate(() -> {
+            clips.remove(idx);
+            selectedClipIds.remove(clipId);
+            if (clipId.equals(primarySelectedClipId.get())) {
+                primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
+            }
+        });
     }
 
     public void deleteSelectedClips() {
         if (selectedClipIds.isEmpty()) return;
-        pushUndo();
         var toRemove = Set.copyOf(selectedClipIds);
-        clips.removeIf(c -> toRemove.contains(c.id()));
-        selectedClipIds.clear();
-        primarySelectedClipId.set(null);
-        bumpRevision();
+        mutate(() -> {
+            clips.removeIf(c -> toRemove.contains(c.id()));
+            selectedClipIds.clear();
+            primarySelectedClipId.set(null);
+        });
     }
 
     public void moveClip(String clipId, double newStartTime) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        newStartTime = Math.max(0, newStartTime);
-        pushUndo();
-        clips.set(idx, clips.get(idx).withStartTime(newStartTime));
-        bumpRevision();
+        double clamped = Math.max(0, newStartTime);
+        mutate(() -> clips.set(idx, clips.get(idx).withStartTime(clamped)));
     }
 
     public void moveSelectedClips(double deltaMicros) {
         if (selectedClipIds.isEmpty()) return;
-        pushUndo();
-        for (int i = 0; i < clips.size(); i++) {
-            var clip = clips.get(i);
-            if (selectedClipIds.contains(clip.id())) {
-                double newStart = Math.max(0, clip.startTime() + deltaMicros);
-                clips.set(i, clip.withStartTime(newStart));
+        mutate(() -> {
+            for (int i = 0; i < clips.size(); i++) {
+                var clip = clips.get(i);
+                if (selectedClipIds.contains(clip.id())) {
+                    clips.set(i, clip.withStartTime(Math.max(0, clip.startTime() + deltaMicros)));
+                }
             }
-        }
-        bumpRevision();
+        });
     }
 
     public void resizeClip(String clipId, double newDuration) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         var clip = clips.get(idx);
-        newDuration = Math.max(dt.get(), newDuration);
-        double neededMedia = clip.mediaOffset() + newDuration;
-        pushUndo();
-        if (neededMedia > clip.mediaDuration()) {
-            clips.set(idx, clip.withDuration(newDuration).withMediaDuration(neededMedia));
-        } else {
-            clips.set(idx, clip.withDuration(newDuration));
-        }
-        bumpRevision();
+        double duration = Math.max(dt.get(), newDuration);
+        double neededMedia = clip.mediaOffset() + duration;
+        mutate(() -> clips.set(idx, neededMedia > clip.mediaDuration()
+            ? clip.withDuration(duration).withMediaDuration(neededMedia)
+            : clip.withDuration(duration)));
     }
 
     public void resizeClipLeft(String clipId, double newStartTime) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
         var clip = clips.get(idx);
-        newStartTime = Math.max(0, Math.min(newStartTime, clip.endTime() - dt.get()));
-        double delta = newStartTime - clip.startTime();
-        double newDuration = clip.endTime() - newStartTime;
-        double newMediaOffset = clip.mediaOffset() + delta;
-        double newMediaDuration = clip.mediaDuration();
-        if (newMediaOffset < 0) {
-            newMediaDuration += -newMediaOffset;
-            newMediaOffset = 0;
-        }
-        pushUndo();
-        clips.set(idx, new SignalClip(
+        double startTime = MathUtil.clamp(newStartTime, 0, clip.endTime() - dt.get());
+        double delta = startTime - clip.startTime();
+        double duration = clip.endTime() - startTime;
+        double mediaOffset = clip.mediaOffset() + delta;
+        double mediaDuration = clip.mediaDuration();
+        if (mediaOffset < 0) { mediaDuration += -mediaOffset; mediaOffset = 0; }
+        double finalMediaOffset = mediaOffset;
+        double finalMediaDuration = mediaDuration;
+        mutate(() -> clips.set(idx, new SignalClip(
             clip.id(), clip.trackId(), clip.shape(),
-            newStartTime, newDuration, clip.amplitude(),
-            newMediaOffset, newMediaDuration
-        ));
-        bumpRevision();
+            startTime, duration, clip.amplitude(),
+            finalMediaOffset, finalMediaDuration
+        )));
     }
 
     public void setClipAmplitude(String clipId, double amplitude) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        clips.set(idx, clips.get(idx).withAmplitude(amplitude));
-        bumpRevision();
+        mutate(() -> clips.set(idx, clips.get(idx).withAmplitude(amplitude)));
     }
 
     /** Replace a clip's shape outright (and its typed parameters). */
     public void setClipShape(String clipId, ClipShape newShape) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        clips.set(idx, clips.get(idx).withShape(newShape));
-        bumpRevision();
+        mutate(() -> clips.set(idx, clips.get(idx).withShape(newShape)));
     }
 
     /** Morph a clip to a different shape kind, using that kind's defaults for the current media duration. */
     public void changeClipKind(String clipId, ClipKind newKind) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        var clip = clips.get(idx);
-        clips.set(idx, clip.withShape(newKind.defaultFor(clip.mediaDuration())));
-        bumpRevision();
+        mutate(() -> {
+            var clip = clips.get(idx);
+            clips.set(idx, clip.withShape(newKind.defaultFor(clip.mediaDuration())));
+        });
     }
 
     /** Move a clip from one track to another (cross-track drag). */
     public void changeClipTrack(String clipId, String newTrackId) {
         int idx = indexOfClip(clipId);
-        if (idx < 0) return;
-        if (findTrack(newTrackId) == null) return;
-        pushUndo();
-        clips.set(idx, clips.get(idx).withTrack(newTrackId));
-        bumpRevision();
+        if (idx < 0 || findTrack(newTrackId) == null) return;
+        mutate(() -> clips.set(idx, clips.get(idx).withTrack(newTrackId)));
     }
 
     public void duplicateSelectedClips() {
         var sel = selectedClips();
         if (sel.isEmpty()) return;
-        pushUndo();
-        var newIds = new LinkedHashSet<String>();
-        for (var clip : sel) {
-            var dupe = clip.withNewId().withStartTime(clip.startTime() + clip.duration() * 0.1);
-            clips.add(dupe);
-            newIds.add(dupe.id());
-        }
-        selectedClipIds.clear();
-        selectedClipIds.addAll(newIds);
-        primarySelectedClipId.set(newIds.iterator().next());
-        bumpRevision();
+        mutate(() -> {
+            var newIds = new LinkedHashSet<String>();
+            for (var clip : sel) {
+                var dupe = clip.withNewId().withStartTime(clip.startTime() + clip.duration() * 0.1);
+                clips.add(dupe);
+                newIds.add(dupe.id());
+            }
+            selectedClipIds.clear();
+            selectedClipIds.addAll(newIds);
+            primarySelectedClipId.set(newIds.iterator().next());
+        });
     }
 
     public void duplicateClip(String clipId) {
         var clip = findClip(clipId);
         if (clip == null) return;
-        pushUndo();
-        var dupe = clip.withNewId().withStartTime(clip.startTime() + clip.duration() * 0.1);
-        clips.add(dupe);
-        selectOnly(dupe.id());
-        bumpRevision();
+        mutate(() -> {
+            var dupe = clip.withNewId().withStartTime(clip.startTime() + clip.duration() * 0.1);
+            clips.add(dupe);
+            selectOnly(dupe.id());
+        });
     }
 
     public void setActiveSimConfig(ProjectNodeId configId) {
         if (Objects.equals(configId, activeSimConfigId.get())) return;
-        pushUndo();
-        activeSimConfigId.set(configId);
-        bumpRevision();
+        mutate(() -> activeSimConfigId.set(configId));
     }
 
     public void setTotalDuration(double duration) {
         if (duration <= 0) return;
-        pushUndo();
-        totalDuration.set(duration);
-        if (viewEnd.get() > duration) viewEnd.set(duration);
-        bumpRevision();
+        mutate(() -> {
+            totalDuration.set(duration);
+            if (viewEnd.get() > duration) viewEnd.set(duration);
+        });
     }
 
     public void recentreClip(String clipId) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        clips.set(idx, clips.get(idx).centred());
-        bumpRevision();
+        mutate(() -> clips.set(idx, clips.get(idx).centred()));
     }
 
     public void replaceClip(String clipId, SignalClip replacement) {
         int idx = indexOfClip(clipId);
         if (idx < 0) return;
-        pushUndo();
-        clips.set(idx, replacement);
-        bumpRevision();
+        mutate(() -> clips.set(idx, replacement));
     }
 
     // ── Spline points ────────────────────────────────────────────────────────
@@ -635,11 +598,11 @@ public final class SequenceEditSession {
         var clip = clips.get(idx);
         if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
         if (pointIndex < 0 || pointIndex >= spline.points().size()) return;
-        pushUndo();
-        var points = new ArrayList<>(spline.points());
-        points.set(pointIndex, newPoint);
-        clips.set(idx, clip.withShape(spline.withPoints(points)));
-        bumpRevision();
+        mutate(() -> {
+            var points = new ArrayList<>(spline.points());
+            points.set(pointIndex, newPoint);
+            clips.set(idx, clip.withShape(spline.withPoints(points)));
+        });
     }
 
     public void addSplinePoint(String clipId, ClipShape.Spline.Point point) {
@@ -647,13 +610,13 @@ public final class SequenceEditSession {
         if (idx < 0) return;
         var clip = clips.get(idx);
         if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
-        pushUndo();
-        var points = new ArrayList<>(spline.points());
-        int insertAt = 0;
-        while (insertAt < points.size() && points.get(insertAt).t() < point.t()) insertAt++;
-        points.add(insertAt, point);
-        clips.set(idx, clip.withShape(spline.withPoints(points)));
-        bumpRevision();
+        mutate(() -> {
+            var points = new ArrayList<>(spline.points());
+            int insertAt = 0;
+            while (insertAt < points.size() && points.get(insertAt).t() < point.t()) insertAt++;
+            points.add(insertAt, point);
+            clips.set(idx, clip.withShape(spline.withPoints(points)));
+        });
     }
 
     public void removeSplinePoint(String clipId, int pointIndex) {
@@ -663,11 +626,11 @@ public final class SequenceEditSession {
         if (!(clip.shape() instanceof ClipShape.Spline spline)) return;
         if (pointIndex < 0 || pointIndex >= spline.points().size()) return;
         if (spline.points().size() <= 2) return;
-        pushUndo();
-        var points = new ArrayList<>(spline.points());
-        points.remove(pointIndex);
-        clips.set(idx, clip.withShape(spline.withPoints(points)));
-        bumpRevision();
+        mutate(() -> {
+            var points = new ArrayList<>(spline.points());
+            points.remove(pointIndex);
+            clips.set(idx, clip.withShape(spline.withPoints(points)));
+        });
     }
 
     // ── Split ────────────────────────────────────────────────────────────────
@@ -677,16 +640,15 @@ public final class SequenceEditSession {
         if (idx < 0) return;
         var clip = clips.get(idx);
         if (splitTime <= clip.startTime() || splitTime >= clip.endTime()) return;
-
-        pushUndo();
-        var split = clip.split(splitTime);
-        clips.set(idx, split.left());
-        clips.add(idx + 1, split.right());
-        selectedClipIds.clear();
-        selectedClipIds.add(split.left().id());
-        selectedClipIds.add(split.right().id());
-        primarySelectedClipId.set(split.left().id());
-        bumpRevision();
+        mutate(() -> {
+            var split = clip.split(splitTime);
+            clips.set(idx, split.left());
+            clips.add(idx + 1, split.right());
+            selectedClipIds.clear();
+            selectedClipIds.add(split.left().id());
+            selectedClipIds.add(split.right().id());
+            primarySelectedClipId.set(split.left().id());
+        });
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -825,6 +787,13 @@ public final class SequenceEditSession {
     }
 
     private void bumpRevision() { revision.set(revision.get() + 1); }
+
+    /** Run an undoable mutation: snapshot for undo, apply the change, bump the revision. */
+    private void mutate(Runnable change) {
+        pushUndo();
+        change.run();
+        bumpRevision();
+    }
 
     private record EditSnapshot(
         List<SignalClip> clips,
