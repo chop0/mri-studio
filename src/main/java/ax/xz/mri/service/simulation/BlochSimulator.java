@@ -9,12 +9,10 @@ import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
 import ax.xz.mri.service.circuit.CircuitStepEvaluator;
+import ax.xz.mri.util.LruCache;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeMap;
-import java.util.function.Supplier;
 
 /**
  * Core Bloch equation simulator.
@@ -33,21 +31,14 @@ public final class BlochSimulator {
     private static final int CURSOR_CACHE_SIZE = 4096;
     private static final int CURSOR_CHECKPOINT_INTERVAL = 64;
 
-    private static final BlochSimulator DEFAULT = new BlochSimulator(true);
+    private static final BlochSimulator DEFAULT = new BlochSimulator();
 
-    private final Map<PulseKey, CompiledPulse> compiledCache;
-    private final Map<SimulationKey, PointContext> pointContextCache;
-    private final Map<SimulationKey, Trajectory> trajectoryCache;
-    private final Map<SimulationKey, CursorStateCache> cursorCache;
+    private final LruCache<PulseKey, CompiledPulse> compiledCache = new LruCache<>(COMPILED_CACHE_SIZE);
+    private final LruCache<SimulationKey, PointContext> pointContextCache = new LruCache<>(POINT_CONTEXT_CACHE_SIZE);
+    private final LruCache<SimulationKey, Trajectory> trajectoryCache = new LruCache<>(TRAJECTORY_CACHE_SIZE);
+    private final LruCache<SimulationKey, CursorStateCache> cursorCache = new LruCache<>(CURSOR_CACHE_SIZE);
 
-    public BlochSimulator() { this(false); }
-
-    private BlochSimulator(boolean ignored) {
-        compiledCache = synchronizedLruCache(COMPILED_CACHE_SIZE);
-        pointContextCache = synchronizedLruCache(POINT_CONTEXT_CACHE_SIZE);
-        trajectoryCache = synchronizedLruCache(TRAJECTORY_CACHE_SIZE);
-        cursorCache = synchronizedLruCache(CURSOR_CACHE_SIZE);
-    }
+    public BlochSimulator() {}
 
     public static Trajectory simulate(BlochData data, double rMm, double zMm, List<PulseSegment> pulse) {
         return DEFAULT.simulateCached(data, rMm, zMm, pulse);
@@ -67,13 +58,13 @@ public final class BlochSimulator {
     private Trajectory simulateCached(BlochData data, double rMm, double zMm, List<PulseSegment> pulse) {
         if (data == null || data.field() == null || pulse == null) return null;
         var key = simulationKey(data.field(), pulse, rMm, zMm);
-        var cached = cacheGet(trajectoryCache, key);
+        var cached = trajectoryCache.get(key);
         if (cached != null) return cached;
 
         var context = pointContextFor(data.field(), pulse, rMm, zMm, key);
         var computed = simulateFull(context);
         if (computed != null && computed.pointCount() <= TRAJECTORY_CACHE_STEP_LIMIT) {
-            cachePut(trajectoryCache, key, computed);
+            trajectoryCache.put(key, computed);
         }
         return computed;
     }
@@ -83,26 +74,25 @@ public final class BlochSimulator {
             return MagnetisationState.THERMAL_EQUILIBRIUM;
         }
         var key = simulationKey(data.field(), pulse, rMm, zMm);
-        var trajectory = cacheGet(trajectoryCache, key);
+        var trajectory = trajectoryCache.get(key);
         if (trajectory != null) {
             return trajectory.stepStateAt(tcMicros);
         }
 
         var context = pointContextFor(data.field(), pulse, rMm, zMm, key);
-        var stateCache = cacheGetOrCreate(cursorCache, key, () -> new CursorStateCache(context.fieldPoint()));
+        var stateCache = cursorCache.getOrCreate(key, () -> new CursorStateCache(context.fieldPoint()));
         return stateCache.stateAt(context.compiledPulse(), context.fieldPoint(), tcMicros);
     }
 
     private PointContext pointContextFor(FieldMap field, List<PulseSegment> pulse, double rMm, double zMm, SimulationKey key) {
-        return cacheGetOrCreate(pointContextCache, key, () -> new PointContext(
+        return pointContextCache.getOrCreate(key, () -> new PointContext(
             compiledPulseFor(field, pulse),
             FieldInterpolator.interpolate(field, rMm, zMm)
         ));
     }
 
     private CompiledPulse compiledPulseFor(FieldMap field, List<PulseSegment> pulse) {
-        var key = new PulseKey(field, pulse);
-        return cacheGetOrCreate(compiledCache, key, () -> compilePulse(field, pulse));
+        return compiledCache.getOrCreate(new PulseKey(field, pulse), () -> compilePulse(field, pulse));
     }
 
     private static CompiledPulse compilePulse(FieldMap field, List<PulseSegment> pulse) {
@@ -236,38 +226,6 @@ public final class BlochSimulator {
 
     private static SimulationKey simulationKey(FieldMap field, List<PulseSegment> pulse, double rMm, double zMm) {
         return new SimulationKey(new PulseKey(field, pulse), Double.doubleToLongBits(rMm), Double.doubleToLongBits(zMm));
-    }
-
-    private static <K, V> Map<K, V> synchronizedLruCache(int maxEntries) {
-        return java.util.Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
-                return size() > maxEntries;
-            }
-        });
-    }
-
-    private static <K, V> V cacheGet(Map<K, V> cache, K key) {
-        synchronized (cache) {
-            return cache.get(key);
-        }
-    }
-
-    private static <K, V> void cachePut(Map<K, V> cache, K key, V value) {
-        synchronized (cache) {
-            cache.put(key, value);
-        }
-    }
-
-    private static <K, V> V cacheGetOrCreate(Map<K, V> cache, K key, Supplier<V> supplier) {
-        synchronized (cache) {
-            var value = cache.get(key);
-            if (value == null) {
-                value = supplier.get();
-                cache.put(key, value);
-            }
-            return value;
-        }
     }
 
     private static double round1(double v) { return Math.round(v * 10) / 10.0; }
