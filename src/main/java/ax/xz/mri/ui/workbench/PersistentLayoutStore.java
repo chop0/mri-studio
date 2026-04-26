@@ -23,6 +23,7 @@ public class PersistentLayoutStore {
         try {
             return Optional.of(mapper.readValue(path.toFile(), WorkbenchLayoutState.class));
         } catch (IOException ignored) {
+            // Corrupt or schema-mismatched layout file — fall back to a fresh default layout.
             return Optional.empty();
         }
     }

@@ -39,6 +39,12 @@ public final class ProjectSessionViewModel {
     private Consumer<SequenceDocument> onSequenceOpened;
     private Consumer<EigenfieldDocument> onEigenfieldOpened;
     private BiConsumer<ProjectNodeId, ProjectNodeId> onNodeSelected;
+    private Consumer<Throwable> errorSink = ex -> { };
+
+    /** Attach a diagnostics sink (typically MessagesViewModel::logWarning-bridging). */
+    public void setErrorSink(Consumer<Throwable> sink) {
+        this.errorSink = sink != null ? sink : ex -> { };
+    }
 
     public void setOnSimConfigOpened(Consumer<SimulationConfigDocument> callback) {
         this.onSimConfigOpened = callback;
@@ -111,6 +117,7 @@ public final class ProjectSessionViewModel {
                 if (!activeSlugs.contains(dir.getFileName().toString())) {
                     try (var walk = Files.walk(dir)) {
                         walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                            // Best-effort orphan cleanup; another writer may already be deleting these.
                             try { Files.delete(p); } catch (IOException ignored) {}
                         });
                     }
@@ -339,7 +346,7 @@ public final class ProjectSessionViewModel {
     public void saveProjectQuietly() {
         var root = projectRoot.get();
         if (root == null) return;
-        try { saveProject(root); } catch (IOException ignored) {}
+        try { saveProject(root); } catch (IOException ex) { errorSink.accept(ex); }
     }
 
     public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, ObjectFactory.PhysicsParams params) {

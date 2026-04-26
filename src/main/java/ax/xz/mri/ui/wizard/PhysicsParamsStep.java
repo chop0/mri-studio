@@ -81,6 +81,7 @@ public final class PhysicsParamsStep implements WizardStep {
 		s.setEditable(true);
 		s.setPrefWidth(130);
 		s.focusedProperty().addListener((obs, o, f) -> {
+			// Commit any in-flight text edit on blur; ignore parse failure (revert to last good value).
 			if (!f) try { s.increment(0); } catch (Exception ignored) {}
 		});
 		return s;
@@ -91,6 +92,7 @@ public final class PhysicsParamsStep implements WizardStep {
 		s.setEditable(true);
 		s.setPrefWidth(80);
 		s.focusedProperty().addListener((obs, o, f) -> {
+			// Commit any in-flight text edit on blur; ignore parse failure (revert to last good value).
 			if (!f) try { s.increment(0); } catch (Exception ignored) {}
 		});
 		return s;

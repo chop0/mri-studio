@@ -37,6 +37,7 @@ public final class InspectorFields {
         field.setPrefWidth(130);
         Runnable commit = () -> {
             try { onChange.accept(Double.parseDouble(field.getText().trim())); }
+            // Reject malformed input by reverting to the last good value.
             catch (NumberFormatException ignored) { field.setText(format(value)); }
         };
         field.focusedProperty().addListener((obs, o, focused) -> { if (!focused) commit.run(); });

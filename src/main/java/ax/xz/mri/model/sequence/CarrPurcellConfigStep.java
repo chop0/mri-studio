@@ -82,6 +82,7 @@ final class CarrPurcellConfigStep implements WizardStep {
 
     private static void fixCommitOnBlur(Spinner<?> s) {
         s.focusedProperty().addListener((obs, was, isNow) -> {
+            // Commit any in-flight text edit on blur; ignore parse failure.
             if (!isNow) try { s.increment(0); } catch (Exception ignored) {}
         });
     }

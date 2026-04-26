@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /** Shared movable reference-frame marker and its cached trajectory. */
 public class ReferenceFrameViewModel {
@@ -30,6 +31,12 @@ public class ReferenceFrameViewModel {
         return thread;
     });
     private final AtomicLong generation = new AtomicLong();
+    private Consumer<Throwable> errorSink = ex -> { };
+
+    /** Attach a diagnostics sink (typically MessagesViewModel::logError-bridging). */
+    public void setErrorSink(Consumer<Throwable> sink) {
+        this.errorSink = sink != null ? sink : ex -> { };
+    }
 
     public void setReference(double rMm, double zMm) {
         r.set(Math.max(0, rMm));
@@ -63,7 +70,8 @@ public class ReferenceFrameViewModel {
                     if (currentGeneration != generation.get()) return;
                     trajectory.set(nextTrajectory);
                 });
-            } catch (Exception ignored) {
+            } catch (Exception ex) {
+                errorSink.accept(ex);
                 Platform.runLater(() -> {
                     if (currentGeneration != generation.get()) return;
                     trajectory.set(null);

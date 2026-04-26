@@ -425,7 +425,9 @@ public class WorkbenchController {
     public void saveLayoutToStore() {
         try {
             layoutStore.save(captureLayout());
-        } catch (Exception ignored) {}
+        } catch (Exception ex) {
+            session.messages.logWarning("Layout", "Could not persist workbench layout: " + ex.getMessage());
+        }
     }
 
     // --- Layout capture: live BentoFX tree → WorkbenchLayoutState ---

@@ -51,6 +51,7 @@ final class LowFieldMriConfigStep implements WizardStep {
 		s.setEditable(true);
 		s.setPrefWidth(150);
 		s.focusedProperty().addListener((obs, o, f) -> {
+			// Commit any in-flight text edit on blur; ignore parse failure.
 			if (!f) try { s.increment(0); } catch (Exception ignored) {}
 		});
 		return s;

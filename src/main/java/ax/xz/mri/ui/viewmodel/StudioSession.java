@@ -41,6 +41,8 @@ public class StudioSession {
     public StudioSession() {
         derived.setErrorSink(ex -> messages.logError("DerivedComputation", ex.getMessage(), ex));
         points.setErrorSink(ex -> messages.logError("Isochromats", ex.getMessage(), ex));
+        reference.setErrorSink(ex -> messages.logError("ReferenceFrame", ex.getMessage(), ex));
+        project.setErrorSink(ex -> messages.logWarning("Project", "Auto-save failed: " + ex.getMessage()));
 
         viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         reference.enabled.addListener((obs, oldValue, newValue) -> {
