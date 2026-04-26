@@ -24,6 +24,7 @@ import ax.xz.mri.service.circuit.mna.MnaNetwork.VBranchKind;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -34,8 +35,7 @@ import java.util.Map;
  * concrete {@link CircuitComponent} subtypes. Each component owns its own
  * {@link CircuitComponent#stamp stamping logic}; the compiler's job is to
  * run union-find over the wires, build a {@link CircuitStampContext} backed
- * by mutable MNA builder arrays, and call {@code c.stamp(ctx)} on every
- * component.
+ * by typed stamp lists, and call {@code c.stamp(ctx)} on every component.
  *
  * <p>Adding a new component type means adding a record with its own
  * {@code stamp}. The compiler does not change.
@@ -44,8 +44,7 @@ import java.util.Map;
  * the eigenfield shape into {@code ex/ey/ez} arrays scaled by that
  * sensitivity. There is no silent "R = 1 Ω" fallback — a coil with both
  * {@code seriesResistanceOhms == 0} and {@code selfInductanceHenry == 0}
- * is rejected at the {@link CircuitComponent.Coil} record level, so a
- * singular MNA row can never reach this class.
+ * is rejected at the {@link CircuitComponent.Coil} record level.
  */
 public final class CircuitCompiler {
 
@@ -86,6 +85,18 @@ public final class CircuitCompiler {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Stamp records — one per primitive MNA contribution
+    // ─────────────────────────────────────────────────────────────────────
+
+    private record ResistorStamp(int a, int b, double g) {}
+    private record CapacitorStamp(int a, int b, double f) {}
+    private record SwitchStamp(int a, int b, double closedOhms, double openOhms, double threshold, CtlBinding ctl, boolean invert) {}
+    private record BranchStamp(int nodeA, int nodeB, VBranchKind kind, int refIndex, double r, double l) {}
+    private record MixerStamp(int inNode, int out0Branch, int out1Branch, double loHz, ComplexPairFormat format) {}
+    private record ModulatorStamp(int in0Node, int in1Node, int outBranch, double loHz, ComplexPairFormat format) {}
+    private record MetadataStamp(int[] sourceIndices, int outBranch, MnaNetwork.MetadataMode mode) {}
+
+    // ─────────────────────────────────────────────────────────────────────
     // Stamp context — the SPI bound to the component currently stamping
     // ─────────────────────────────────────────────────────────────────────
 
@@ -103,40 +114,16 @@ public final class CircuitCompiler {
         private final List<CompiledProbe> probes = new ArrayList<>();
         private int channelCursor = 0;
 
-        // MNA stamps.
-        private final List<Integer> resistorA = new ArrayList<>();
-        private final List<Integer> resistorB = new ArrayList<>();
-        private final List<Double> resistorG = new ArrayList<>();
-        private final List<Integer> capacitorA = new ArrayList<>();
-        private final List<Integer> capacitorB = new ArrayList<>();
-        private final List<Double> capacitorF = new ArrayList<>();
-        private final List<Integer> switchA = new ArrayList<>();
-        private final List<Integer> switchB = new ArrayList<>();
-        private final List<Double> switchClosedOhms = new ArrayList<>();
-        private final List<Double> switchOpenOhms = new ArrayList<>();
-        private final List<Double> switchThreshold = new ArrayList<>();
-        private final List<CtlBinding> switchCtl = new ArrayList<>();
-        private final List<Boolean> switchInvert = new ArrayList<>();
-        private final List<Integer> branchNodeA = new ArrayList<>();
-        private final List<Integer> branchNodeB = new ArrayList<>();
-        private final List<VBranchKind> branchKind = new ArrayList<>();
-        private final List<Integer> branchRefIndex = new ArrayList<>();
-        private final List<Double> branchR = new ArrayList<>();
-        private final List<Double> branchL = new ArrayList<>();
-        private final List<Integer> mixerInNode = new ArrayList<>();
-        private final List<Integer> mixerOut0Branch = new ArrayList<>();
-        private final List<Integer> mixerOut1Branch = new ArrayList<>();
-        private final List<Double> mixerLoHz = new ArrayList<>();
-        private final List<ComplexPairFormat> mixerFormat = new ArrayList<>();
-        private final List<int[]> metadataSourceIndices = new ArrayList<>();
-        private final List<Integer> metadataOutBranch = new ArrayList<>();
-        private final List<MnaNetwork.MetadataMode> metadataMode = new ArrayList<>();
-        private final List<Integer> modulatorIn0Node = new ArrayList<>();
-        private final List<Integer> modulatorIn1Node = new ArrayList<>();
-        private final List<Integer> modulatorOutBranch = new ArrayList<>();
-        private final List<Double> modulatorLoHz = new ArrayList<>();
-        private final List<ComplexPairFormat> modulatorFormat = new ArrayList<>();
+        // Typed MNA stamps — one list per kind, ordered as encountered.
+        private final List<ResistorStamp> resistors = new ArrayList<>();
+        private final List<CapacitorStamp> capacitors = new ArrayList<>();
+        private final List<SwitchStamp> switches = new ArrayList<>();
+        private final List<BranchStamp> branches = new ArrayList<>();
+        private final List<MixerStamp> mixers = new ArrayList<>();
+        private final List<ModulatorStamp> modulators = new ArrayList<>();
+        private final List<MetadataStamp> metadata = new ArrayList<>();
 
+        // Source/coil/probe → branch index mappings, populated as registered.
         private final List<Integer> sourceOutBranch = new ArrayList<>();
         private final List<Integer> coilBranch = new ArrayList<>();
         private final List<Integer> probeNode = new ArrayList<>();
@@ -179,11 +166,6 @@ public final class CircuitCompiler {
                 if (outNode != null && outNode == ctlPort.index()) return new CtlBinding.FromSourceOut(srcIndex);
             }
             // 2. VoltageMetadata blocks: their "out" stamps a 0/1 flag.
-            //    Resolve to FromSourceActive(srcIndices) so the switch's
-            //    hot path stays a direct control-vector read rather than a
-            //    node-voltage read. A tap pointing at a Modulator expands
-            //    to both its I and Q sources; the OR means the switch
-            //    fires when either envelope plays.
             for (var other : circuit.components()) {
                 if (!(other instanceof CircuitComponent.VoltageMetadata meta)) continue;
                 Integer metaOutNode = nodeOf.get(new ComponentTerminal(meta.id(), "out"));
@@ -208,17 +190,13 @@ public final class CircuitCompiler {
         @Override
         public void stampResistor(Node a, Node b, double ohms) {
             if (!(ohms > 0)) throw new IllegalArgumentException("stampResistor: ohms must be > 0, got " + ohms);
-            resistorA.add(a.index());
-            resistorB.add(b.index());
-            resistorG.add(1.0 / ohms);
+            resistors.add(new ResistorStamp(a.index(), b.index(), 1.0 / ohms));
         }
 
         @Override
         public void stampCapacitor(Node a, Node b, double farads) {
             if (!(farads > 0)) throw new IllegalArgumentException("stampCapacitor: F must be > 0, got " + farads);
-            capacitorA.add(a.index());
-            capacitorB.add(b.index());
-            capacitorF.add(farads);
+            capacitors.add(new CapacitorStamp(a.index(), b.index(), farads));
         }
 
         @Override
@@ -229,32 +207,21 @@ public final class CircuitCompiler {
 
         @Override
         public void stampSwitch(Node a, Node b, SwitchParams params) {
-            switchA.add(a.index());
-            switchB.add(b.index());
-            switchClosedOhms.add(params.closedOhms());
-            switchOpenOhms.add(params.openOhms());
-            switchThreshold.add(params.thresholdVolts());
-            switchCtl.add(params.ctl());
-            switchInvert.add(params.invert());
+            switches.add(new SwitchStamp(a.index(), b.index(),
+                params.closedOhms(), params.openOhms(), params.thresholdVolts(),
+                params.ctl(), params.invert()));
         }
 
         @Override
-        public void stampMixer(Node in, Node out0, Node out1, double loHz,
-                               ComplexPairFormat format) {
-            // If every terminal is grounded the mixer is a no-op; that's fine.
+        public void stampMixer(Node in, Node out0, Node out1, double loHz, ComplexPairFormat format) {
+            // If every terminal is grounded the mixer is a no-op.
             if (in.isGround() && out0.isGround() && out1.isGround()) return;
-            int mixerIndex = mixerInNode.size();
+            int mixerIndex = mixers.size();
             int b0 = out0.isGround() ? -1 :
-                addBranch(out0.index(), Node.GROUND.index(),
-                    VBranchKind.MIXER_OUT_0, mixerIndex, 0, 0);
+                addBranch(out0.index(), Node.GROUND.index(), VBranchKind.MIXER_OUT_0, mixerIndex, 0, 0);
             int b1 = out1.isGround() ? -1 :
-                addBranch(out1.index(), Node.GROUND.index(),
-                    VBranchKind.MIXER_OUT_1, mixerIndex, 0, 0);
-            mixerInNode.add(in.index());
-            mixerOut0Branch.add(b0);
-            mixerOut1Branch.add(b1);
-            mixerLoHz.add(loHz);
-            mixerFormat.add(format);
+                addBranch(out1.index(), Node.GROUND.index(), VBranchKind.MIXER_OUT_1, mixerIndex, 0, 0);
+            mixers.add(new MixerStamp(in.index(), b0, b1, loHz, format));
         }
 
         @Override
@@ -274,21 +241,16 @@ public final class CircuitCompiler {
                                          CircuitComponent.VoltageMetadata.Mode mode) {
             if (outPort.isGround()) return;
             int[] indices = sourceIndicesForMetadataName(sourceName);
-            int m = metadataSourceIndices.size();
-            metadataSourceIndices.add(indices);
-            metadataMode.add(toNetworkMode(mode));
+            int m = metadata.size();
             int branch = addBranch(outPort.index(), Node.GROUND.index(),
                 VBranchKind.METADATA_OUT, m, 0, 0);
-            metadataOutBranch.add(branch);
+            metadata.add(new MetadataStamp(indices, branch, toNetworkMode(mode)));
         }
 
         /**
          * Resolve a metadata tap's {@code sourceName} to the set of compiled
-         * source indices it should observe. A match against a
-         * {@link CircuitComponent.VoltageSource} is a single-element set;
-         * a match against a {@link CircuitComponent.Modulator} expands to
-         * both the modulator's I and Q sources so the tap fires on either
-         * envelope playing.
+         * source indices it should observe. A VoltageSource match is a single
+         * index; a Modulator match expands to its I and Q sources.
          */
         private int[] sourceIndicesForMetadataName(String name) {
             if (name == null || name.isBlank()) return new int[0];
@@ -305,9 +267,7 @@ public final class CircuitCompiler {
                         Integer qIdx = sourceIndexForName(qSrc.name());
                         if (qIdx != null) indices.add(qIdx);
                     }
-                    int[] out = new int[indices.size()];
-                    for (int i = 0; i < out.length; i++) out[i] = indices.get(i);
-                    return out;
+                    return indices.stream().mapToInt(Integer::intValue).toArray();
                 }
             }
             Integer srcIdx = sourceIndexForName(name);
@@ -329,14 +289,10 @@ public final class CircuitCompiler {
         public void stampModulator(Node in0, Node in1, Node out,
                                    double loHz, ComplexPairFormat format) {
             if (out.isGround()) return;
-            int m = modulatorOutBranch.size();
-            modulatorIn0Node.add(in0.index());
-            modulatorIn1Node.add(in1.index());
-            modulatorLoHz.add(loHz);
-            modulatorFormat.add(format);
+            int m = modulators.size();
             int branch = addBranch(out.index(), Node.GROUND.index(),
                 VBranchKind.MODULATOR_OUT, m, 0, 0);
-            modulatorOutBranch.add(branch);
+            modulators.add(new ModulatorStamp(in0.index(), in1.index(), branch, loHz, format));
         }
 
         private static MnaNetwork.MetadataMode toNetworkMode(CircuitComponent.VoltageMetadata.Mode mode) {
@@ -350,9 +306,6 @@ public final class CircuitCompiler {
                                  double selfInductanceHenry, double seriesResistanceOhms,
                                  double sensitivityT_per_A,
                                  Node inPort) {
-            // Coil's constructor validates that at least one of R or L is
-            // non-zero, so the MNA row stamps verbatim — no silent default
-            // resistance, no division-by-zero risk.
             var sample = sampleEigenfield(eigenfieldId, repository, rMm, zMm, sensitivityT_per_A);
             int index = coils.size();
             coils.add(new CompiledCoil(id, name, selfInductanceHenry, seriesResistanceOhms,
@@ -374,14 +327,11 @@ public final class CircuitCompiler {
             // Collect the control-vector offsets of every source whose "out"
             // node ended up on the same MNA node as a Modulator's in0 or in1.
             // Those are the "RF envelope" channels downstream optimiser-side
-            // penalties (RF power, smoothness) weight. Wiring drives the
-            // relationship now — no hidden name lookups.
-            var rfNodes = new java.util.HashSet<Integer>();
-            for (int m = 0; m < modulatorIn0Node.size(); m++) {
-                int n0 = modulatorIn0Node.get(m);
-                int n1 = modulatorIn1Node.get(m);
-                if (n0 >= 0) rfNodes.add(n0);
-                if (n1 >= 0) rfNodes.add(n1);
+            // penalties (RF power, smoothness) weight.
+            var rfNodes = new HashSet<Integer>();
+            for (var m : modulators) {
+                if (m.in0Node() >= 0) rfNodes.add(m.in0Node());
+                if (m.in1Node() >= 0) rfNodes.add(m.in1Node());
             }
             var rfOffsetList = new ArrayList<Integer>();
             for (var comp : circuit.components()) {
@@ -399,37 +349,32 @@ public final class CircuitCompiler {
 
             var network = new MnaNetwork(
                 nodeCount,
-                branchKind.size(),
-                toIntArray(resistorA), toIntArray(resistorB), toDoubleArray(resistorG),
-                toIntArray(capacitorA), toIntArray(capacitorB), toDoubleArray(capacitorF),
-                toIntArray(switchA), toIntArray(switchB),
-                toDoubleArray(switchClosedOhms), toDoubleArray(switchOpenOhms), toDoubleArray(switchThreshold),
-                switchCtl.toArray(new CtlBinding[0]), toBooleanArray(switchInvert),
-                toIntArray(branchNodeA), toIntArray(branchNodeB),
-                branchKind.toArray(new VBranchKind[0]), toIntArray(branchRefIndex),
-                toDoubleArray(branchR), toDoubleArray(branchL),
+                branches.size(),
+                ints(resistors, ResistorStamp::a), ints(resistors, ResistorStamp::b), doubles(resistors, ResistorStamp::g),
+                ints(capacitors, CapacitorStamp::a), ints(capacitors, CapacitorStamp::b), doubles(capacitors, CapacitorStamp::f),
+                ints(switches, SwitchStamp::a), ints(switches, SwitchStamp::b),
+                doubles(switches, SwitchStamp::closedOhms), doubles(switches, SwitchStamp::openOhms), doubles(switches, SwitchStamp::threshold),
+                array(switches, SwitchStamp::ctl, CtlBinding[]::new), bools(switches, SwitchStamp::invert),
+                ints(branches, BranchStamp::nodeA), ints(branches, BranchStamp::nodeB),
+                array(branches, BranchStamp::kind, VBranchKind[]::new), ints(branches, BranchStamp::refIndex),
+                doubles(branches, BranchStamp::r), doubles(branches, BranchStamp::l),
                 toIntArray(sourceOutBranch),
                 toIntArray(coilBranch), toIntArray(probeNode),
-                toIntArray(mixerInNode), toIntArray(mixerOut0Branch), toIntArray(mixerOut1Branch),
-                toDoubleArray(mixerLoHz),
-                mixerFormat.toArray(new ComplexPairFormat[0]),
-                metadataSourceIndices.toArray(new int[0][]),
-                toIntArray(metadataOutBranch),
-                metadataMode.toArray(new MnaNetwork.MetadataMode[0]),
-                toIntArray(modulatorIn0Node), toIntArray(modulatorIn1Node),
-                toIntArray(modulatorOutBranch), toDoubleArray(modulatorLoHz),
-                modulatorFormat.toArray(new ComplexPairFormat[0]));
+                ints(mixers, MixerStamp::inNode), ints(mixers, MixerStamp::out0Branch), ints(mixers, MixerStamp::out1Branch),
+                doubles(mixers, MixerStamp::loHz),
+                array(mixers, MixerStamp::format, ComplexPairFormat[]::new),
+                metadata.stream().map(MetadataStamp::sourceIndices).toArray(int[][]::new),
+                ints(metadata, MetadataStamp::outBranch),
+                array(metadata, MetadataStamp::mode, MnaNetwork.MetadataMode[]::new),
+                ints(modulators, ModulatorStamp::in0Node), ints(modulators, ModulatorStamp::in1Node),
+                ints(modulators, ModulatorStamp::outBranch), doubles(modulators, ModulatorStamp::loHz),
+                array(modulators, ModulatorStamp::format, ComplexPairFormat[]::new));
             return new CompiledCircuit(sources, coils, probes, network, channelCursor, rfOffsets);
         }
 
         private int addBranch(int nodeA, int nodeB, VBranchKind kind, int refIdx, double r, double l) {
-            int idx = branchKind.size();
-            branchNodeA.add(nodeA);
-            branchNodeB.add(nodeB);
-            branchKind.add(kind);
-            branchRefIndex.add(refIdx);
-            branchR.add(r);
-            branchL.add(l);
+            int idx = branches.size();
+            branches.add(new BranchStamp(nodeA, nodeB, kind, refIdx, r, l));
             return idx;
         }
     }
@@ -458,15 +403,27 @@ public final class CircuitCompiler {
         return out;
     }
 
-    private static double[] toDoubleArray(List<Double> list) {
-        double[] out = new double[list.size()];
-        for (int i = 0; i < list.size(); i++) out[i] = list.get(i);
+    private static <T> int[] ints(List<T> list, java.util.function.ToIntFunction<T> field) {
+        int[] out = new int[list.size()];
+        for (int i = 0; i < list.size(); i++) out[i] = field.applyAsInt(list.get(i));
         return out;
     }
 
-    private static boolean[] toBooleanArray(List<Boolean> list) {
+    private static <T> double[] doubles(List<T> list, java.util.function.ToDoubleFunction<T> field) {
+        double[] out = new double[list.size()];
+        for (int i = 0; i < list.size(); i++) out[i] = field.applyAsDouble(list.get(i));
+        return out;
+    }
+
+    private static <T> boolean[] bools(List<T> list, java.util.function.Predicate<T> field) {
         boolean[] out = new boolean[list.size()];
-        for (int i = 0; i < list.size(); i++) out[i] = list.get(i);
+        for (int i = 0; i < list.size(); i++) out[i] = field.test(list.get(i));
+        return out;
+    }
+
+    private static <T, R> R[] array(List<T> list, java.util.function.Function<T, R> field, java.util.function.IntFunction<R[]> ctor) {
+        R[] out = ctor.apply(list.size());
+        for (int i = 0; i < list.size(); i++) out[i] = field.apply(list.get(i));
         return out;
     }
 
