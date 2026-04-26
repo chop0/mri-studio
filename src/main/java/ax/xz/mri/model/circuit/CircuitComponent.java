@@ -640,37 +640,14 @@ public sealed interface CircuitComponent {
          * to the first {@link VoltageSource} whose {@code out} is on the
          * same electrical net. Returns null if there's no source at the
          * other end (or no wire).
-         *
-         * <p>Lets non-solver consumers — {@code ClipBaker}, starter
-         * libraries, inspector code — answer "which source feeds this
-         * modulator input?" without reimplementing the union-find.
          */
-        public static VoltageSource inputSource(Modulator modulator, String port,
-                                                 CircuitDocument doc) {
+        public static VoltageSource inputSource(Modulator modulator, String port, CircuitDocument doc) {
             if (doc == null) return null;
-            var target = new ComponentTerminal(modulator.id(), port);
-            var net = collectNet(doc, target);
-            for (var terminal : net) {
+            for (var terminal : CircuitGraph.netOf(doc, new ComponentTerminal(modulator.id(), port))) {
                 if (!"out".equals(terminal.port())) continue;
-                var comp = doc.component(terminal.componentId()).orElse(null);
-                if (comp instanceof VoltageSource src) return src;
+                if (doc.component(terminal.componentId()).orElse(null) instanceof VoltageSource src) return src;
             }
             return null;
-        }
-
-        private static java.util.Set<ComponentTerminal> collectNet(CircuitDocument doc,
-                                                                    ComponentTerminal seed) {
-            var net = new java.util.HashSet<ComponentTerminal>();
-            net.add(seed);
-            boolean grew;
-            do {
-                grew = false;
-                for (var w : doc.wires()) {
-                    if (net.contains(w.from()) && net.add(w.to())) grew = true;
-                    if (net.contains(w.to()) && net.add(w.from())) grew = true;
-                }
-            } while (grew);
-            return net;
         }
     }
 

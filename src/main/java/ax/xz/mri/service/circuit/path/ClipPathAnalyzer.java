@@ -17,6 +17,7 @@ import ax.xz.mri.model.circuit.CircuitComponent.SwitchComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageMetadata;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
 import ax.xz.mri.model.circuit.CircuitDocument;
+import ax.xz.mri.model.circuit.CircuitGraph;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 
@@ -92,8 +93,8 @@ public final class ClipPathAnalyzer {
     public static List<CoilPath> analyze(CircuitDocument circuit, VoltageSource source) {
         if (circuit == null || source == null) return List.of();
 
-        var adjacency = buildAdjacency(circuit);
-        var componentsById = buildComponentMap(circuit);
+        var adjacency = CircuitGraph.wireAdjacency(circuit);
+        var componentsById = CircuitGraph.componentMap(circuit);
         var wiresByEndpoints = buildWireIndex(circuit);
 
         // BFS state: parent links so we can reconstruct paths once we hit a coil.
@@ -144,23 +145,6 @@ public final class ClipPathAnalyzer {
             results.add(buildPathResult(circuit, source, coil, coilTerm, parent, componentsById));
         }
         return results;
-    }
-
-    // ─── BFS adjacency ─────────────────────────────────────────────────────
-
-    private static Map<ComponentTerminal, List<ComponentTerminal>> buildAdjacency(CircuitDocument doc) {
-        var map = new HashMap<ComponentTerminal, List<ComponentTerminal>>();
-        for (var w : doc.wires()) {
-            map.computeIfAbsent(w.from(), k -> new ArrayList<>()).add(w.to());
-            map.computeIfAbsent(w.to(), k -> new ArrayList<>()).add(w.from());
-        }
-        return map;
-    }
-
-    private static Map<ComponentId, CircuitComponent> buildComponentMap(CircuitDocument doc) {
-        var map = new HashMap<ComponentId, CircuitComponent>();
-        for (var c : doc.components()) map.put(c.id(), c);
-        return map;
     }
 
     /** Look up wire id by unordered endpoint pair. */

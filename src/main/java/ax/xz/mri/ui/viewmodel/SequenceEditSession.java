@@ -2,8 +2,7 @@ package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
-import ax.xz.mri.model.circuit.ComponentId;
-import ax.xz.mri.model.circuit.ComponentTerminal;
+import ax.xz.mri.model.circuit.CircuitGraph;
 import ax.xz.mri.model.sequence.ClipBaker;
 import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipSequence;
@@ -32,11 +31,8 @@ import javafx.collections.ObservableSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -246,7 +242,7 @@ public final class SequenceEditSession {
         if (src == null || src.isGate()) return null;
         var circuit = activeCircuit();
         if (circuit == null) return null;
-        var coil = coilReachableFromSource(circuit, src.id());
+        var coil = CircuitGraph.coilReachableFrom(circuit, src.id()).orElse(null);
         if (coil == null) return null;
         var repo = repositorySupplier.get();
         if (repo == null) return null;
@@ -269,36 +265,6 @@ public final class SequenceEditSession {
             for (int sub = 0; sub < count; sub++) out.add(SequenceChannel.of(src.name(), sub));
         }
         return List.copyOf(out);
-    }
-
-    /** BFS through wires (and transparently through switches) to find a coil reachable from the source. */
-    private static CircuitComponent.Coil coilReachableFromSource(CircuitDocument circuit, ComponentId sourceId) {
-        var adjacency = new HashMap<ComponentTerminal, List<ComponentTerminal>>();
-        for (var w : circuit.wires()) {
-            adjacency.computeIfAbsent(w.from(), k -> new ArrayList<>()).add(w.to());
-            adjacency.computeIfAbsent(w.to(), k -> new ArrayList<>()).add(w.from());
-        }
-        var componentsById = new HashMap<ComponentId, CircuitComponent>();
-        for (var c : circuit.components()) componentsById.put(c.id(), c);
-
-        var visited = new HashSet<ComponentTerminal>();
-        var queue = new ArrayDeque<ComponentTerminal>();
-        queue.add(new ComponentTerminal(sourceId, "a"));
-        queue.add(new ComponentTerminal(sourceId, "b"));
-        while (!queue.isEmpty()) {
-            var term = queue.poll();
-            if (!visited.add(term)) continue;
-            var component = componentsById.get(term.componentId());
-            if (component instanceof CircuitComponent.Coil coil && !term.componentId().equals(sourceId)) {
-                return coil;
-            }
-            if (component instanceof CircuitComponent.SwitchComponent && (term.port().equals("a") || term.port().equals("b"))) {
-                String other = term.port().equals("a") ? "b" : "a";
-                queue.add(new ComponentTerminal(term.componentId(), other));
-            }
-            for (var neighbour : adjacency.getOrDefault(term, List.of())) queue.add(neighbour);
-        }
-        return null;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
