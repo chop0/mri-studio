@@ -436,9 +436,9 @@ public class WorkbenchController {
         // Capture the analysis/timeline portion of the tree (skip docLeaf — it's session-specific).
         ax.xz.mri.ui.workbench.layout.DockNode dockRoot = null;
         if (centreShellBranch != null && centreShellBranch.getChildContainers().size() > 1) {
-            dockRoot = captureNode(centreShellBranch.getChildContainers().get(1));
+            dockRoot = LayoutTreeIO.capture(centreShellBranch.getChildContainers().get(1), this::paneIdOf);
         }
-        if (dockRoot == null) dockRoot = captureNode(rootBranch);
+        if (dockRoot == null) dockRoot = LayoutTreeIO.capture(rootBranch, this::paneIdOf);
         // Detect floating windows (dockables whose container's root != rootBranch)
         var floatingWindows = new java.util.ArrayList<ax.xz.mri.ui.workbench.layout.FloatingWindowState>();
         for (var entry : dockables.entrySet()) {
@@ -453,46 +453,6 @@ public class WorkbenchController {
             }
         }
         return new ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState(dockRoot, floatingWindows);
-    }
-
-    private ax.xz.mri.ui.workbench.layout.DockNode captureNode(software.coley.bentofx.layout.DockContainer container) {
-        if (container instanceof software.coley.bentofx.layout.container.DockContainerBranch branch) {
-            var children = branch.getChildContainers();
-            if (children.isEmpty()) return null;
-            if (children.size() == 1) return captureNode(children.getFirst());
-            // Binary split — nest if more than 2 children
-            var dividers = branch.getDividerPositions();
-            return captureSplit(branch.getOrientation(), children, dividers, 0);
-        } else if (container instanceof DockContainerLeaf leaf) {
-            var tabs = new java.util.ArrayList<ax.xz.mri.ui.workbench.layout.DockNode>();
-            int selectedIdx = 0;
-            for (int i = 0; i < leaf.getDockables().size(); i++) {
-                var dockable = leaf.getDockables().get(i);
-                var paneId = paneIdOf(dockable);
-                if (paneId != null) {
-                    tabs.add(new ax.xz.mri.ui.workbench.layout.PaneLeaf(paneId));
-                    if (leaf.getSelectedDockable() == dockable) selectedIdx = tabs.size() - 1;
-                }
-            }
-            if (tabs.isEmpty()) return null;
-            if (tabs.size() == 1) return tabs.getFirst();
-            return new ax.xz.mri.ui.workbench.layout.TabNode(tabs, selectedIdx);
-        }
-        return null;
-    }
-
-    /** Recursively build binary SplitNodes from an N-child branch. */
-    private ax.xz.mri.ui.workbench.layout.DockNode captureSplit(
-            Orientation orientation,
-            java.util.List<? extends software.coley.bentofx.layout.DockContainer> children,
-            double[] dividers, int fromIndex) {
-        if (fromIndex >= children.size() - 1) return captureNode(children.get(fromIndex));
-        var first = captureNode(children.get(fromIndex));
-        var rest = (fromIndex < children.size() - 2)
-            ? captureSplit(orientation, children, dividers, fromIndex + 1)
-            : captureNode(children.get(fromIndex + 1));
-        double divPos = fromIndex < dividers.length ? dividers[fromIndex] : 0.5;
-        return new ax.xz.mri.ui.workbench.layout.SplitNode(orientation, divPos, first, rest);
     }
 
     // --- Layout restore: WorkbenchLayoutState → BentoFX tree ---
@@ -515,8 +475,7 @@ public class WorkbenchController {
         var docLeaf = builder.leaf("document_tabs");
         docLeaf.setPruneWhenEmpty(false);
 
-        // Rebuild the analysis/timeline tree from the persisted state
-        var restoredContainer = restoreNode(builder, state.dockRoot());
+        var restoredContainer = LayoutTreeIO.restore(builder, state.dockRoot(), this::createDockable, homeLeaves::put);
 
         root.setOrientation(Orientation.VERTICAL);
         if (restoredContainer != null) {
@@ -543,55 +502,6 @@ public class WorkbenchController {
                     mainStage.getScene(), dockable, fw.x(), fw.y());
             }
         }
-    }
-
-    private software.coley.bentofx.layout.DockContainer restoreNode(
-            software.coley.bentofx.building.DockBuilding builder,
-            ax.xz.mri.ui.workbench.layout.DockNode node) {
-        if (node instanceof ax.xz.mri.ui.workbench.layout.PaneLeaf paneLeaf) {
-            return restoreLeaf(builder, paneLeaf.paneId());
-        } else if (node instanceof ax.xz.mri.ui.workbench.layout.TabNode tabNode) {
-            var leaf = builder.leaf("tab-" + System.nanoTime());
-            leaf.setPruneWhenEmpty(false);
-            for (int i = 0; i < tabNode.tabs().size(); i++) {
-                var tab = tabNode.tabs().get(i);
-                if (tab instanceof ax.xz.mri.ui.workbench.layout.PaneLeaf pl) {
-                    var dockable = createDockable(builder, pl.paneId());
-                    if (dockable != null) {
-                        homeLeaves.put(pl.paneId(), leaf);
-                        leaf.addDockable(dockable);
-                    }
-                }
-            }
-            if (tabNode.selectedIndex() >= 0 && tabNode.selectedIndex() < leaf.getDockables().size()) {
-                leaf.selectDockable(leaf.getDockables().get(tabNode.selectedIndex()));
-            }
-            return leaf;
-        } else if (node instanceof ax.xz.mri.ui.workbench.layout.SplitNode splitNode) {
-            var branch = builder.branch("split-" + System.nanoTime());
-            branch.setOrientation(splitNode.orientation());
-            var first = restoreNode(builder, splitNode.first());
-            var second = restoreNode(builder, splitNode.second());
-            if (first != null) branch.addContainer(first);
-            if (second != null) branch.addContainer(second);
-            if (first != null && second != null) {
-                deferDividers(branch, splitNode.dividerPosition());
-            }
-            return branch;
-        }
-        return null;
-    }
-
-    private DockContainerLeaf restoreLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
-        var leaf = builder.leaf(paneId.name().toLowerCase());
-        leaf.setPruneWhenEmpty(true);
-        var dockable = createDockable(builder, paneId);
-        if (dockable != null) {
-            homeLeaves.put(paneId, leaf);
-            leaf.addDockable(dockable);
-            leaf.selectDockable(dockable);
-        }
-        return leaf;
     }
 
     private Dockable createDockable(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
