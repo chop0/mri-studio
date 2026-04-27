@@ -86,10 +86,6 @@ public record CircuitDocument(
         return new CircuitDocument(id, newName, components, wires, layout);
     }
 
-    public CircuitDocument withComponents(List<CircuitComponent> next) {
-        return new CircuitDocument(id, name, next, wires, layout);
-    }
-
     public CircuitDocument withWires(List<Wire> next) {
         return new CircuitDocument(id, name, components, next, layout);
     }

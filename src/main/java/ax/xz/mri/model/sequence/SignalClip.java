@@ -151,10 +151,6 @@ public record SignalClip(
         return new SignalClip(id, trackId, shape, startTime, duration, newAmplitude, mediaOffset, mediaDuration);
     }
 
-    public SignalClip withMediaOffset(double newMediaOffset) {
-        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, newMediaOffset, mediaDuration);
-    }
-
     public SignalClip withMediaDuration(double newMediaDuration) {
         return new SignalClip(id, trackId, shape, startTime, duration, amplitude, mediaOffset, newMediaDuration);
     }

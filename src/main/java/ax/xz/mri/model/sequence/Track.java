@@ -14,13 +14,13 @@ import java.util.UUID;
  * <p>Tracks are user-managed state (added, removed, reordered, renamed) and
  * persisted with the {@link ClipSequence}. Clips reference their track by
  * {@link #id()}, not by channel — changing a track's output channel moves all
- * its clips in lockstep.
+ * its clips in lockstep. Per-track collapse state is view-level
+ * (see {@link ax.xz.mri.ui.viewmodel.SequenceEditSession#collapsedTrackIds}).
  */
 public record Track(
     String id,
     SequenceChannel outputChannel,
-    String name,
-    boolean collapsed
+    String name
 ) {
     public Track {
         if (id == null) id = UUID.randomUUID().toString();
@@ -29,24 +29,20 @@ public record Track(
         if (name == null) name = "";
     }
 
-    /** Convenience constructor for a fresh (expanded, auto-id) track. */
+    /** Convenience constructor for a fresh (auto-id) track. */
     public Track(SequenceChannel outputChannel, String name) {
-        this(null, outputChannel, name, false);
+        this(null, outputChannel, name);
     }
 
     public Track withName(String newName) {
-        return new Track(id, outputChannel, newName, collapsed);
-    }
-
-    public Track withCollapsed(boolean newCollapsed) {
-        return new Track(id, outputChannel, name, newCollapsed);
+        return new Track(id, outputChannel, newName);
     }
 
     public Track withOutputChannel(SequenceChannel newChannel) {
-        return new Track(id, newChannel, name, collapsed);
+        return new Track(id, newChannel, name);
     }
 
     public Track withNewId() {
-        return new Track(UUID.randomUUID().toString(), outputChannel, name, collapsed);
+        return new Track(UUID.randomUUID().toString(), outputChannel, name);
     }
 }

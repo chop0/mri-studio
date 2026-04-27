@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ClipEvaluatorSineTest {
     private static final double TOL = 1e-9;
     private static final SequenceChannel CHANNEL = new SequenceChannel("B1", 0);
-    private static final Track TRACK = new Track("track-b1-i", CHANNEL, "B1 I", false);
+    private static final Track TRACK = new Track("track-b1-i", CHANNEL, "B1 I");
 
     /** Helper: build a sine clip starting at t=0, over [0,duration] μs, with the given shape. */
     private static SignalClip sine(double duration, double amplitude, ClipShape.Sine shape) {
@@ -137,7 +137,7 @@ class ClipEvaluatorSineTest {
     void multipleTracksTargetingSameOutputSum() {
         // Two tracks both routing to CHANNEL — clips on either contribute to
         // the same channel sum.
-        var track2 = new Track("track-b1-other", CHANNEL, "B1 extra", false);
+        var track2 = new Track("track-b1-other", CHANNEL, "B1 extra");
         var a = sine(1000, 1.0, new ClipShape.Sine(1000, 0.0, 1.0));
         var b = new SignalClip("b", track2.id(), new ClipShape.Sine(1000, 0.0, 1.0),
             0.0, 1000.0, 0.5, 0.0, 1000.0);
