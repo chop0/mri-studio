@@ -158,12 +158,8 @@ public final class InspectorPane extends WorkbenchPane {
         editSession.totalDuration.addListener((obs, o, n) -> duration.setValueQuiet(n.doubleValue()));
         box.getChildren().add(row("Duration", duration));
 
-        var snap = new NumberField().range(0, 1_000_000).step(10).decimals(0).unit("μs");
-        snap.setValue(editSession.snapGridSize.get());
-        snap.valueProperty().addListener((obs, o, n) -> {
-            if (n != null) editSession.snapGridSize.set(n.doubleValue());
-        });
-        editSession.snapGridSize.addListener((obs, o, n) -> snap.setValueQuiet(n.doubleValue()));
+        var snap = new NumberField().range(0, 1_000_000).step(10).decimals(0).unit("μs")
+            .bindBidirectional(editSession.snapGridSize);
         box.getChildren().add(row("Snap grid", snap));
 
         var snapToggle = new CheckBox("Snap to clip edges + grid");

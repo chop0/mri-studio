@@ -50,8 +50,6 @@ import javafx.scene.shape.Rectangle;
 import ax.xz.mri.ui.aerofx.util.BindableTransition;
 import javafx.util.Duration;
 
-import java.util.ArrayList;
-import java.util.List;
 
 
 /**
@@ -182,42 +180,33 @@ public class AeroButtonSkin extends ButtonSkin implements AeroSkin {
                 final Color endColor3 = Color.rgb(203,232,248);
                 final Color endColor4 = Color.rgb(184,221,242);
 
-                focusedButtonTransition.fractionProperty().addListener(new ChangeListener<Number>() {
-                    @Override
-                    public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
-                        List<BackgroundFill> list = new ArrayList<>();
-
-                        Stop[] stops = new Stop[] { new Stop(0f, Color.color(
-                                (endColor1.getRed()   - startColor1.getRed())   * newValue.doubleValue() + startColor1.getRed(),
-                                (endColor1.getGreen() - startColor1.getGreen()) * newValue.doubleValue() + startColor1.getGreen(),
-                                (endColor1.getBlue()  - startColor1.getBlue())  * newValue.doubleValue() + startColor1.getBlue())),
-                        new Stop(0.49f, Color.color(
-                                (endColor2.getRed()   - startColor2.getRed())   * newValue.doubleValue() + startColor2.getRed(),
-                                (endColor2.getGreen() - startColor2.getGreen()) * newValue.doubleValue() + startColor2.getGreen(),
-                                (endColor2.getBlue()  - startColor2.getBlue())  * newValue.doubleValue() + startColor2.getBlue())),
-                        new Stop(0.5f, Color.color(
-                                (endColor3.getRed()   - startColor3.getRed())   * newValue.doubleValue() + startColor3.getRed(),
-                                (endColor3.getGreen() - startColor3.getGreen()) * newValue.doubleValue() + startColor3.getGreen(),
-                                (endColor3.getBlue()  - startColor3.getBlue())  * newValue.doubleValue() + startColor3.getBlue())),
-                        new Stop(1f, Color.color(
-                                (endColor4.getRed()   - startColor4.getRed())   * newValue.doubleValue() + startColor4.getRed(),
-                                (endColor4.getGreen() - startColor4.getGreen()) * newValue.doubleValue() + startColor4.getGreen(),
-                                (endColor4.getBlue()  - startColor4.getBlue())  * newValue.doubleValue() + startColor4.getBlue())) };
-
-                        //Build up rectangles
-                        BackgroundFill f1 = new BackgroundFill(Color.rgb(60, 127, 177), new CornerRadii(3.0), new Insets(0.0));
-                        list.add(f1);
-                        BackgroundFill f2 = new BackgroundFill(Color.rgb(72,216,251), new CornerRadii(2.0), new Insets(1.0));
-                        list.add(f2);
-                        LinearGradient gradient = new LinearGradient(0.0,0.0,0.0,1.0,true, CycleMethod.NO_CYCLE,stops);
-                        BackgroundFill bgFill = new BackgroundFill(gradient, new CornerRadii(1.0), new Insets(2.0));
-                        list.add(bgFill);
-
-                        ((StyleableProperty<Background>)getSkinnable().backgroundProperty()).applyStyle(null, new Background(list.get(0), list.get(1), list.get(2)));
-                    }
+                focusedButtonTransition.fractionProperty().addListener((observable, oldValue, newValue) -> {
+                    double t = newValue.doubleValue();
+                    Stop[] stops = new Stop[] {
+                        new Stop(0f,    blend(startColor1, endColor1, t)),
+                        new Stop(0.49f, blend(startColor2, endColor2, t)),
+                        new Stop(0.5f,  blend(startColor3, endColor3, t)),
+                        new Stop(1f,    blend(startColor4, endColor4, t))
+                    };
+                    BackgroundFill f1 = new BackgroundFill(Color.rgb(60, 127, 177), new CornerRadii(3.0), new Insets(0.0));
+                    BackgroundFill f2 = new BackgroundFill(Color.rgb(72, 216, 251), new CornerRadii(2.0), new Insets(1.0));
+                    BackgroundFill bgFill = new BackgroundFill(
+                        new LinearGradient(0.0, 0.0, 0.0, 1.0, true, CycleMethod.NO_CYCLE, stops),
+                        new CornerRadii(1.0), new Insets(2.0));
+                    ((StyleableProperty<Background>) getSkinnable().backgroundProperty())
+                        .applyStyle(null, new Background(f1, f2, bgFill));
                 });
             }
         }
+    }
+
+    /** Linear interpolation between two colours by {@code t ∈ [0, 1]}. */
+    private static Color blend(Color a, Color b, double t) {
+        return Color.color(
+            (b.getRed()   - a.getRed())   * t + a.getRed(),
+            (b.getGreen() - a.getGreen()) * t + a.getGreen(),
+            (b.getBlue()  - a.getBlue())  * t + a.getBlue()
+        );
     }
 
     /**
@@ -229,6 +218,4 @@ public class AeroButtonSkin extends ButtonSkin implements AeroSkin {
         getSkinnable().armedProperty().removeListener(armedListener);
         getSkinnable().hoverProperty().removeListener(hoverListener);
     }
-
-
 }

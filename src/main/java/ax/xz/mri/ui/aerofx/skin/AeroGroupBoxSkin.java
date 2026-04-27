@@ -30,9 +30,7 @@
 package ax.xz.mri.ui.aerofx.skin;
 
 import javafx.beans.InvalidationListener;
-import javafx.beans.Observable;
 import javafx.geometry.Insets;
-import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.Label;
 import javafx.scene.control.SkinBase;
@@ -75,16 +73,10 @@ public class AeroGroupBoxSkin extends SkinBase<TitledPane> implements AeroSkin {
             getChildren().add(p.getContent());
         p.setPadding(new Insets(7, 0, 0, 0));
 
-        focusListener = new InvalidationListener() {
-            @Override
-            public void invalidated(Observable observable) {
-                if (p.isFocused()) {
-                    Node content = p.getContent();
-                    if (content != null && content instanceof Parent) {
-                        if (((Parent) content).getChildrenUnmodifiable().size() > 0)
-                            ((Parent) content).getChildrenUnmodifiable().get(0).requestFocus();
-                    }
-                }
+        focusListener = observable -> {
+            if (p.isFocused() && p.getContent() instanceof Parent parent
+                && !parent.getChildrenUnmodifiable().isEmpty()) {
+                parent.getChildrenUnmodifiable().getFirst().requestFocus();
             }
         };
         p.focusedProperty().addListener(focusListener);
