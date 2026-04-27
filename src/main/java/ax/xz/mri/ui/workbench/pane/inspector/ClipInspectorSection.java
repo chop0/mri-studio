@@ -316,88 +316,67 @@ public final class ClipInspectorSection {
         return box;
     }
 
+    /**
+     * Wire a {@link NumberField} to one scalar parameter of a typed {@link ClipShape}:
+     * push the field's value into a fresh shape via {@code reshape}, and pull
+     * the shape's current value back via {@code getter} on every refresh.
+     */
+    private <S extends ClipShape> void shapeParam(
+        VBox box, String label, NumberField field, Class<S> type,
+        java.util.function.ToDoubleFunction<S> getter,
+        java.util.function.BiFunction<S, Double, S> reshape
+    ) {
+        field.setValue(getter.applyAsDouble(type.cast(session.findClip(clipId).shape())));
+        field.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            var clip = session.findClip(clipId);
+            if (clip == null || !type.isInstance(clip.shape())) return;
+            session.setClipShape(clipId, reshape.apply(type.cast(clip.shape()), n.doubleValue()));
+        });
+        pullers.add(c -> {
+            if (type.isInstance(c.shape())) field.setValueQuiet(getter.applyAsDouble(type.cast(c.shape())));
+        });
+        box.getChildren().add(row(label, field));
+    }
+
     private void addSinc(VBox box, ClipShape.Sinc initial) {
-        var bw = nf().range(10, 1_000_000).step(100).decimals(1).unit("Hz");
-        bw.setValue(initial.bandwidthHz());
-        bw.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
-            session.setClipShape(clipId,
-                new ClipShape.Sinc(n.doubleValue(), s.centerOffset(), s.windowFactor()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) bw.setValueQuiet(s.bandwidthHz()); });
-        box.getChildren().add(row("Bandwidth", bw));
-
-        var offset = nf().range(-1e6, 1e6).step(1).decimals(1).unit("μs");
-        offset.setValue(initial.centerOffset());
-        offset.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
-            session.setClipShape(clipId,
-                new ClipShape.Sinc(s.bandwidthHz(), n.doubleValue(), s.windowFactor()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) offset.setValueQuiet(s.centerOffset()); });
-        box.getChildren().add(row("Center offset", offset));
-
-        var window = nf().range(0.1, 5).step(0.1).decimals(2);
-        window.setValue(initial.windowFactor());
-        window.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sinc s)) return;
-            session.setClipShape(clipId,
-                new ClipShape.Sinc(s.bandwidthHz(), s.centerOffset(), n.doubleValue()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sinc s) window.setValueQuiet(s.windowFactor()); });
-        box.getChildren().add(row("Window factor", window));
+        shapeParam(box, "Bandwidth",
+            nf().range(10, 1_000_000).step(100).decimals(1).unit("Hz"),
+            ClipShape.Sinc.class, ClipShape.Sinc::bandwidthHz,
+            (s, v) -> new ClipShape.Sinc(v, s.centerOffset(), s.windowFactor()));
+        shapeParam(box, "Center offset",
+            nf().range(-1e6, 1e6).step(1).decimals(1).unit("μs"),
+            ClipShape.Sinc.class, ClipShape.Sinc::centerOffset,
+            (s, v) -> new ClipShape.Sinc(s.bandwidthHz(), v, s.windowFactor()));
+        shapeParam(box, "Window factor",
+            nf().range(0.1, 5).step(0.1).decimals(2),
+            ClipShape.Sinc.class, ClipShape.Sinc::windowFactor,
+            (s, v) -> new ClipShape.Sinc(s.bandwidthHz(), s.centerOffset(), v));
     }
 
     private void addTrapezoid(VBox box, double duration, ClipShape.Trapezoid initial) {
-        var rise = nf().range(0, duration).step(1).decimals(1).unit("μs");
-        rise.setValue(initial.riseTime());
-        rise.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Trapezoid t)) return;
-            session.setClipShape(clipId, new ClipShape.Trapezoid(n.doubleValue(), t.flatTime()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Trapezoid t) rise.setValueQuiet(t.riseTime()); });
-        box.getChildren().add(row("Rise time", rise));
-
-        var flat = nf().range(0, duration).step(1).decimals(1).unit("μs");
-        flat.setValue(initial.flatTime());
-        flat.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Trapezoid t)) return;
-            session.setClipShape(clipId, new ClipShape.Trapezoid(t.riseTime(), n.doubleValue()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Trapezoid t) flat.setValueQuiet(t.flatTime()); });
-        box.getChildren().add(row("Flat time", flat));
+        shapeParam(box, "Rise time",
+            nf().range(0, duration).step(1).decimals(1).unit("μs"),
+            ClipShape.Trapezoid.class, ClipShape.Trapezoid::riseTime,
+            (t, v) -> new ClipShape.Trapezoid(v, t.flatTime()));
+        shapeParam(box, "Flat time",
+            nf().range(0, duration).step(1).decimals(1).unit("μs"),
+            ClipShape.Trapezoid.class, ClipShape.Trapezoid::flatTime,
+            (t, v) -> new ClipShape.Trapezoid(t.riseTime(), v));
     }
 
     private void addGaussian(VBox box, double duration, ClipShape.Gaussian initial) {
-        var sigma = nf().range(0.1, duration * 2).step(1).decimals(1).unit("μs");
-        sigma.setValue(initial.sigma());
-        sigma.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            session.setClipShape(clipId, new ClipShape.Gaussian(n.doubleValue()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Gaussian g) sigma.setValueQuiet(g.sigma()); });
-        box.getChildren().add(row("Sigma", sigma));
+        shapeParam(box, "Sigma",
+            nf().range(0.1, duration * 2).step(1).decimals(1).unit("μs"),
+            ClipShape.Gaussian.class, ClipShape.Gaussian::sigma,
+            (g, v) -> new ClipShape.Gaussian(v));
     }
 
     private void addTriangle(VBox box, ClipShape.Triangle initial) {
-        var peak = nf().range(0, 1).step(0.05).decimals(3);
-        peak.setValue(initial.peakPosition());
-        peak.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            session.setClipShape(clipId, new ClipShape.Triangle(n.doubleValue()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Triangle t) peak.setValueQuiet(t.peakPosition()); });
-        box.getChildren().add(row("Peak position", peak));
+        shapeParam(box, "Peak position",
+            nf().range(0, 1).step(0.05).decimals(3),
+            ClipShape.Triangle.class, ClipShape.Triangle::peakPosition,
+            (t, v) -> new ClipShape.Triangle(v));
     }
 
     private void addSine(VBox box, ClipShape.Sine initial) {
@@ -408,38 +387,18 @@ public final class ClipInspectorSection {
         mode.setValue(initial.cycles() > 0 ? SineMode.CYCLES : SineMode.FREQUENCY);
         box.getChildren().add(row("Mode", mode));
 
-        var freq = nf().range(0.1, 10_000_000).step(100).scientific().unit("Hz");
-        freq.setValue(initial.frequencyHz());
-        freq.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
-            session.setClipShape(clipId, new ClipShape.Sine(n.doubleValue(), s.phase(), s.cycles()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) freq.setValueQuiet(s.frequencyHz()); });
-        box.getChildren().add(row("Frequency", freq));
-
-        var cycles = nf().range(0, 10_000).step(0.25).decimals(3);
-        cycles.setValue(initial.cycles());
-        cycles.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
-            session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), s.phase(), n.doubleValue()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) cycles.setValueQuiet(s.cycles()); });
-        box.getChildren().add(row("Cycles", cycles));
-
-        var phase = nf().range(-2 * Math.PI, 2 * Math.PI).step(0.1).decimals(3).unit("rad");
-        phase.setValue(initial.phase());
-        phase.valueProperty().addListener((obs, o, n) -> {
-            if (n == null) return;
-            var clip = session.findClip(clipId);
-            if (clip == null || !(clip.shape() instanceof ClipShape.Sine s)) return;
-            session.setClipShape(clipId, new ClipShape.Sine(s.frequencyHz(), n.doubleValue(), s.cycles()));
-        });
-        pullers.add(c -> { if (c.shape() instanceof ClipShape.Sine s) phase.setValueQuiet(s.phase()); });
-        box.getChildren().add(row("Phase", phase));
+        shapeParam(box, "Frequency",
+            nf().range(0.1, 10_000_000).step(100).scientific().unit("Hz"),
+            ClipShape.Sine.class, ClipShape.Sine::frequencyHz,
+            (s, v) -> new ClipShape.Sine(v, s.phase(), s.cycles()));
+        shapeParam(box, "Cycles",
+            nf().range(0, 10_000).step(0.25).decimals(3),
+            ClipShape.Sine.class, ClipShape.Sine::cycles,
+            (s, v) -> new ClipShape.Sine(s.frequencyHz(), s.phase(), v));
+        shapeParam(box, "Phase",
+            nf().range(-2 * Math.PI, 2 * Math.PI).step(0.1).decimals(3).unit("rad"),
+            ClipShape.Sine.class, ClipShape.Sine::phase,
+            (s, v) -> new ClipShape.Sine(s.frequencyHz(), v, s.cycles()));
 
         // Mode toggle: switch between 0-cycles-driven (frequency) or positive cycles.
         mode.valueProperty().addListener((obs, o, n) -> {
