@@ -7,6 +7,7 @@ import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineCanvas;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineOverviewBar;
+import ax.xz.mri.util.SiFormat;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.StringBinding;
 import javafx.geometry.Insets;
@@ -226,29 +227,22 @@ public final class SequenceEditorPane extends WorkbenchPane {
 
     private StringBinding viewSpanBinding() {
         return Bindings.createStringBinding(
-            () -> formatTime(editSession.viewEnd.get() - editSession.viewStart.get()),
+            () -> SiFormat.time(editSession.viewEnd.get() - editSession.viewStart.get()),
             editSession.viewStart, editSession.viewEnd);
     }
 
     private StringBinding dtBinding() {
-        return Bindings.createStringBinding(() -> formatTime(editSession.dt.get()), editSession.dt);
+        return Bindings.createStringBinding(() -> SiFormat.time(editSession.dt.get()), editSession.dt);
     }
 
     private StringBinding totalDurationBinding() {
         return Bindings.createStringBinding(
-            () -> formatTime(editSession.totalDuration.get()), editSession.totalDuration);
+            () -> SiFormat.time(editSession.totalDuration.get()), editSession.totalDuration);
     }
 
     private StringBinding cursorBinding(PaneContext paneContext) {
         var viewport = paneContext.session().viewport;
-        return Bindings.createStringBinding(() -> formatTime(viewport.tC.get()), viewport.tC);
-    }
-
-    private static String formatTime(double micros) {
-        double abs = Math.abs(micros);
-        if (abs >= 1_000_000) return String.format("%.2f s", micros * 1e-6);
-        if (abs >= 1_000)     return String.format("%.2f ms", micros * 1e-3);
-        return String.format("%.0f \u03BCs", micros);
+        return Bindings.createStringBinding(() -> SiFormat.time(viewport.tC.get()), viewport.tC);
     }
 
     // ══════════════════════════════════════════════════════════════════════════

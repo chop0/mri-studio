@@ -15,6 +15,7 @@ import ax.xz.mri.model.circuit.CircuitComponent.ShuntInductor;
 import ax.xz.mri.model.circuit.CircuitComponent.ShuntResistor;
 import ax.xz.mri.model.circuit.CircuitComponent.SwitchComponent;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageMetadata;
+import ax.xz.mri.util.SiFormat;
 import ax.xz.mri.model.circuit.CircuitComponent.VoltageSource;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.CircuitGraph;
@@ -334,8 +335,8 @@ public final class ClipPathAnalyzer {
                 case MODULATOR_LO -> {
                     double lo = ((Modulator) comp).loHz();
                     if (frequencyHz != 0 && Math.abs(frequencyHz - lo) > 1e-9) {
-                        warnings.add("Source carrier already non-zero (" + formatHz(frequencyHz)
-                            + "); modulator overrides it with " + formatHz(lo) + ".");
+                        warnings.add("Source carrier already non-zero (" + SiFormat.hz(frequencyHz)
+                            + "); modulator overrides it with " + SiFormat.hz(lo) + ".");
                     }
                     frequencyHz = lo;
                 }
@@ -414,14 +415,6 @@ public final class ClipPathAnalyzer {
             warnings.add("Net is also loaded by " + String.join(", ", noted)
                 + " — preview ignores these branches.");
         }
-    }
-
-    private static String formatHz(double hz) {
-        double abs = Math.abs(hz);
-        if (abs >= 1e9) return String.format("%.2f GHz", hz / 1e9);
-        if (abs >= 1e6) return String.format("%.2f MHz", hz / 1e6);
-        if (abs >= 1e3) return String.format("%.2f kHz", hz / 1e3);
-        return String.format("%.2f Hz", hz);
     }
 
     /**

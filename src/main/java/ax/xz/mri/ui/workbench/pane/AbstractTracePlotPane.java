@@ -8,6 +8,7 @@ import ax.xz.mri.ui.viewmodel.TracePlotViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
+import ax.xz.mri.util.SiFormat;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
@@ -204,7 +205,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         g.setGlobalAlpha(0.5);
         g.strokeLine(cursorX, PAD_TOP, cursorX, PAD_TOP + plotHeight);
         g.setGlobalAlpha(1);
-        drawBadge(g, cursorX, PAD_TOP + 4, formatTime(cursorTime), CUR);
+        drawBadge(g, cursorX, PAD_TOP + 4, SiFormat.time(cursorTime), CUR);
 
         g.save();
         g.beginPath();
@@ -475,12 +476,6 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         for (int index = 0; index < lines.size(); index++) {
             g.fillText(lines.get(index), x + 8, y + 14 + index * 11);
         }
-    }
-
-    private static String formatTime(double micros) {
-        return micros >= 1000
-            ? String.format("%.2f ms", micros / 1000.0)
-            : String.format("%.0f \u03bcs", micros);
     }
 
     private ContextMenu buildContextMenu(double mouseX, double mouseY) {

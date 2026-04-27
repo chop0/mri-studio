@@ -17,6 +17,7 @@ import ax.xz.mri.ui.preview.SchematicHighlightRequest;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
+import ax.xz.mri.util.SiFormat;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.geometry.Pos;
@@ -702,7 +703,7 @@ public final class ClipInspectorSection {
         row.getStyleClass().add("clip-inspector-poi-row");
 
         // Header: coil name + carrier frequency (e.g. "RF Coil — 655 kHz").
-        var header = new Label(coil.name() + " — " + formatHz(path.frequencyHz()));
+        var header = new Label(coil.name() + " — " + SiFormat.hz(path.frequencyHz()));
         header.getStyleClass().add("clip-inspector-poi-name");
         row.getChildren().add(header);
 
@@ -710,14 +711,14 @@ public final class ClipInspectorSection {
         String peakLine;
         if (fieldResult != null) {
             peakLine = String.format("I_coil ≈ %s   ·   peak |B| ≈ %s",
-                formatAmps(current),
+                SiFormat.amps(current),
                 FieldPreview.formatTesla(fieldResult.peakField()));
         } else if (compileError != null) {
             peakLine = String.format("I_coil ≈ %s   ·   peak |B| unavailable (script error)",
-                formatAmps(current));
+                SiFormat.amps(current));
         } else {
             peakLine = String.format("I_coil ≈ %s   ·   peak |B| unavailable (no eigenfield)",
-                formatAmps(current));
+                SiFormat.amps(current));
         }
         var summary = new Label(peakLine);
         summary.getStyleClass().add("clip-inspector-hint");
@@ -774,24 +775,6 @@ public final class ClipInspectorSection {
         return row;
     }
 
-    private static String formatAmps(double a) {
-        double abs = Math.abs(a);
-        if (abs == 0) return "0 A";
-        if (abs >= 1) return String.format("%.3f A", a);
-        if (abs >= 1e-3) return String.format("%.2f mA", a * 1e3);
-        if (abs >= 1e-6) return String.format("%.2f µA", a * 1e6);
-        return String.format("%.3g A", a);
-    }
-
-    private static String formatHz(double hz) {
-        double abs = Math.abs(hz);
-        if (abs == 0) return "DC";
-        if (abs >= 1e9) return String.format("%.3f GHz", hz / 1e9);
-        if (abs >= 1e6) return String.format("%.3f MHz", hz / 1e6);
-        if (abs >= 1e3) return String.format("%.3f kHz", hz / 1e3);
-        return String.format("%.3f Hz", hz);
-    }
-
     private static String formatMm(double metres) {
         return String.format("%+.0f mm", metres * 1000);
     }
@@ -837,21 +820,8 @@ public final class ClipInspectorSection {
         // depends on which coil this drive routes to. We can't pin a unique
         // T/A here without walking the circuit, so just report the source
         // amplitude tagged with the eigenfield's units label.
-        return "\u2248 " + formatSI(clip.amplitude(), ef.units());
+        return "\u2248 " + SiFormat.si(clip.amplitude(), ef.units());
     }
 
-    private static String formatSI(double value, String units) {
-        if (units == null || units.isEmpty()) return String.format("%.3g", value);
-        double abs = Math.abs(value);
-        if (abs == 0) return "0 " + units;
-        if (abs >= 1e9)  return String.format("%.2f G%s", value / 1e9, units);
-        if (abs >= 1e6)  return String.format("%.2f M%s", value / 1e6, units);
-        if (abs >= 1e3)  return String.format("%.2f k%s", value / 1e3, units);
-        if (abs >= 1)    return String.format("%.2f %s",  value,       units);
-        if (abs >= 1e-3) return String.format("%.2f m%s", value * 1e3, units);
-        if (abs >= 1e-6) return String.format("%.2f \u03BC%s", value * 1e6, units);
-        if (abs >= 1e-9) return String.format("%.2f n%s", value * 1e9, units);
-        return String.format("%.3g %s", value, units);
-    }
 
 }

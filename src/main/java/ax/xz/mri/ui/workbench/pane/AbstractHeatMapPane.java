@@ -13,6 +13,7 @@ import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
+import ax.xz.mri.util.SiFormat;
 import javafx.beans.property.ObjectProperty;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.ContextMenu;
@@ -242,7 +243,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             3
         );
         g.setGlobalAlpha(1);
-        drawBadge(g, cursorX, PAD_TOP + 4, formatTime(paneContext.session().viewport.tC.get()), CUR);
+        drawBadge(g, cursorX, PAD_TOP + 4, SiFormat.time(paneContext.session().viewport.tC.get()), CUR);
 
         int tickStep = niceTick(tSpan);
         g.setFill(TX2);
@@ -360,12 +361,6 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         g.setTextAlign(TextAlignment.CENTER);
         g.fillText(text, x + width / 2, y + 8.2);
         g.setTextAlign(TextAlignment.LEFT);
-    }
-
-    private static String formatTime(double micros) {
-        return micros >= 1000
-            ? String.format("%.2f ms", micros / 1000.0)
-            : String.format("%.0f \u03bcs", micros);
     }
 
     private AxisScrubBar.Bounds overviewBounds() {

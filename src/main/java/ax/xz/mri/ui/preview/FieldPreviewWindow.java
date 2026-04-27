@@ -8,6 +8,7 @@ import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.service.circuit.path.CoilPath;
 import ax.xz.mri.service.circuit.path.FieldPreview;
 import ax.xz.mri.ui.eigenfield.EigenfieldPreviewCanvas;
+import ax.xz.mri.util.SiFormat;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -104,9 +105,9 @@ public final class FieldPreviewWindow {
 
         var line1 = new Label(String.format(
             "Current ≈ %s   ·   Sensitivity = %s   ·   Carrier = %s",
-            formatAmps(currentAmps),
-            formatTeslaPerAmp(coil.sensitivityT_per_A()),
-            formatHz(path.frequencyHz())
+            SiFormat.amps(currentAmps),
+            SiFormat.teslaPerAmp(coil.sensitivityT_per_A()),
+            SiFormat.hz(path.frequencyHz())
         ));
         line1.getStyleClass().add("clip-inspector-hint");
 
@@ -163,30 +164,4 @@ public final class FieldPreviewWindow {
         return row;
     }
 
-    private static String formatAmps(double a) {
-        double abs = Math.abs(a);
-        if (abs == 0) return "0 A";
-        if (abs >= 1) return String.format("%.3f A", a);
-        if (abs >= 1e-3) return String.format("%.2f mA", a * 1e3);
-        if (abs >= 1e-6) return String.format("%.2f µA", a * 1e6);
-        return String.format("%.3g A", a);
-    }
-
-    private static String formatTeslaPerAmp(double tpa) {
-        double abs = Math.abs(tpa);
-        if (abs == 0) return "0 T/A";
-        if (abs >= 1) return String.format("%.3f T/A", tpa);
-        if (abs >= 1e-3) return String.format("%.2f mT/A", tpa * 1e3);
-        if (abs >= 1e-6) return String.format("%.2f µT/A", tpa * 1e6);
-        return String.format("%.3g T/A", tpa);
-    }
-
-    private static String formatHz(double hz) {
-        double abs = Math.abs(hz);
-        if (abs == 0) return "DC";
-        if (abs >= 1e9) return String.format("%.3f GHz", hz / 1e9);
-        if (abs >= 1e6) return String.format("%.3f MHz", hz / 1e6);
-        if (abs >= 1e3) return String.format("%.3f kHz", hz / 1e3);
-        return String.format("%.3f Hz", hz);
-    }
 }

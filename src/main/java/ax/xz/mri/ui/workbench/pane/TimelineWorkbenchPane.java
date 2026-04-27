@@ -4,6 +4,7 @@ import ax.xz.mri.ui.viewmodel.PulseTimelineAnalysis;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
 import ax.xz.mri.util.MathUtil;
+import ax.xz.mri.util.SiFormat;
 import javafx.scene.Cursor;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
@@ -351,7 +352,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         g.setGlobalAlpha(0.8);
         g.strokeLine(cursorX, mainTop, cursorX, mainTop + plotHeight);
         g.setGlobalAlpha(1);
-        drawBadge(g, cursorX, mainTop + 10, formatTime(paneContext.session().viewport.tC.get()), CUR);
+        drawBadge(g, cursorX, mainTop + 10, SiFormat.time(paneContext.session().viewport.tC.get()), CUR);
 
         g.setFont(UI_BOLD_7);
         g.setTextAlign(TextAlignment.CENTER);
@@ -784,12 +785,6 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         for (int index = 0; index < lines.size(); index++) {
             g.fillText(lines.get(index), x + 8, y + 14 + index * 11);
         }
-    }
-
-    private static String formatTime(double micros) {
-        return micros >= 1000
-            ? String.format("%.2f ms", micros / 1000.0)
-            : String.format("%.0f \u03bcs", micros);
     }
 
     private AxisScrubBar.Bounds overviewBounds() {
