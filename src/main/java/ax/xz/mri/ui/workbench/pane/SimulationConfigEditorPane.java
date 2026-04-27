@@ -324,25 +324,12 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node buildTissueTab() {
         var box = new VBox(10);
         box.getChildren().add(sectionTitle("Relaxation"));
-        var t1 = numberField(0, 1_000_000, 10);
-        t1.setValue(store.t1Ms.get());
-        t1.valueProperty().addListener((obs, o, n) -> { if (n != null) store.t1Ms.set(n.doubleValue()); });
-        store.t1Ms.addListener((obs, o, n) -> t1.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("T\u2081", t1, "ms"));
-
-        var t2 = numberField(0, 1_000_000, 5);
-        t2.setValue(store.t2Ms.get());
-        t2.valueProperty().addListener((obs, o, n) -> { if (n != null) store.t2Ms.set(n.doubleValue()); });
-        store.t2Ms.addListener((obs, o, n) -> t2.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("T\u2082", t2, "ms"));
+        box.getChildren().add(rowLabelled("T\u2081", numberField(0, 1_000_000, 10).bindBidirectional(store.t1Ms), "ms"));
+        box.getChildren().add(rowLabelled("T\u2082", numberField(0, 1_000_000, 5).bindBidirectional(store.t2Ms), "ms"));
 
         box.getChildren().add(new Separator());
         box.getChildren().add(sectionTitle("Nucleus"));
-        var gamma = numberField(0, 1e12, 1e6);
-        gamma.setValue(store.gamma.get());
-        gamma.valueProperty().addListener((obs, o, n) -> { if (n != null) store.gamma.set(n.doubleValue()); });
-        store.gamma.addListener((obs, o, n) -> gamma.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("\u03b3", gamma, "rad/s/T"));
+        box.getChildren().add(rowLabelled("\u03b3", numberField(0, 1e12, 1e6).bindBidirectional(store.gamma), "rad/s/T"));
 
         var preview = new RelaxationPreview();
         preview.setParams(store.t1Ms.get(), store.t2Ms.get());
@@ -356,35 +343,11 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node buildGeometryTab() {
         var box = new VBox(10);
         box.getChildren().add(sectionTitle("Spatial grid"));
-        var slice = numberField(0.1, 100, 0.5);
-        slice.setValue(store.sliceHalfMm.get());
-        slice.valueProperty().addListener((obs, o, n) -> { if (n != null) store.sliceHalfMm.set(n.doubleValue()); });
-        store.sliceHalfMm.addListener((obs, o, n) -> slice.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("Slice half-thickness", slice, "mm"));
-
-        var fovZ = numberField(1, 2000, 1);
-        fovZ.setValue(store.fovZMm.get());
-        fovZ.valueProperty().addListener((obs, o, n) -> { if (n != null) store.fovZMm.set(n.doubleValue()); });
-        store.fovZMm.addListener((obs, o, n) -> fovZ.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("FOV Z", fovZ, "mm"));
-
-        var fovR = numberField(1, 2000, 1);
-        fovR.setValue(store.fovRMm.get());
-        fovR.valueProperty().addListener((obs, o, n) -> { if (n != null) store.fovRMm.set(n.doubleValue()); });
-        store.fovRMm.addListener((obs, o, n) -> fovR.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("FOV R", fovR, "mm"));
-
-        var nZ = numberField(2, 10000, 1).decimals(0);
-        nZ.setValue(store.nZ.get());
-        nZ.valueProperty().addListener((obs, o, n) -> { if (n != null) store.nZ.set(n.intValue()); });
-        store.nZ.addListener((obs, o, n) -> nZ.setValueQuiet(n.intValue()));
-        box.getChildren().add(rowLabelled("n_Z", nZ, "samples"));
-
-        var nR = numberField(2, 10000, 1).decimals(0);
-        nR.setValue(store.nR.get());
-        nR.valueProperty().addListener((obs, o, n) -> { if (n != null) store.nR.set(n.intValue()); });
-        store.nR.addListener((obs, o, n) -> nR.setValueQuiet(n.intValue()));
-        box.getChildren().add(rowLabelled("n_R", nR, "samples"));
+        box.getChildren().add(rowLabelled("Slice half-thickness", numberField(0.1, 100, 0.5).bindBidirectional(store.sliceHalfMm), "mm"));
+        box.getChildren().add(rowLabelled("FOV Z", numberField(1, 2000, 1).bindBidirectional(store.fovZMm), "mm"));
+        box.getChildren().add(rowLabelled("FOV R", numberField(1, 2000, 1).bindBidirectional(store.fovRMm), "mm"));
+        box.getChildren().add(rowLabelled("n_Z", numberField(2, 10000, 1).decimals(0).bindBidirectional(store.nZ), "samples"));
+        box.getChildren().add(rowLabelled("n_R", numberField(2, 10000, 1).decimals(0).bindBidirectional(store.nR), "samples"));
 
         var preview = new GeometryPreview();
         preview.setGeometry(store.fovZMm.get(), store.fovRMm.get(), store.nZ.get(), store.nR.get(), store.sliceHalfMm.get());
@@ -402,12 +365,9 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node buildReferenceTab() {
         var box = new VBox(10);
         box.getChildren().add(sectionTitle("Rotating frame"));
-        var b0 = numberField(-50, 50, 0.001);
-        b0.setValue(store.referenceB0Tesla.get());
-        b0.valueProperty().addListener((obs, o, n) -> { if (n != null) store.referenceB0Tesla.set(n.doubleValue()); });
-        store.referenceB0Tesla.addListener((obs, o, n) -> b0.setValueQuiet(n.doubleValue()));
-        box.getChildren().add(rowLabelled("Reference B\u2080", b0, "T"));
+        box.getChildren().add(rowLabelled("Reference B\u2080", numberField(-50, 50, 0.001).bindBidirectional(store.referenceB0Tesla), "T"));
 
+        // dt has its own setup so we can guard against zero/negative.
         var dt = numberField(1e-12, 1e-2, 1e-7);
         dt.setValue(store.dtSeconds.get());
         dt.valueProperty().addListener((obs, o, n) -> { if (n != null && n.doubleValue() > 0) store.dtSeconds.set(n.doubleValue()); });

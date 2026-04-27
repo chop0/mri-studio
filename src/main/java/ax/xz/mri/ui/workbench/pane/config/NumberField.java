@@ -174,6 +174,27 @@ public final class NumberField extends HBox {
         }
     }
 
+    /**
+     * Two-way bind this field to a {@link javafx.beans.property.DoubleProperty}:
+     * push field edits into the property, pull external property changes back
+     * via {@link #setValueQuiet(double)} (so we don't loop). Initial value
+     * comes from the property.
+     */
+    public NumberField bindBidirectional(javafx.beans.property.DoubleProperty property) {
+        setValue(property.get());
+        valueProperty().addListener((obs, o, n) -> { if (n != null) property.set(n.doubleValue()); });
+        property.addListener((obs, o, n) -> setValueQuiet(n.doubleValue()));
+        return this;
+    }
+
+    /** Two-way bind this field to an {@link javafx.beans.property.IntegerProperty}. */
+    public NumberField bindBidirectional(javafx.beans.property.IntegerProperty property) {
+        setValue(property.get());
+        valueProperty().addListener((obs, o, n) -> { if (n != null) property.set(n.intValue()); });
+        property.addListener((obs, o, n) -> setValueQuiet(n.intValue()));
+        return this;
+    }
+
     // ---------- Internals ----------
 
     private double clampFinite(double v) {
