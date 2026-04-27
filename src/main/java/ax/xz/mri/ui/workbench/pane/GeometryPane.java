@@ -646,18 +646,8 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private void drawBadge(javafx.scene.canvas.GraphicsContext g, double centerX, double y, String text, Color accent) {
-        g.setFont(StudioTheme.UI_7);
-        double width = Math.max(48, text.length() * 4.9);
-        double x = MathUtil.clamp(centerX - width / 2, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - SCRUB_WIDTH - width);
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.10));
-        g.fillRoundRect(x, y, width, 12, 6, 6);
-        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.45));
-        g.setLineWidth(0.6);
-        g.strokeRoundRect(x, y, width, 12, 6, 6);
-        g.setFill(Color.color(0.18, 0.2, 0.24, 0.9));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x + width / 2, y + 8.2);
-        g.setTextAlign(TextAlignment.LEFT);
+        ax.xz.mri.ui.canvas.CanvasDrawingUtils.drawBadge(g, centerX, y, text, accent, StudioTheme.UI_7,
+            48, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - SCRUB_WIDTH);
     }
 
     private void drawReferenceMarker(

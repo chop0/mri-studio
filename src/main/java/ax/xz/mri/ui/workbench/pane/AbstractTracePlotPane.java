@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.ui.canvas.CanvasDrawingUtils;
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.ui.viewmodel.PulseTimelineAnalysis;
@@ -445,18 +446,8 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     }
 
     private void drawBadge(GraphicsContext g, double centerX, double y, String text, Color accent) {
-        g.setFont(UI_7);
-        double width = Math.max(40, text.length() * 4.9);
-        double x = MathUtil.clamp(centerX - width / 2, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - width - 2);
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.10));
-        g.fillRoundRect(x, y, width, 12, 6, 6);
-        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.45));
-        g.setLineWidth(0.6);
-        g.strokeRoundRect(x, y, width, 12, 6, 6);
-        g.setFill(Color.color(0.18, 0.2, 0.24, 0.9));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x + width / 2, y + 8.2);
-        g.setTextAlign(TextAlignment.LEFT);
+        CanvasDrawingUtils.drawBadge(g, centerX, y, text, accent, UI_7,
+            40, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - 2);
     }
 
     protected final void drawInfoCard(GraphicsContext g, double anchorX, double anchorY, Color accent, java.util.List<String> lines) {

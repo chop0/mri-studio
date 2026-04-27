@@ -537,18 +537,8 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
     }
 
     private void drawBadge(javafx.scene.canvas.GraphicsContext g, double centerX, double y, String text, Color accent) {
-        g.setFont(UI_BOLD_7);
-        double width = Math.max(36, text.length() * 4.7);
-        double x = MathUtil.clamp(centerX - width / 2, PAD_L + 4, canvas.getWidth() - PAD_R - width - 4);
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.12));
-        g.fillRoundRect(x, y, width, 12, 6, 6);
-        g.setStroke(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.55));
-        g.setLineWidth(0.7);
-        g.strokeRoundRect(x, y, width, 12, 6, 6);
-        g.setFill(Color.color(0.18, 0.2, 0.24, 0.92));
-        g.setTextAlign(TextAlignment.CENTER);
-        g.fillText(text, x + width / 2, y + 8.5);
-        g.setTextAlign(TextAlignment.LEFT);
+        ax.xz.mri.ui.canvas.CanvasDrawingUtils.drawBadge(g, centerX, y, text, accent, UI_BOLD_7,
+            36, PAD_L + 4, canvas.getWidth() - PAD_R - 4);
     }
 
     private void drawMeasurementAverages(
