@@ -19,5 +19,4 @@ module ax.xz.mri {
     exports ax.xz.mri;
     exports ax.xz.mri.model.simulation;
     exports ax.xz.mri.optimisation;
-    exports ax.xz.mri.ui.aerofx.skin to javafx.controls;
 }
