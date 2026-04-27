@@ -10,8 +10,11 @@ import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
+import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.project.SequenceDocument;
@@ -89,6 +92,19 @@ public final class SequenceEditSession {
 
     // ── Active simulation config ────────────────────────────────────────────
     public final ObjectProperty<ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
+
+    /** Currently bound hardware config for this sequence — drives "Run on hardware" + the routing menus. */
+    public final ObjectProperty<HardwareConfigDocument> activeHardwareConfig = new SimpleObjectProperty<>();
+
+    /** Whether to show the read-only sim probe-output rows beneath the editable tracks. */
+    public final ObservableSet<String> enabledSimOutputs = FXCollections.observableSet(new LinkedHashSet<>());
+    /** Probe names whose hardware-output rows are visible beneath the editable tracks. */
+    public final ObservableSet<String> enabledHardwareOutputs = FXCollections.observableSet(new LinkedHashSet<>());
+
+    /** Last simulator probe traces — kept separately from {@link #lastHardwareTraces} so both can render side-by-side. */
+    public final ObjectProperty<MultiProbeSignalTrace> lastSimulationTraces = new SimpleObjectProperty<>();
+    /** Last hardware probe traces — populated by the hardware run session. */
+    public final ObjectProperty<MultiProbeSignalTrace> lastHardwareTraces = new SimpleObjectProperty<>();
     /** Resolved config snapshot. Drives channel resolution + default amplitudes. */
     public final ObjectProperty<SimulationConfig> activeConfig = new SimpleObjectProperty<>();
     private ProjectNodeId originalSimConfigId;
@@ -117,6 +133,43 @@ public final class SequenceEditSession {
             var valid = new LinkedHashSet<String>();
             for (var t : tracks) valid.add(t.id());
             collapsedTrackIds.removeIf(id -> !valid.contains(id));
+        });
+        // Hardware traces are device-specific — keeping the previous device's
+        // probe trace around after the user picks a different (or no) config
+        // would render misleading rows. Clear the trace and any per-probe
+        // enables that no longer correspond to the new device's capabilities.
+        activeHardwareConfig.addListener((obs, oldCfg, newCfg) -> {
+            if (oldCfg == newCfg) return;
+            lastHardwareTraces.set(null);
+            // Drop enables that aren't valid for the new device. With no
+            // device, drop everything — all rows would render as "no trace
+            // available" placeholders, which is just visual noise.
+            if (newCfg == null) {
+                enabledHardwareOutputs.clear();
+            } else {
+                var plugin = HardwarePluginRegistry.byId(newCfg.config().pluginId()).orElse(null);
+                if (plugin != null) {
+                    var validProbes = new LinkedHashSet<>(plugin.capabilities().probeNames());
+                    enabledHardwareOutputs.removeIf(name -> !validProbes.contains(name));
+                }
+            }
+            // Drop hardware routings that aren't valid in the new context.
+            // Routings to a channel the new device doesn't expose wouldn't
+            // bake correctly anyway — better to surface that as an unrouted
+            // track in the editor than a hidden mismatch at run time.
+            var validOutputs = new LinkedHashSet<SequenceChannel>(availableHardwareChannels(newCfg));
+            for (int i = 0; i < tracks.size(); i++) {
+                var t = tracks.get(i);
+                var hwCh = t.hardwareChannel();
+                if (hwCh == null) continue;
+                if (!validOutputs.contains(hwCh)) {
+                    // Note: deliberately NOT routing through mutate() — this
+                    // is a side-effect of changing the bound config, not a
+                    // user edit, so it shouldn't be undoable on its own.
+                    tracks.set(i, t.withHardwareChannel(null));
+                }
+            }
+            bumpRevision();
         });
     }
 
@@ -301,10 +354,32 @@ public final class SequenceEditSession {
         mutate(() -> tracks.set(idx, tracks.get(idx).withName(newName == null ? "" : newName)));
     }
 
+    /** Backwards-compat alias: routes the simulator side. */
     public void setTrackOutputChannel(String trackId, SequenceChannel newChannel) {
+        setTrackSimChannel(trackId, newChannel);
+    }
+
+    public void setTrackSimChannel(String trackId, SequenceChannel newChannel) {
         int idx = indexOfTrack(trackId);
         if (idx < 0) return;
-        mutate(() -> tracks.set(idx, tracks.get(idx).withOutputChannel(newChannel)));
+        mutate(() -> tracks.set(idx, tracks.get(idx).withSimChannel(newChannel)));
+    }
+
+    public void setTrackHardwareChannel(String trackId, SequenceChannel newChannel) {
+        int idx = indexOfTrack(trackId);
+        if (idx < 0) return;
+        mutate(() -> tracks.set(idx, tracks.get(idx).withHardwareChannel(newChannel)));
+    }
+
+    /**
+     * List of addressable output channels for a hardware config — pulled from
+     * the bound plugin's capabilities. Returns an empty list when no hardware
+     * config is bound or the plugin can't be resolved.
+     */
+    public List<SequenceChannel> availableHardwareChannels(HardwareConfigDocument hwConfig) {
+        if (hwConfig == null || hwConfig.config() == null) return List.of();
+        var plugin = HardwarePluginRegistry.byId(hwConfig.config().pluginId()).orElse(null);
+        return plugin == null ? List.of() : plugin.capabilities().outputChannels();
     }
 
     public void reorderTrack(int fromIndex, int toIndex) {
@@ -700,14 +775,14 @@ public final class SequenceEditSession {
         double clipDuration = Math.max(dt.get() * 5, (viewEnd.get() - viewStart.get()) * 0.15);
         var track = findTrack(trackId);
         return SignalClip.freshCentred(trackId, kind, startTime, clipDuration,
-            track != null ? defaultAmplitudeForChannel(track.outputChannel()) : 1.0);
+            track != null ? defaultAmplitudeForChannel(track.simChannel()) : 1.0);
     }
 
     /** Create a clip with an explicit duration (used by click-and-drag creation). */
     public SignalClip createClipCentred(ClipKind kind, String trackId, double startTime, double duration) {
         var track = findTrack(trackId);
         return SignalClip.freshCentred(trackId, kind, startTime, duration,
-            track != null ? defaultAmplitudeForChannel(track.outputChannel()) : 1.0);
+            track != null ? defaultAmplitudeForChannel(track.simChannel()) : 1.0);
     }
 
     /**

@@ -3,7 +3,7 @@ package ax.xz.mri.ui.viewmodel;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
-import ax.xz.mri.model.simulation.BlochDataFactory;
+import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.service.simulation.BlochSimulator;
@@ -74,7 +74,7 @@ class GeometryShadingConsistencyTest {
         var repo = session.repository.get();
 
         var train = buildSimpleCpmg(2);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> {});
         var geometry = new GeometryViewModel();
@@ -120,7 +120,7 @@ class GeometryShadingConsistencyTest {
         var config = doc.config();
         var repo = session.repository.get();
         var train = buildSimpleCpmg(0);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> {});
         var geometry = new GeometryViewModel();

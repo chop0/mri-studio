@@ -124,6 +124,7 @@ public class StudioShell extends BorderPane {
         var newMenu = new Menu("New");
         newMenu.getItems().addAll(
             menuItem("Simulation Config\u2026", CommandId.NEW_SIM_CONFIG, null),
+            menuItem("Hardware Config\u2026", CommandId.NEW_HARDWARE_CONFIG, null),
             menuItem("Eigenfield\u2026", CommandId.NEW_EIGENFIELD, null),
             menuItem("Sequence\u2026", CommandId.NEW_SEQUENCE, null)
         );

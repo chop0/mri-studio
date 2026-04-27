@@ -3,7 +3,7 @@ package ax.xz.mri.model.simulation;
 /**
  * Declared spatial symmetry of an eigenfield script.
  *
- * <p>Used by {@link BlochDataFactory} to select the minimal grid that still
+ * <p>Used by {@link SimulationOutputFactory} to select the minimal grid that still
  * captures the field shape correctly. A script's declared symmetry is taken
  * on faith — if the DSL body violates it, the simulator will silently project
  * the field onto the wrong basis. Users who are unsure should pick

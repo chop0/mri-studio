@@ -63,7 +63,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
         );
 
         bindRedraw(
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().document.currentPulse,
             paneContext.session().viewport.tC,
             paneContext.session().points.entries,
@@ -185,7 +185,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
         g.setFill(StudioTheme.BG);
         g.fillRect(0, 0, width, height);
 
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         var pulse = paneContext.session().document.currentPulse.get();
         if (data == null || pulse == null || data.field() == null) return;
 
@@ -414,7 +414,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private void updateStatus(double mouseX, double mouseY) {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) {
             setPaneStatus("No geometry loaded");
             return;
@@ -563,7 +563,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private IsochromatEntry findEntry(double mouseX, double mouseY) {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null || !plotBounds().contains(mouseX, mouseY)) return null;
         double rMax = data.field().rMm[data.field().rMm.length - 1];
         double plotWidth = plotWidth(canvas.getWidth());
@@ -586,7 +586,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private double[] screenToRz(double mouseX, double mouseY) {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) {
             return new double[]{0, paneContext.session().geometry.zCenter.get()};
         }
@@ -637,7 +637,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private List<AxisScrubBar.Span> sliceSpans() {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) return List.of();
         double sliceHalf = (data.field().sliceHalf != null ? data.field().sliceHalf : 0.005) * 1e3;
         var spans = new ArrayList<AxisScrubBar.Span>();
@@ -683,7 +683,7 @@ public class GeometryPane extends CanvasWorkbenchPane {
     private boolean referenceHandleContains(double mouseX, double mouseY) {
         var reference = paneContext.session().reference;
         if (!reference.enabled.get()) return false;
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) return false;
         double plotWidth = plotWidth(canvas.getWidth());
         double plotHeight = plotHeight(canvas.getHeight());
@@ -699,13 +699,13 @@ public class GeometryPane extends CanvasWorkbenchPane {
     }
 
     private double zDomainStart() {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) return -80;
         return data.field().zMm[0];
     }
 
     private double zDomainEnd() {
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         if (data == null || data.field() == null) return 80;
         return data.field().zMm[data.field().zMm.length - 1];
     }

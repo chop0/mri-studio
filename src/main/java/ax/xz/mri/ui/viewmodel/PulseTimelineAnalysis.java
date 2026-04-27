@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.SignalTrace;
 
@@ -15,7 +15,7 @@ public final class PulseTimelineAnalysis {
     private PulseTimelineAnalysis() {
     }
 
-    public static Analysis compute(BlochData data, List<PulseSegment> pulse, SignalTrace signalTrace) {
+    public static Analysis compute(SimulationOutput data, List<PulseSegment> pulse, SignalTrace signalTrace) {
         if (data == null || data.field() == null || data.field().segments == null || pulse == null) {
             return EMPTY;
         }

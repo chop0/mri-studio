@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.ui.theme.StudioTheme;
 import ax.xz.mri.util.MathUtil;
@@ -289,7 +289,7 @@ public final class AxisScrubBar {
         g.restore();
     }
 
-    public static List<Span> rfSpans(BlochData data, List<PulseSegment> pulse, Color colour, double opacity) {
+    public static List<Span> rfSpans(SimulationOutput data, List<PulseSegment> pulse, Color colour, double opacity) {
         var spans = new ArrayList<Span>();
         if (data == null || data.field() == null || data.field().segments == null || pulse == null) return spans;
 

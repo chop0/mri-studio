@@ -398,7 +398,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         circuitSession = new CircuitEditSession(doc);
         savedCircuit = doc;
         // Schematic edits auto-commit in memory so downstream consumers
-        // (BlochDataFactory → SignalTraceComputer etc.) see the latest
+        // (SimulationOutputFactory → SignalTraceComputer etc.) see the latest
         // circuit immediately. The dirty pill still tracks whether the
         // committed state has been written to disk — see save().
         circuitSession.current.addListener((obs, oldDoc, newDoc) -> {

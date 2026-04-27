@@ -46,6 +46,11 @@ public final class ProjectSerialiser {
         return mapper.readValue(path.toFile(), type);
     }
 
+    /** Expose the underlying mapper for envelope-based serialisation paths. */
+    public ObjectMapper mapper() {
+        return mapper;
+    }
+
     private static Map<String, String> parseSimpleToml(Path path) throws IOException {
         var values = new LinkedHashMap<String, String>();
         for (var rawLine : Files.readAllLines(path)) {

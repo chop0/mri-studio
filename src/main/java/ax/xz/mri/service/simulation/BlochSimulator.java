@@ -3,7 +3,7 @@ package ax.xz.mri.service.simulation;
 import ax.xz.mri.model.field.FieldInterpolator;
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.field.FieldPoint;
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.simulation.MagnetisationState;
@@ -41,11 +41,11 @@ public final class BlochSimulator {
 
     public BlochSimulator() {}
 
-    public static Trajectory simulate(BlochData data, double rMm, double zMm, List<PulseSegment> pulse) {
+    public static Trajectory simulate(SimulationOutput data, double rMm, double zMm, List<PulseSegment> pulse) {
         return DEFAULT.simulateCached(data, rMm, zMm, pulse);
     }
 
-    public static MagnetisationState simulateTo(BlochData data, double rMm, double zMm, List<PulseSegment> pulse, double tcMicros) {
+    public static MagnetisationState simulateTo(SimulationOutput data, double rMm, double zMm, List<PulseSegment> pulse, double tcMicros) {
         return DEFAULT.simulateToCached(data, rMm, zMm, pulse, tcMicros);
     }
 
@@ -56,7 +56,7 @@ public final class BlochSimulator {
         DEFAULT.cursorCache.clear();
     }
 
-    private Trajectory simulateCached(BlochData data, double rMm, double zMm, List<PulseSegment> pulse) {
+    private Trajectory simulateCached(SimulationOutput data, double rMm, double zMm, List<PulseSegment> pulse) {
         if (data == null || data.field() == null || pulse == null) return null;
         var key = simulationKey(data.field(), pulse, rMm, zMm);
         var cached = trajectoryCache.get(key);
@@ -70,7 +70,7 @@ public final class BlochSimulator {
         return computed;
     }
 
-    private MagnetisationState simulateToCached(BlochData data, double rMm, double zMm, List<PulseSegment> pulse, double tcMicros) {
+    private MagnetisationState simulateToCached(SimulationOutput data, double rMm, double zMm, List<PulseSegment> pulse, double tcMicros) {
         if (data == null || data.field() == null || pulse == null) {
             return MagnetisationState.THERMAL_EQUILIBRIUM;
         }

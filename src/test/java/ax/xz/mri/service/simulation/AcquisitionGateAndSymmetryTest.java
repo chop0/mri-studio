@@ -10,7 +10,7 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.BlochDataFactory;
+import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.model.simulation.FieldSymmetry;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -89,7 +89,7 @@ class AcquisitionGateAndSymmetryTest {
         var secondHalf = new PulseSegment(filled(10, 0.0));
         var segments = List.of(new Segment(DT, 10, 0), new Segment(DT, 10, 0));
 
-        var data = BlochDataFactory.build(cfg, segments, repo);
+        var data = SimulationOutputFactory.build(cfg, segments, repo);
         var signals = SignalTraceComputer.computeAll(data, List.of(firstHalf, secondHalf));
         assertNotNull(signals);
         assertFalse(signals.byProbe().isEmpty(), "Probe should emit a trace");

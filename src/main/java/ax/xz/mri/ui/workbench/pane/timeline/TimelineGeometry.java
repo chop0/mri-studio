@@ -15,10 +15,21 @@ import java.util.Set;
  * {@code TimelineGeometry} each time it paints (or answers a hit-test query);
  * keeping it immutable and allocation-cheap means there's no mutable shared
  * state between paint and interaction code.
+ *
+ * <p>The plot is divided vertically into three bands, top→bottom:
+ * <ol>
+ *   <li><b>Editable tracks</b> — expanded + collapsed lanes, owned by the
+ *       sequence model and accepting all mouse interaction.</li>
+ *   <li><b>Output rows</b> — read-only signal-trace lanes shown when the user
+ *       has enabled probes via the Outputs popover. One fixed-height lane per
+ *       enabled probe per context (sim / hardware).</li>
+ *   <li><b>Time axis</b> — fixed {@code bottomPad} px at the bottom.</li>
+ * </ol>
  */
 public record TimelineGeometry(
     List<Track> tracks,
     Set<String> collapsedTrackIds,
+    List<OutputRow> outputRows,
     double viewStart,
     double viewEnd,
     double width,
@@ -26,7 +37,8 @@ public record TimelineGeometry(
     double labelWidth,
     double rightPad,
     double bottomPad,
-    double collapsedTrackHeight
+    double collapsedTrackHeight,
+    double outputRowHeight
 ) {
     /** Weight shared by every expanded track lane. */
     public static final double LANE_WEIGHT = 1.0;
@@ -34,6 +46,7 @@ public record TimelineGeometry(
     public TimelineGeometry {
         tracks = List.copyOf(tracks);
         collapsedTrackIds = Set.copyOf(collapsedTrackIds);
+        outputRows = List.copyOf(outputRows);
     }
 
     public boolean isCollapsed(Track track) {
@@ -80,8 +93,18 @@ public record TimelineGeometry(
         return h;
     }
 
+    /** Total vertical pixels reserved for the read-only output band, below the editable tracks. */
+    public double totalOutputBandHeight() {
+        return outputRows.size() * outputRowHeight;
+    }
+
+    /**
+     * Vertical space available for expanded editable lanes, after subtracting
+     * the collapsed lanes and the read-only output band. Always at least 1 px
+     * so divisions don't blow up on extreme aspect ratios.
+     */
     public double expandedAreaHeight() {
-        return Math.max(1, plotHeight() - totalCollapsedHeight());
+        return Math.max(1, plotHeight() - totalCollapsedHeight() - totalOutputBandHeight());
     }
 
     public double trackTop(int index) {
@@ -114,6 +137,18 @@ public record TimelineGeometry(
             cum += h;
         }
         return -1;
+    }
+
+    // ── Output band layout ──────────────────────────────────────────────────
+
+    /** Y of the top of the output band. */
+    public double outputBandTop() {
+        return plotBottom() - totalOutputBandHeight();
+    }
+
+    /** Y of the top of an individual output row. */
+    public double outputRowTop(int index) {
+        return outputBandTop() + index * outputRowHeight;
     }
 
     // ── Amplitude ↔ Y (per-track) ───────────────────────────────────────────

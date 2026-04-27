@@ -81,7 +81,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().reference.enabled,
             paneContext.session().reference.r,
             paneContext.session().reference.z,
@@ -142,7 +142,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
                 paneContext.session().viewport.tS.get(),
                 paneContext.session().viewport.tE.get(),
                 AxisScrubBar.rfSpans(
-                    paneContext.session().document.blochData.get(),
+                    paneContext.session().document.simulationOutput.get(),
                     paneContext.session().document.currentPulse.get(),
                     Color.web("#1565c0"),
                     0.20

@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.model;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.service.simulation.BlochSimulator;
 import ax.xz.mri.ui.theme.StudioTheme;
@@ -35,7 +35,7 @@ public class IsochromatCollectionModel {
     private final AtomicLong simulationGeneration = new AtomicLong();
     private Consumer<Throwable> errorSink = ex -> { };
 
-    private BlochData currentData;
+    private SimulationOutput currentData;
     private List<PulseSegment> currentPulse;
     private int colourIndex;
 
@@ -62,7 +62,7 @@ public class IsochromatCollectionModel {
         this.errorSink = sink != null ? sink : ex -> { };
     }
 
-    public void setContext(BlochData data, List<PulseSegment> pulse) {
+    public void setContext(SimulationOutput data, List<PulseSegment> pulse) {
         currentData = data;
         currentPulse = pulse;
         simulationGeneration.incrementAndGet();

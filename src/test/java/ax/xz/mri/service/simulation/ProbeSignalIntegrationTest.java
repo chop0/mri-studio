@@ -10,7 +10,7 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.BlochDataFactory;
+import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
@@ -65,7 +65,7 @@ class ProbeSignalIntegrationTest {
         var pulse = List.of(new PulseSegment(steps));
         var segments = List.of(new Segment(DT, 20, 0));
 
-        var data = BlochDataFactory.build(config, segments, repo);
+        var data = SimulationOutputFactory.build(config, segments, repo);
         var signals = SignalTraceComputer.computeAll(data, pulse);
         var trace = signals.byProbe().get("RX");
         assertNotNull(trace);

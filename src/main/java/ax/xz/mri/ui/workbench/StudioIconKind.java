@@ -7,5 +7,11 @@ public enum StudioIconKind {
     SEQUENCE,
     SIMULATION,
     EIGENFIELD,
-    MESSAGES
+    MESSAGES,
+    HARDWARE,
+    UNDO,
+    REDO,
+    RUN,
+    OUTPUTS,
+    SAVE
 }

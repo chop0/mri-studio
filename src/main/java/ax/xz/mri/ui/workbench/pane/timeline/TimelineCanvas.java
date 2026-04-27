@@ -1,13 +1,18 @@
 package ax.xz.mri.ui.workbench.pane.timeline;
 
 import ax.xz.mri.model.sequence.ClipKind;
+import ax.xz.mri.model.sequence.RunContext;
 import ax.xz.mri.model.sequence.Track;
+import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
 import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.ui.workbench.pane.WaveformCache;
 import javafx.animation.AnimationTimer;
 import javafx.scene.input.MouseEvent;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Multi-track DAW canvas for editing signal clips.
@@ -34,6 +39,8 @@ public final class TimelineCanvas extends ResizableCanvas {
     public static final double BOTTOM_PAD = 18;
     /** Height of a single collapsed-lane bar (px). */
     public static final double COLLAPSED_HEIGHT = 16;
+    /** Height of a single read-only output trace lane (px). */
+    public static final double OUTPUT_ROW_HEIGHT = 30;
 
     private final SequenceEditSession session;
     private final WaveformCache waveforms = new WaveformCache();
@@ -63,6 +70,14 @@ public final class TimelineCanvas extends ResizableCanvas {
         session.tracks.addListener((javafx.collections.ListChangeListener<Track>) c -> markDirty());
         session.collapsedTrackIds.addListener(
             (javafx.collections.SetChangeListener<String>) c -> markDirty());
+        // Output-band composition depends on (a) which probes the user enabled
+        // and (b) the latest run's traces; redraw whenever either changes.
+        session.enabledSimOutputs.addListener(
+            (javafx.collections.SetChangeListener<String>) c -> markDirty());
+        session.enabledHardwareOutputs.addListener(
+            (javafx.collections.SetChangeListener<String>) c -> markDirty());
+        session.lastSimulationTraces.addListener((obs, o, n) -> markDirty());
+        session.lastHardwareTraces.addListener((obs, o, n) -> markDirty());
 
         // Mouse wiring — one line per event, all logic lives in interaction.
         setOnMousePressed(interaction::onPress);
@@ -84,10 +99,15 @@ public final class TimelineCanvas extends ResizableCanvas {
         timer.start();
     }
 
-    /** Wire the global viewport (for cursor line display). */
+    /** Wire the global viewport (for cursor line display + scrub-bar dragging). */
     public void setViewport(ViewportViewModel vp) {
         this.viewport = vp;
         vp.tC.addListener((obs, o, n) -> markDirty());
+        // Scrub interactions on the time-axis strip push directly into the
+        // global viewport — every other pane that observes the cursor (trace
+        // panes, polar plot, etc.) reacts the same way it would for a
+        // programmatic seek.
+        interaction.setOnScrub(vp.tC::set);
     }
 
     /** Change the active clip-creation tool (passed in from the tool palette). */
@@ -101,11 +121,38 @@ public final class TimelineCanvas extends ResizableCanvas {
 
     private TimelineGeometry geometry() {
         return new TimelineGeometry(
-            session.tracks, session.collapsedTrackIds,
+            session.tracks, session.collapsedTrackIds, composeOutputRows(),
             session.viewStart.get(), session.viewEnd.get(),
             getWidth(), getHeight(),
-            LABEL_WIDTH, RIGHT_PAD, BOTTOM_PAD, COLLAPSED_HEIGHT
+            LABEL_WIDTH, RIGHT_PAD, BOTTOM_PAD, COLLAPSED_HEIGHT, OUTPUT_ROW_HEIGHT
         );
+    }
+
+    /**
+     * Compose the read-only output band: one row per probe whose name is in
+     * {@code enabledSimOutputs} (looked up against {@code lastSimulationTraces})
+     * plus the same for hardware. Sim rows render first, hardware rows below.
+     * Probes whose traces aren't available yet (run hasn't completed) are
+     * skipped — the row only appears when there's something to draw.
+     */
+    private List<OutputRow> composeOutputRows() {
+        var rows = new ArrayList<OutputRow>();
+        appendOutputRows(rows, RunContext.SIMULATION,
+            session.enabledSimOutputs, session.lastSimulationTraces.get());
+        appendOutputRows(rows, RunContext.HARDWARE,
+            session.enabledHardwareOutputs, session.lastHardwareTraces.get());
+        return rows;
+    }
+
+    private static void appendOutputRows(List<OutputRow> rows, RunContext context,
+                                         java.util.Set<String> enabled,
+                                         MultiProbeSignalTrace traces) {
+        if (enabled.isEmpty() || traces == null) return;
+        for (var name : enabled) {
+            var trace = traces.byProbe().get(name);
+            if (trace == null) continue;
+            rows.add(new OutputRow(name, context, trace));
+        }
     }
 
     private void paint() {

@@ -116,10 +116,10 @@ class SequenceStarterLibraryTest {
         assertEquals(5, seq.clips().size());
 
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF I"))
+            .filter(t -> t.simChannel().sourceName().equals("RF I"))
             .findFirst().orElseThrow();
         Track qTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF Q"))
+            .filter(t -> t.simChannel().sourceName().equals("RF Q"))
             .findFirst().orElseThrow();
 
         var sorted = seq.clips().stream()
@@ -137,7 +137,7 @@ class SequenceStarterLibraryTest {
     void cp_placesAllPulsesOnI() {
         var seq = starter("cp").build(config(), circuitWithRf());
         Track iTrack = seq.tracks().stream()
-            .filter(t -> t.outputChannel().sourceName().equals("RF I"))
+            .filter(t -> t.simChannel().sourceName().equals("RF I"))
             .findFirst().orElseThrow();
         for (var clip : seq.clips()) {
             assertEquals(iTrack.id(), clip.trackId(),

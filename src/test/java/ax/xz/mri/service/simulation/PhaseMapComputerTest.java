@@ -1,6 +1,6 @@
 package ax.xz.mri.service.simulation;
 
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,8 +9,8 @@ class PhaseMapComputerTest {
     @Test
     void phaseMapsIncludeSignalProjectionAlongsideExcitation() {
         var phaseMap = PhaseMapComputer.computePhaseZ(
-            TestBlochDataFactory.incoherentTransverseDocument(),
-            TestBlochDataFactory.freePrecessionPulse()
+            TestSimulationOutputFactory.incoherentTransverseDocument(),
+            TestSimulationOutputFactory.freePrecessionPulse()
         );
 
         boolean foundDifferentSignalProjection = false;

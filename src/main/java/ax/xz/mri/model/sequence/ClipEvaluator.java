@@ -9,25 +9,24 @@ import java.util.Map;
  * <p>Clips evaluate themselves ({@link SignalClip#evaluate(double)}); this
  * class adds the track→channel routing summation used by the renderer,
  * overview bar, and {@link ClipBaker}. Multiple tracks may route to the same
- * output channel; all their clips contribute additively.
+ * output channel; all their clips contribute additively. Tracks unrouted for
+ * the active {@link RunContext} contribute nothing.
  */
 public final class ClipEvaluator {
     private ClipEvaluator() {}
 
     /**
-     * Evaluate the total signal on an output channel at time {@code t}.
-     *
-     * <p>A clip contributes iff it belongs to a track whose {@code outputChannel}
-     * equals {@code channel}.
+     * Evaluate the total signal on an output channel at time {@code t} in the
+     * given context. A clip contributes iff its track's
+     * {@link Track#channelFor(RunContext)} equals {@code channel}.
      */
     public static double evaluateChannel(List<SignalClip> clips, List<Track> tracks,
-                                         SequenceChannel channel, double t) {
+                                         RunContext context, SequenceChannel channel, double t) {
         double sum = 0;
         for (var clip : clips) {
             var track = findTrackById(tracks, clip.trackId());
-            if (track != null && track.outputChannel().equals(channel)) {
-                sum += clip.evaluate(t);
-            }
+            if (track == null) continue;
+            if (channel.equals(track.channelFor(context))) sum += clip.evaluate(t);
         }
         return sum;
     }
@@ -37,13 +36,12 @@ public final class ClipEvaluator {
      * an O(n) lookup per clip). Used by the baker's inner loop.
      */
     public static double evaluateChannel(List<SignalClip> clips, Map<String, Track> tracksById,
-                                         SequenceChannel channel, double t) {
+                                         RunContext context, SequenceChannel channel, double t) {
         double sum = 0;
         for (var clip : clips) {
             var track = tracksById.get(clip.trackId());
-            if (track != null && track.outputChannel().equals(channel)) {
-                sum += clip.evaluate(t);
-            }
+            if (track == null) continue;
+            if (channel.equals(track.channelFor(context))) sum += clip.evaluate(t);
         }
         return sum;
     }

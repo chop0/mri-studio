@@ -64,7 +64,7 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tE,
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().document.currentPulse,
             paneContext.session().reference.enabled,
             paneContext.session().reference.r,
@@ -147,7 +147,7 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
                 paneContext.session().viewport.tS.get(),
                 paneContext.session().viewport.tE.get(),
                 AxisScrubBar.rfSpans(
-                    paneContext.session().document.blochData.get(),
+                    paneContext.session().document.simulationOutput.get(),
                     paneContext.session().document.currentPulse.get(),
                     Color.web("#1565c0"),
                     0.20
@@ -221,8 +221,8 @@ public class PhaseMapsWorkbenchPane extends CanvasWorkbenchPane {
             }
         }
 
-        if (viewModel.showSliceBounds() && paneContext.session().document.blochData.get() != null) {
-            var field = paneContext.session().document.blochData.get().field();
+        if (viewModel.showSliceBounds() && paneContext.session().document.simulationOutput.get() != null) {
+            var field = paneContext.session().document.simulationOutput.get().field();
             double sliceHalf = (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3;
             for (double zValue : new double[]{-sliceHalf, sliceHalf}) {
                 double y = rect.y() + rect.height() * (1 - (zValue - yMin) / (yMax - yMin));

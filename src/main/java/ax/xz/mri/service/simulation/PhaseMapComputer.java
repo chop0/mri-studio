@@ -1,6 +1,6 @@
 package ax.xz.mri.service.simulation;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.PhaseMapData;
 import ax.xz.mri.model.simulation.PhaseMapData.Cell;
@@ -16,7 +16,7 @@ public final class PhaseMapComputer {
     private PhaseMapComputer() {}
 
     /** Phase(z, t) heatmap: 50 z positions from −6 mm to +6 mm at r = 0. */
-    public static PhaseMapData computePhaseZ(BlochData data, List<PulseSegment> pulse) {
+    public static PhaseMapData computePhaseZ(SimulationOutput data, List<PulseSegment> pulse) {
         int nZ = 50;
         var yArr = new double[nZ];
         for (int i = 0; i < nZ; i++) yArr[i] = -6 + 12.0 * i / (nZ - 1);
@@ -24,14 +24,14 @@ public final class PhaseMapComputer {
     }
 
     /** Phase(r, t) heatmap: 20 r positions from 0 to 30 mm at z = 0. */
-    public static PhaseMapData computePhaseR(BlochData data, List<PulseSegment> pulse) {
+    public static PhaseMapData computePhaseR(SimulationOutput data, List<PulseSegment> pulse) {
         int nR = 20;
         var yArr = new double[nR];
         for (int i = 0; i < nR; i++) yArr[i] = 30.0 * i / (nR - 1);
         return compute(data, pulse, yArr, nR, false);
     }
 
-    private static PhaseMapData compute(BlochData data, List<PulseSegment> pulse,
+    private static PhaseMapData compute(SimulationOutput data, List<PulseSegment> pulse,
                                         double[] yArr, int nY, boolean varyZ) {
         var times = new double[nY][];
         var phases = new double[nY][];

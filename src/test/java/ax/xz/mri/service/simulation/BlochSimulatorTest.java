@@ -1,7 +1,7 @@
 package ax.xz.mri.service.simulation;
 
 import ax.xz.mri.model.simulation.MagnetisationState;
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -13,8 +13,8 @@ class BlochSimulatorTest {
     @Test
     void simulateCachesFullTrajectoriesForRepeatedRequests() {
         BlochSimulator.clearCachesForTests();
-        var data = TestBlochDataFactory.sampleDocument();
-        var pulse = TestBlochDataFactory.pulseA();
+        var data = TestSimulationOutputFactory.sampleDocument();
+        var pulse = TestSimulationOutputFactory.pulseA();
 
         var first = BlochSimulator.simulate(data, 0.0, 2.0, pulse);
         var second = BlochSimulator.simulate(data, 0.0, 2.0, pulse);
@@ -25,8 +25,8 @@ class BlochSimulatorTest {
     @Test
     void simulateToMatchesDiscreteTrajectorySamplingAcrossMixedCursorOrders() {
         BlochSimulator.clearCachesForTests();
-        var data = TestBlochDataFactory.sampleDocument();
-        var pulse = TestBlochDataFactory.pulseA();
+        var data = TestSimulationOutputFactory.sampleDocument();
+        var pulse = TestSimulationOutputFactory.pulseA();
         var trajectory = BlochSimulator.simulate(data, 15.0, -3.0, pulse);
         var sampleTimes = List.of(0.0, 0.4, 1.0, 1.7, 2.0, 0.9, 10.0);
 

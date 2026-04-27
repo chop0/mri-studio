@@ -27,6 +27,12 @@ public final class ExplorerTreeBuilder {
         }
         if (!simConfigs.getChildren().isEmpty()) root.getChildren().add(simConfigs);
 
+        var hardwareConfigs = branch("Hardware Configs", null, StudioIconKind.SIMULATION);
+        for (var configId : repository.hardwareConfigIds()) {
+            hardwareConfigs.getChildren().add(leaf(repository.node(configId), StudioIconKind.SIMULATION));
+        }
+        if (!hardwareConfigs.getChildren().isEmpty()) root.getChildren().add(hardwareConfigs);
+
         // Circuits are not a first-class browse target yet: they're always paired
         // with a sim-config, so the user reaches them via the config's editor.
 
@@ -49,7 +55,7 @@ public final class ExplorerTreeBuilder {
     private static StudioIconKind iconFor(ProjectNodeKind kind) {
         return switch (kind) {
             case SEQUENCE -> StudioIconKind.SEQUENCE;
-            case SIMULATION_CONFIG, CIRCUIT -> StudioIconKind.SIMULATION;
+            case SIMULATION_CONFIG, CIRCUIT, HARDWARE_CONFIG -> StudioIconKind.SIMULATION;
             case EIGENFIELD -> StudioIconKind.EIGENFIELD;
         };
     }

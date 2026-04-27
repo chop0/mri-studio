@@ -21,6 +21,7 @@ import javafx.scene.input.ScrollEvent;
 
 import java.util.LinkedHashSet;
 import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -42,11 +43,15 @@ public final class TimelineInteraction {
     private final Supplier<TimelineGeometry> geometrySupplier;
     private final Runnable onRedraw;
     private final Consumer<Cursor> onCursor;
+    /** Sink for time-axis scrubbing — pushed the new cursor time (μs) on drag. May be null. */
+    private DoubleConsumer onScrub = t -> {};
 
     private ClipDragState drag = ClipDragState.IDLE;
     private double snapGuideTime = Double.NaN;
     private ClipKind activeCreationKind;
     private ContextMenu activeMenu;
+    /** Set true while a primary-button drag started in the time-axis strip — drives playhead scrubbing. */
+    private boolean scrubbing;
 
     public TimelineInteraction(SequenceEditSession session,
                                Supplier<TimelineGeometry> geometrySupplier,
@@ -56,6 +61,11 @@ public final class TimelineInteraction {
         this.geometrySupplier = geometrySupplier;
         this.onRedraw = onRedraw;
         this.onCursor = onCursor;
+    }
+
+    /** Wire the time-axis scrub sink (called by the canvas after construction). */
+    public void setOnScrub(DoubleConsumer onScrub) {
+        this.onScrub = onScrub != null ? onScrub : t -> {};
     }
 
     public ClipDragState drag()       { return drag; }
@@ -71,6 +81,17 @@ public final class TimelineInteraction {
         dismissContextMenu();
         var geom = geometrySupplier.get();
         double mx = e.getX(), my = e.getY();
+
+        // Time-axis strip click: scrub the playhead. The strip lives below
+        // the editable + output bands, between plotBottom and the canvas
+        // height. A click sets the cursor; subsequent drag motion keeps
+        // updating it via the same scrubbing flag.
+        if (my >= geom.plotBottom() && mx >= geom.plotLeft() && mx <= geom.plotRight()) {
+            scrubbing = true;
+            onCursor.accept(Cursor.H_RESIZE);
+            scrubTo(geom, mx);
+            return;
+        }
 
         // Label column click: toggle collapse on the hit track.
         if (mx < geom.labelWidth()) {
@@ -119,6 +140,12 @@ public final class TimelineInteraction {
         double mx = e.getX(), my = e.getY();
         snapGuideTime = Double.NaN;
 
+        if (scrubbing) {
+            scrubTo(geom, mx);
+            onRedraw.run();
+            return;
+        }
+
         switch (drag) {
             case ClipDragState.Move m -> onMove(geom, m, mx, my);
             case ClipDragState.ResizeLeft rl -> onResizeLeft(geom, rl, mx);
@@ -139,6 +166,13 @@ public final class TimelineInteraction {
         snapGuideTime = Double.NaN;
         var geom = geometrySupplier.get();
 
+        if (scrubbing) {
+            scrubbing = false;
+            onCursor.accept(Cursor.DEFAULT);
+            onRedraw.run();
+            return;
+        }
+
         switch (drag) {
             case ClipDragState.CreateClip c -> finishCreate(c, geom, e.getX());
             case ClipDragState.RubberBand rb -> finishRubberBand(rb, geom, e);
@@ -150,11 +184,28 @@ public final class TimelineInteraction {
         onRedraw.run();
     }
 
+    /** Push a new cursor time clamped to the sequence's bounds, snapping to the editor grid. */
+    private void scrubTo(TimelineGeometry geom, double mouseX) {
+        double t = geom.xToTime(mouseX);
+        // Clamp to [0, totalDuration] so the playhead can't escape the edited
+        // region, then snap (the editor's own snapTime honours the user's
+        // snap settings — same UX as clip dragging).
+        t = Math.max(0, Math.min(session.totalDuration.get(), t));
+        if (session.snapEnabled.get()) t = session.snapTime(t);
+        onScrub.accept(t);
+    }
+
     public void onMouseMoved(MouseEvent e) {
         var geom = geometrySupplier.get();
         double mx = e.getX(), my = e.getY();
         if (mx < geom.labelWidth()) {
             onCursor.accept(Cursor.DEFAULT);
+            return;
+        }
+        // Hovering the time-axis strip shows the H_RESIZE cursor as a hint
+        // that this region is the playhead scrub bar.
+        if (my >= geom.plotBottom()) {
+            onCursor.accept(Cursor.H_RESIZE);
             return;
         }
         var hit = hitTest(geom, mx, my);
@@ -283,7 +334,7 @@ public final class TimelineInteraction {
         double deltaY = a.anchorY() - my;
         double h = geom.trackHeight(a.trackIndex());
         var track = geom.tracks().get(a.trackIndex());
-        double displayMax = TimelineRenderer.channelHardwareMax(session, track.outputChannel());
+        double displayMax = TimelineRenderer.channelHardwareMax(session, track.simChannel());
         double deltaAmp = (deltaY / (h * 0.42)) * displayMax;
         session.setClipAmplitude(a.clipId(), a.originalAmplitude() + deltaAmp);
     }
@@ -295,7 +346,7 @@ public final class TimelineInteraction {
         if (ti < 0) ti = 0;
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
         t = MathUtil.clamp01(t);
-        var outputChannel = geom.tracks().get(ti).outputChannel();
+        var outputChannel = geom.tracks().get(ti).simChannel();
         double displayMax = TimelineRenderer.channelDisplayMax(session, outputChannel);
         double v = clip.amplitude() != 0 ? geom.yToValue(ti, my, displayMax) / clip.amplitude() : 0;
         session.updateSplinePoint(sp.clipId(), sp.pointIndex(), new ClipShape.Spline.Point(t, v));
@@ -356,7 +407,7 @@ public final class TimelineInteraction {
 
         double top = geom.trackTop(ti);
         double h = geom.trackHeight(ti);
-        double displayMax = TimelineRenderer.channelDisplayMax(session, track.outputChannel());
+        double displayMax = TimelineRenderer.channelDisplayMax(session, track.simChannel());
 
         var trackClips = session.clipsOnTrack(track.id());
         for (int i = trackClips.size() - 1; i >= 0; i--) {
@@ -456,11 +507,12 @@ public final class TimelineInteraction {
         expandAll.setOnAction(ev -> { for (var t : geom.tracks()) session.setTrackCollapsed(t.id(), false); });
 
         var routeMenu = buildRouteTrackMenu(track);
+        var hardwareRouteMenu = buildHardwareRouteMenu(track);
         var addTrackMenu = buildAddTrackMenu("Add Track");
 
         var duplicate = new MenuItem("Duplicate Track");
         duplicate.setOnAction(ev -> {
-            var copy = session.addTrack(track.outputChannel(), track.name() + " copy");
+            var copy = session.addTrack(track.simChannel(), track.name() + " copy");
             // Copy the original's clips onto the new track.
             for (var c : session.clipsOnTrack(track.id())) {
                 session.addClip(c.withNewId().withTrack(copy.id()));
@@ -473,7 +525,7 @@ public final class TimelineInteraction {
         menu.getItems().addAll(
             toggle, rename,
             new SeparatorMenuItem(),
-            routeMenu, addTrackMenu, duplicate,
+            routeMenu, hardwareRouteMenu, addTrackMenu, duplicate,
             new SeparatorMenuItem(),
             collapseAll, expandAll,
             new SeparatorMenuItem(),
@@ -485,15 +537,47 @@ public final class TimelineInteraction {
         // "Send to …" reads naturally even when the user hasn't internalised the
         // DAW track / circuit voltage-source split: every item is the name of a
         // circuit source this track's waveform will drive.
-        var menu = new Menu("Send to voltage source");
+        var menu = new Menu("Send to voltage source (sim)");
         for (var channel : session.availableOutputChannels()) {
             var name = session.defaultTrackNameFor(channel);
             var item = new MenuItem(name);
-            item.setDisable(channel.equals(track.outputChannel()));
-            item.setOnAction(ev -> session.setTrackOutputChannel(track.id(), channel));
+            item.setDisable(channel.equals(track.simChannel()));
+            item.setOnAction(ev -> session.setTrackSimChannel(track.id(), channel));
             menu.getItems().add(item);
         }
         if (menu.getItems().isEmpty()) menu.setDisable(true);
+        return menu;
+    }
+
+    private Menu buildHardwareRouteMenu(Track track) {
+        var hwConfig = session.activeHardwareConfig.get();
+        var menu = new Menu("Send to hardware output");
+        if (hwConfig == null) {
+            var hint = new MenuItem("(no hardware config bound)");
+            hint.setDisable(true);
+            menu.getItems().add(hint);
+            return menu;
+        }
+        var channels = session.availableHardwareChannels(hwConfig);
+        if (channels.isEmpty()) {
+            var hint = new MenuItem("(plugin exposes no outputs)");
+            hint.setDisable(true);
+            menu.getItems().add(hint);
+            return menu;
+        }
+        var clearItem = new MenuItem("(unrouted)");
+        clearItem.setDisable(track.hardwareChannel() == null);
+        clearItem.setOnAction(ev -> session.setTrackHardwareChannel(track.id(), null));
+        menu.getItems().add(clearItem);
+        menu.getItems().add(new SeparatorMenuItem());
+        for (var channel : channels) {
+            var label = channel.subIndex() == 0 ? channel.sourceName()
+                                                : channel.sourceName() + "[" + channel.subIndex() + "]";
+            var item = new MenuItem(label);
+            item.setDisable(channel.equals(track.hardwareChannel()));
+            item.setOnAction(ev -> session.setTrackHardwareChannel(track.id(), channel));
+            menu.getItems().add(item);
+        }
         return menu;
     }
 
@@ -560,7 +644,7 @@ public final class TimelineInteraction {
         double t = (geom.xToTime(mx) - clip.startTime()) / clip.duration();
         t = MathUtil.clamp01(t);
         int ti = geom.trackAtY(my);
-        SequenceChannel outputChannel = ti >= 0 ? geom.tracks().get(ti).outputChannel() : null;
+        SequenceChannel outputChannel = ti >= 0 ? geom.tracks().get(ti).simChannel() : null;
         double displayMax = outputChannel != null
             ? TimelineRenderer.channelDisplayMax(session, outputChannel)
             : 1.0;

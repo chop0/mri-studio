@@ -10,6 +10,7 @@ public final class ProjectDisplayNames {
         return switch (node.kind()) {
             case SEQUENCE -> "Sequence: " + node.name();
             case SIMULATION_CONFIG -> "Simulation: " + node.name();
+            case HARDWARE_CONFIG -> "Hardware: " + node.name();
             case EIGENFIELD -> "Eigenfield: " + node.name();
             case CIRCUIT -> "Circuit: " + node.name();
         };

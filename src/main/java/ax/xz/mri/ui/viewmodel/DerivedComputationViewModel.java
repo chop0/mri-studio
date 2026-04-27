@@ -1,7 +1,8 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
+import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
 import ax.xz.mri.model.simulation.PhaseMapData;
 import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.service.simulation.PhaseMapComputer;
@@ -50,7 +51,7 @@ public class DerivedComputationViewModel {
         this.errorSink = sink != null ? sink : ex -> { };
     }
 
-    public void recompute(BlochData data, List<PulseSegment> pulse) {
+    public void recompute(SimulationOutput data, List<PulseSegment> pulse) {
         long currentGeneration = generation.incrementAndGet();
         if (data == null || pulse == null) {
             phaseMapZ.set(null);
@@ -87,6 +88,24 @@ public class DerivedComputationViewModel {
                     computing.set(false);
                 });
             }
+        });
+    }
+
+    /**
+     * Replace the derived state with traces produced directly by a hardware
+     * device. Phase maps stay null (they require the simulator's spatial state).
+     */
+    public void acceptProbeTraces(MultiProbeSignalTrace traces) {
+        // Cancel any in-flight computation; we want this snapshot to be the
+        // surviving state for the analysis panes.
+        long currentGeneration = generation.incrementAndGet();
+        uiDispatcher.accept(() -> {
+            if (currentGeneration != generation.get()) return;
+            phaseMapZ.set(null);
+            phaseMapR.set(null);
+            signalTrace.set(traces == null ? null : traces.primary());
+            errorMessage.set(null);
+            computing.set(false);
         });
     }
 

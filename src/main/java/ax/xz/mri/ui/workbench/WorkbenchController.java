@@ -188,6 +188,12 @@ public class WorkbenchController {
             new SimConfigEditorProvider(configDoc, session, this));
     }
 
+    /** Open a hardware config as a workspace tab. */
+    public void openHardwareConfigTab(ax.xz.mri.project.HardwareConfigDocument configDoc) {
+        openTab(configDoc.id().value(), configDoc.name(),
+            new HardwareConfigEditorProvider(configDoc, session, this));
+    }
+
     /** Open an eigenfield as a workspace tab. */
     public void openEigenfieldTab(EigenfieldDocument eigenfield) {
         openTab(eigenfield.id().value(), eigenfield.name(),
@@ -212,7 +218,7 @@ public class WorkbenchController {
             if (newTab.snapshot() != null) {
                 newTab.editor().restoreState(session, newTab.snapshot());
             } else {
-                var data = session.document.blochData.get();
+                var data = session.document.simulationOutput.get();
                 if (data != null && data.field() != null && data.field().zMm != null) {
                     session.geometry.fitVisibleRange(
                         data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
@@ -293,6 +299,15 @@ public class WorkbenchController {
             .map(WorkspaceTab::editor)
             .filter(SequenceEditorProvider.class::isInstance)
             .map(e -> ((SequenceEditorProvider) e).simSession)
+            .toList();
+    }
+
+    /** Get all open hardware run sessions (for the inspector's Run-on-Hardware button). */
+    public java.util.Collection<ax.xz.mri.ui.viewmodel.HardwareRunSession> allHardwareSessions() {
+        return openTabs.stream()
+            .map(WorkspaceTab::editor)
+            .filter(SequenceEditorProvider.class::isInstance)
+            .map(e -> ((SequenceEditorProvider) e).hardwareSession)
             .toList();
     }
 
@@ -718,6 +733,7 @@ public class WorkbenchController {
                 session.project.deleteSequence(n);
         }));
         commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Sim Config", this::newSimConfigWizard));
+        commandRegistry.register(new PaneAction(CommandId.NEW_HARDWARE_CONFIG, "New Hardware Config", this::newHardwareConfigWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_EIGENFIELD, "New Eigenfield", this::newEigenfieldWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_SEQUENCE, "New Sequence", this::newSequenceWizard));
     }
@@ -726,6 +742,13 @@ public class WorkbenchController {
         ax.xz.mri.ui.wizard.NewSimConfigWizard.show(mainStage, session.project).ifPresent(doc -> {
             session.project.selectNode(doc.id());
             openSimConfigTab(doc);
+        });
+    }
+
+    private void newHardwareConfigWizard() {
+        ax.xz.mri.ui.wizard.NewHardwareConfigWizard.show(mainStage, session.project).ifPresent(doc -> {
+            session.project.selectNode(doc.id());
+            openHardwareConfigTab(doc);
         });
     }
 
@@ -752,6 +775,7 @@ public class WorkbenchController {
     private void installWorkspaceSwitching() {
         session.project.setOnSequenceOpened(this::openSequenceTab);
         session.project.setOnSimConfigOpened(this::openSimConfigTab);
+        session.project.setOnHardwareConfigOpened(this::openHardwareConfigTab);
         session.project.setOnEigenfieldOpened(this::openEigenfieldTab);
     }
 

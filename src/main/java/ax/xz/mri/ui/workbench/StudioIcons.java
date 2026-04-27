@@ -11,6 +11,8 @@ public final class StudioIcons {
     private static final Color ACCENT = Color.web("#1976d2");
     private static final Color SOFT = Color.web("#dbe7f3");
     private static final Color SEQUENCE_TINT = Color.web("#2e7d32");
+    private static final Color HARDWARE_TINT = Color.web("#9333ea");
+    private static final Color RUN_TINT = Color.web("#147a3f");
 
     private StudioIcons() {}
 
@@ -27,6 +29,12 @@ public final class StudioIcons {
             case SIMULATION -> drawSimulation(g);
             case EIGENFIELD -> drawEigenfield(g);
             case MESSAGES -> drawMessages(g);
+            case HARDWARE -> drawHardware(g);
+            case UNDO -> drawUndo(g);
+            case REDO -> drawRedo(g);
+            case RUN -> drawRun(g);
+            case OUTPUTS -> drawOutputs(g);
+            case SAVE -> drawSave(g);
         }
         return canvas;
     }
@@ -91,5 +99,93 @@ public final class StudioIcons {
         g.strokeLine(9.3, 7.0, 12.0, 7.0);
         g.setStroke(INK);
         g.setFill(SOFT);
+    }
+
+    /** Chip silhouette: a square with leg pins on each side. */
+    private static void drawHardware(GraphicsContext g) {
+        g.setFill(SOFT);
+        g.fillRoundRect(3.5, 3.5, 7, 7, 1.2, 1.2);
+        g.setStroke(HARDWARE_TINT);
+        g.strokeRoundRect(3.5, 3.5, 7, 7, 1.2, 1.2);
+        // Pin legs
+        for (int i = 0; i < 3; i++) {
+            double t = 4.6 + i * 2.0;
+            g.strokeLine(t, 1.8, t, 3.5);     // top
+            g.strokeLine(t, 10.5, t, 12.2);   // bottom
+            g.strokeLine(1.8, t, 3.5, t);     // left
+            g.strokeLine(10.5, t, 12.2, t);   // right
+        }
+        // Centre dot
+        g.setFill(HARDWARE_TINT);
+        g.fillOval(6.4, 6.4, 1.4, 1.4);
+        g.setStroke(INK);
+        g.setFill(SOFT);
+    }
+
+    /** Curved arrow returning anti-clockwise. */
+    private static void drawUndo(GraphicsContext g) {
+        g.setStroke(INK);
+        g.setLineWidth(1.4);
+        g.strokeArc(2.5, 3.0, 9.0, 8.0, 30, 200, javafx.scene.shape.ArcType.OPEN);
+        g.strokeLine(2.6, 6.4, 4.4, 4.5);
+        g.strokeLine(2.6, 6.4, 5.0, 7.4);
+        g.setLineWidth(1.1);
+    }
+
+    /** Curved arrow returning clockwise. */
+    private static void drawRedo(GraphicsContext g) {
+        g.setStroke(INK);
+        g.setLineWidth(1.4);
+        g.strokeArc(2.5, 3.0, 9.0, 8.0, -50, 200, javafx.scene.shape.ArcType.OPEN);
+        g.strokeLine(11.4, 6.4, 9.6, 4.5);
+        g.strokeLine(11.4, 6.4, 9.0, 7.4);
+        g.setLineWidth(1.1);
+    }
+
+    /** Right-pointing solid triangle. */
+    private static void drawRun(GraphicsContext g) {
+        g.setFill(RUN_TINT);
+        g.fillPolygon(
+            new double[]{4.0, 4.0, 11.0},
+            new double[]{2.5, 11.5, 7.0},
+            3);
+        g.setStroke(INK);
+        g.strokePolygon(
+            new double[]{4.0, 4.0, 11.0},
+            new double[]{2.5, 11.5, 7.0},
+            3);
+    }
+
+    /** Stacked horizontal traces — output / signal lanes. */
+    private static void drawOutputs(GraphicsContext g) {
+        g.setStroke(ACCENT);
+        for (int row = 0; row < 3; row++) {
+            double y = 3.5 + row * 3.2;
+            g.strokeLine(2.0, y, 12.0, y);
+        }
+        // Wave on the middle row to suggest signal
+        double yMid = 3.5 + 3.2;
+        g.setStroke(RUN_TINT);
+        g.beginPath();
+        g.moveTo(2.0, yMid);
+        for (int i = 0; i <= 20; i++) {
+            double x = 2.0 + i * 0.5;
+            double y = yMid + Math.sin(i * 0.6) * 0.9;
+            g.lineTo(x, y);
+        }
+        g.stroke();
+        g.setStroke(INK);
+    }
+
+    /** Floppy-style save icon (rounded rect with a cutout slot). */
+    private static void drawSave(GraphicsContext g) {
+        g.setFill(SOFT);
+        g.fillRoundRect(2.0, 2.0, 10.0, 10.0, 1.6, 1.6);
+        g.setStroke(INK);
+        g.strokeRoundRect(2.0, 2.0, 10.0, 10.0, 1.6, 1.6);
+        g.setStroke(ACCENT);
+        g.strokeRect(4.0, 7.5, 6.0, 4.0);
+        g.strokeRect(4.5, 2.5, 5.0, 2.6);
+        g.setStroke(INK);
     }
 }

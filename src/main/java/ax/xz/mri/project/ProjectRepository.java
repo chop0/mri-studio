@@ -16,6 +16,7 @@ public final class ProjectRepository {
     private final Map<ProjectNodeId, ProjectNode> nodes = new LinkedHashMap<>();
     private final List<ProjectNodeId> sequenceIds = new ArrayList<>();
     private final List<ProjectNodeId> simConfigIds = new ArrayList<>();
+    private final List<ProjectNodeId> hardwareConfigIds = new ArrayList<>();
     private final List<ProjectNodeId> eigenfieldIds = new ArrayList<>();
     private final List<ProjectNodeId> circuitIds = new ArrayList<>();
 
@@ -41,6 +42,10 @@ public final class ProjectRepository {
 
     public List<ProjectNodeId> simConfigIds() {
         return List.copyOf(simConfigIds);
+    }
+
+    public List<ProjectNodeId> hardwareConfigIds() {
+        return List.copyOf(hardwareConfigIds);
     }
 
     public List<ProjectNodeId> eigenfieldIds() {
@@ -118,6 +123,42 @@ public final class ProjectRepository {
         var renamed = sc.withName(newName);
         nodes.put(configId, renamed);
         return renamed;
+    }
+
+    // --- Hardware configs ---
+
+    public void addHardwareConfig(HardwareConfigDocument config) {
+        nodes.put(config.id(), config);
+        if (!hardwareConfigIds.contains(config.id())) {
+            hardwareConfigIds.add(config.id());
+        }
+    }
+
+    public void removeHardwareConfig(ProjectNodeId configId) {
+        var node = nodes.get(configId);
+        if (!(node instanceof HardwareConfigDocument)) return;
+        nodes.remove(configId);
+        hardwareConfigIds.remove(configId);
+    }
+
+    public HardwareConfigDocument hardwareConfig(ProjectNodeId configId) {
+        var node = nodes.get(configId);
+        return node instanceof HardwareConfigDocument hc ? hc : null;
+    }
+
+    public HardwareConfigDocument renameHardwareConfig(ProjectNodeId configId, String newName) {
+        var node = nodes.get(configId);
+        if (!(node instanceof HardwareConfigDocument hc)) {
+            throw new IllegalArgumentException("Node " + configId + " is not a hardware config");
+        }
+        var renamed = hc.withName(newName);
+        nodes.put(configId, renamed);
+        return renamed;
+    }
+
+    public void updateHardwareConfig(HardwareConfigDocument updated) {
+        nodes.put(updated.id(), updated);
+        if (!hardwareConfigIds.contains(updated.id())) hardwareConfigIds.add(updated.id());
     }
 
     // --- Eigenfields ---

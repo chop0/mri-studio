@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.service.simulation.BlochSimulator;
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.Executor;
@@ -17,7 +17,7 @@ class GeometryShadingServiceTest {
         var geometry = new GeometryViewModel();
         var reference = new ReferenceFrameViewModel();
 
-        service.request(geometry, TestBlochDataFactory.incoherentTransverseDocument(), TestBlochDataFactory.freePrecessionPulse(), 0.0, reference);
+        service.request(geometry, TestSimulationOutputFactory.incoherentTransverseDocument(), TestSimulationOutputFactory.freePrecessionPulse(), 0.0, reference);
 
         var snapshot = geometry.shadingSnapshot.get();
         assertNotNull(snapshot);
@@ -40,8 +40,8 @@ class GeometryShadingServiceTest {
     void mpShadingHueCanBeViewedRelativeToReferenceFrame() {
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        var data = TestBlochDataFactory.sampleDocument();
-        var pulse = TestBlochDataFactory.pulseA();
+        var data = TestSimulationOutputFactory.sampleDocument();
+        var pulse = TestSimulationOutputFactory.pulseA();
 
         service.request(geometry, data, pulse, 10.0, new ReferenceFrameViewModel());
         var absolute = geometry.shadingSnapshot.get();
@@ -68,12 +68,12 @@ class GeometryShadingServiceTest {
         // and doesn't store any trajectories of its own.
         //
         // We exercise this by running a shading request against a long-step
-        // BlochData and checking that heap usage doesn't explode. The threshold
+        // SimulationOutput and checking that heap usage doesn't explode. The threshold
         // (400 MB of NEW allocation) is comfortably above what the rewritten
         // service needs and far below what the old code consumed.
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        var data = ax.xz.mri.support.TestBlochDataFactory.sampleDocument();
+        var data = ax.xz.mri.support.TestSimulationOutputFactory.sampleDocument();
 
         // Build a long pulse: 20 000 free-precession steps per segment, matching the
         // fixture's two-segment structure.

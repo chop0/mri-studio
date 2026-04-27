@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.model;
 
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -17,7 +17,7 @@ class IsochromatCollectionModelTest {
     void resetAddMoveDuplicateAndRemoveMaintainStableIdsAndSliceMembership() {
         var selection = new IsochromatSelectionModel();
         var points = new IsochromatCollectionModel(selection, Runnable::run, Runnable::run, () -> { });
-        points.setContext(TestBlochDataFactory.sampleDocument(), TestBlochDataFactory.pulseA());
+        points.setContext(TestSimulationOutputFactory.sampleDocument(), TestSimulationOutputFactory.pulseA());
 
         points.resetToDefaults();
         int defaults = points.entries.size();

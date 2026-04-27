@@ -129,7 +129,7 @@ public final class TimelineOverviewBar extends ResizableCanvas {
         for (var clip : session.clips) {
             var track = session.findTrack(clip.trackId());
             Color colour = track != null
-                ? ChannelPalette.colourFor(session, track.outputChannel())
+                ? ChannelPalette.colourFor(session, track.simChannel())
                 : Color.web("#5c6571");
             spans.add(new AxisScrubBar.Span(clip.startTime(), clip.endTime(), colour, 0.14));
         }
@@ -175,7 +175,8 @@ public final class TimelineOverviewBar extends ResizableCanvas {
             for (int ch = 0; ch < slots.size(); ch++) {
                 for (int px = 0; px < pixelCount; px++) {
                     double t = (px / (double) pixelCount) * domain;
-                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(clips, tracks, slots.get(ch), t);
+                    cachedChannelSamples[ch][px] = ClipEvaluator.evaluateChannel(
+                        clips, tracks, ax.xz.mri.model.sequence.RunContext.SIMULATION, slots.get(ch), t);
                 }
             }
         }

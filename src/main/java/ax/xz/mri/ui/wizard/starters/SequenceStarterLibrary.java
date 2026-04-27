@@ -170,7 +170,7 @@ public final class SequenceStarterLibrary {
 
     private static String trackIdFor(List<Track> tracks, String sourceName, int subIndex) {
         for (var t : tracks) {
-            var ch = t.outputChannel();
+            var ch = t.simChannel();
             if (sourceName.equals(ch.sourceName()) && ch.subIndex() == subIndex) return t.id();
         }
         return null;

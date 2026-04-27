@@ -6,7 +6,7 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.BlochDataFactory;
+import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -174,7 +174,7 @@ class CpmgIntegrationTest {
         var repo = session.repository.get();
 
         var train = buildCpmg(0);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         // On-resonance at the isocentre: no dephasing during the 30 µs pulse.
         var trajectory = BlochSimulator.simulate(data, 0.0, 0.0, train.pulse());
@@ -209,7 +209,7 @@ class CpmgIntegrationTest {
         installZAxisOffResonance(repo, config, "y-flip", 50e-6);
 
         var train = buildCpmg(1);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         // 10 mm off isocentre → ~134 µrad/µs off-resonance → 0.13 rad in 1 ms.
         var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
@@ -243,7 +243,7 @@ class CpmgIntegrationTest {
         installZAxisOffResonance(repo, config, "echo", 2e-3);
 
         var train = buildCpmg(1);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         double[] zSamples = {-10, -5, 0, 5, 10};
         var trajectories = new ArrayList<ax.xz.mri.model.simulation.Trajectory>();
@@ -307,7 +307,7 @@ class CpmgIntegrationTest {
 
         int nEchoes = 4;
         var train = buildCpmg(nEchoes);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
         var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
         assertNotNull(trajectory);
 
@@ -347,7 +347,7 @@ class CpmgIntegrationTest {
 
         int nEchoes = 40;
         var train = buildCpmg(nEchoes);
-        var data = BlochDataFactory.build(config, train.segments(), repo);
+        var data = SimulationOutputFactory.build(config, train.segments(), repo);
 
         for (var p : new double[][]{{0, 0}, {5, 5}, {0, 10}, {15, -5}}) {
             var trajectory = BlochSimulator.simulate(data, p[0], p[1], train.pulse());

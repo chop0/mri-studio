@@ -2,10 +2,12 @@ package ax.xz.mri.ui.workbench.pane.timeline;
 
 import ax.xz.mri.model.sequence.ClipKind;
 import ax.xz.mri.model.sequence.ClipShape;
+import ax.xz.mri.model.sequence.RunContext;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.AmplitudeKind;
+import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.workbench.pane.WaveformCache;
 import javafx.scene.canvas.GraphicsContext;
@@ -52,6 +54,16 @@ public final class TimelineRenderer {
     private static final Color ORPHAN_LABEL_BG = Color.web("#fce4e4");
     private static final Color ORPHAN_LABEL_FG = Color.web("#b42318");
 
+    // Output band — read-only signal-trace lanes below the editable tracks.
+    // Sim and hardware get their own faint tinted backgrounds so the user can
+    // tell at a glance which run produced which row.
+    private static final Color OUTPUT_BAND_DIVIDER = Color.web("#a4adb8");
+    private static final Color OUTPUT_LABEL_BG = Color.web("#f4f6fa");
+    private static final Color OUTPUT_TRACE_SIM = Color.web("#1565c0");
+    private static final Color OUTPUT_TRACE_HW = Color.web("#9333ea");
+    private static final Color OUTPUT_TINT_SIM = Color.color(0.082, 0.396, 0.753, 0.05);
+    private static final Color OUTPUT_TINT_HW = Color.color(0.576, 0.200, 0.918, 0.05);
+
     private static final Font LABEL_FONT = Font.font("SF Pro Text", FontWeight.BOLD, 10);
     private static final Font AXIS_FONT = Font.font("SF Mono", 9);
     private static final Font CLIP_LABEL_FONT = Font.font("SF Pro Text", FontWeight.MEDIUM, 9);
@@ -70,6 +82,7 @@ public final class TimelineRenderer {
         g.fillRect(0, 0, geom.width(), geom.height());
 
         paintTracks(g, geom, session, cache);
+        paintOutputBand(g, geom);
         paintOverlays(g, geom, drag);
         paintCursor(g, geom, cursorTime);
         paintSnapGuide(g, geom, snapGuideTime);
@@ -90,7 +103,7 @@ public final class TimelineRenderer {
             var track = tracks.get(i);
             double top = geom.trackTop(i);
             double h = geom.trackHeight(i);
-            var src = session.sourceForChannel(track.outputChannel());
+            var src = session.sourceForChannel(track.simChannel());
             boolean orphan = src == null;
 
             // Row background — alternating, with a faint tint if orphan.
@@ -186,7 +199,7 @@ public final class TimelineRenderer {
     private static void paintHardwareLimits(GraphicsContext g, TimelineGeometry geom,
                                             SequenceEditSession session,
                                             Track track, int trackIndex) {
-        double hwMax = channelHardwareMax(session, track.outputChannel());
+        double hwMax = channelHardwareMax(session, track.simChannel());
         if (hwMax <= 0) return;
         double displayMax = hwMax * 1.15;
         double yPos = geom.valueToY(trackIndex, hwMax, displayMax);
@@ -204,13 +217,13 @@ public final class TimelineRenderer {
         g.setFill(HW_LABEL);
         g.setFont(AXIS_FONT);
         g.setTextAlign(TextAlignment.LEFT);
-        g.fillText(formatAxisValue(session, track.outputChannel(), hwMax), pL + 4, yPos - 2);
+        g.fillText(formatAxisValue(session, track.simChannel(), hwMax), pL + 4, yPos - 2);
     }
 
     private static void paintCollapsedLane(GraphicsContext g, TimelineGeometry geom,
                                            Track track, SequenceEditSession session,
                                            double top, double h) {
-        Color base = ChannelPalette.colourFor(session, track.outputChannel());
+        Color base = ChannelPalette.colourFor(session, track.simChannel());
         var trackClips = session.clipsOnTrack(track.id());
         for (var clip : trackClips) {
             if (clip.endTime() < geom.viewStart() || clip.startTime() > geom.viewEnd()) continue;
@@ -228,8 +241,8 @@ public final class TimelineRenderer {
         var trackClips = session.clipsOnTrack(track.id());
         double top = geom.trackTop(trackIndex);
         double h = geom.trackHeight(trackIndex);
-        double displayMax = channelDisplayMax(session, track.outputChannel());
-        Color base = ChannelPalette.colourFor(session, track.outputChannel());
+        double displayMax = channelDisplayMax(session, track.simChannel());
+        Color base = ChannelPalette.colourFor(session, track.simChannel());
 
         for (var clip : trackClips) {
             if (clip.endTime() < geom.viewStart() || clip.startTime() > geom.viewEnd()) continue;
@@ -313,6 +326,127 @@ public final class TimelineRenderer {
         for (int i = 0; i <= samples; i++) {
             double x = x1 + ((double) i / samples) * w;
             double y = geom.valueToY(trackIndex, values[i], displayMax);
+            if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Output band (read-only probe traces shown beneath the editable tracks)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private static void paintOutputBand(GraphicsContext g, TimelineGeometry geom) {
+        var rows = geom.outputRows();
+        if (rows.isEmpty()) return;
+
+        double bandTop = geom.outputBandTop();
+        double pL = geom.plotLeft();
+        double pW = geom.plotWidth();
+        double labelW = geom.labelWidth();
+
+        // A single thicker divider line separates the editable area from the
+        // read-only band — visually unmistakable that everything below it is
+        // not editable.
+        g.setStroke(OUTPUT_BAND_DIVIDER);
+        g.setLineWidth(1.2);
+        g.strokeLine(0, bandTop - 0.5, geom.width(), bandTop - 0.5);
+        g.setLineWidth(1.0);
+
+        for (int i = 0; i < rows.size(); i++) {
+            var row = rows.get(i);
+            double top = geom.outputRowTop(i);
+            double h = geom.outputRowHeight();
+            paintOutputRow(g, row, top, h, pL, pW, labelW);
+            // Lane separator between consecutive output rows.
+            g.setStroke(LANE_BORDER);
+            g.setLineWidth(0.5);
+            g.strokeLine(0, top + h - 0.5, geom.width(), top + h - 0.5);
+        }
+    }
+
+    private static void paintOutputRow(GraphicsContext g, OutputRow row,
+                                       double top, double h,
+                                       double plotLeft, double plotWidth, double labelW) {
+        boolean sim = row.context() == RunContext.SIMULATION;
+        Color tint = sim ? OUTPUT_TINT_SIM : OUTPUT_TINT_HW;
+        Color trace = sim ? OUTPUT_TRACE_SIM : OUTPUT_TRACE_HW;
+
+        // Lane background — alternating sim/hw faint tint.
+        g.setFill(tint);
+        g.fillRect(plotLeft, top, plotWidth, h);
+
+        // Label column with a context badge ("S" / "H") + probe name.
+        g.setFill(OUTPUT_LABEL_BG);
+        g.fillRect(0, top, labelW - 1, h);
+        g.setStroke(LABEL_BORDER);
+        g.setLineWidth(0.5);
+        g.strokeLine(labelW - 0.5, top, labelW - 0.5, top + h);
+
+        double badgeX = 4;
+        double badgeY = top + h / 2 - 6;
+        g.setFill(trace);
+        g.fillRoundRect(badgeX, badgeY, 12, 12, 3, 3);
+        g.setFill(Color.WHITE);
+        g.setFont(KIND_BADGE_FONT);
+        g.setTextAlign(TextAlignment.CENTER);
+        g.fillText(sim ? "S" : "H", badgeX + 6, badgeY + 9);
+        g.setTextAlign(TextAlignment.LEFT);
+
+        g.setFill(AXIS_TEXT);
+        g.setFont(LABEL_FONT);
+        g.setTextAlign(TextAlignment.RIGHT);
+        g.fillText(row.label(), labelW - 6, top + h / 2 + 3);
+        g.setTextAlign(TextAlignment.LEFT);
+
+        // Zero line.
+        double mid = top + h / 2;
+        g.setStroke(ZERO_LINE);
+        g.setLineDashes(2, 3);
+        g.strokeLine(plotLeft, mid, plotLeft + plotWidth, mid);
+        g.setLineDashes();
+
+        paintTraceMagnitude(g, row.trace(), top, h, plotLeft, plotWidth, trace);
+    }
+
+    /**
+     * Render the magnitude envelope of a {@link SignalTrace} into a row's
+     * vertical band. Plots √(re²+im²) so a complex demodulated probe shows up
+     * as a positive envelope above the centreline. The full trace is mapped
+     * across the row's plot rect — there's no time-clipping against the editor
+     * viewport, because output rows track the run's full timeline regardless
+     * of the user's current zoom.
+     */
+    private static void paintTraceMagnitude(GraphicsContext g, SignalTrace trace,
+                                            double top, double h,
+                                            double plotLeft, double plotWidth, Color stroke) {
+        var pts = trace.points();
+        if (pts.isEmpty()) return;
+
+        double maxMag = 0;
+        for (var p : pts) {
+            double m = Math.hypot(p.real(), p.imag());
+            if (m > maxMag) maxMag = m;
+        }
+        if (maxMag <= 0) maxMag = 1;
+
+        double padding = 4;
+        double laneTop = top + padding;
+        double laneBottom = top + h - padding;
+        double laneHeight = laneBottom - laneTop;
+
+        double tStart = pts.getFirst().tMicros();
+        double tEnd = pts.getLast().tMicros();
+        double tSpan = Math.max(1e-9, tEnd - tStart);
+
+        g.setStroke(stroke);
+        g.setLineWidth(1.1);
+        g.beginPath();
+        for (int i = 0; i < pts.size(); i++) {
+            var p = pts.get(i);
+            double mag = Math.hypot(p.real(), p.imag());
+            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
+            // Map [0..maxMag] to [laneBottom..laneTop] — magnitude is non-negative.
+            double y = laneBottom - (mag / maxMag) * laneHeight;
             if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
         }
         g.stroke();

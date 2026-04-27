@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.simulation.SignalTrace;
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -11,8 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class PulseTimelineAnalysisTest {
     @Test
     void computesRfFreeAndMeasurementWindowsFromPulse() {
-        var document = TestBlochDataFactory.sampleDocument();
-        var pulse = TestBlochDataFactory.pulseA();
+        var document = TestSimulationOutputFactory.sampleDocument();
+        var pulse = TestSimulationOutputFactory.pulseA();
         var signal = new SignalTrace(List.of(
             new SignalTrace.Point(0.0, 0.0, 0.0),
             new SignalTrace.Point(2.0, 1.0, 0.0),

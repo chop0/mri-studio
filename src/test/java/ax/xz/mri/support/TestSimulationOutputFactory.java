@@ -7,7 +7,7 @@ import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.field.FieldMap;
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
@@ -29,21 +29,21 @@ import java.util.List;
  * RF coil for receive. Construction goes through the real
  * {@link CircuitCompiler} so tests exercise production code paths.
  */
-public final class TestBlochDataFactory {
-    private TestBlochDataFactory() {}
+public final class TestSimulationOutputFactory {
+    private TestSimulationOutputFactory() {}
 
     private static PulseStep step(double b1x, double b1y, double gx, double gz, double rfGate) {
         return new PulseStep(new double[]{b1x, b1y, gx, gz}, rfGate);
     }
 
-    public static BlochData sampleDocument() {
-        return new BlochData(sampleField());
+    public static SimulationOutput sampleDocument() {
+        return new SimulationOutput(sampleField());
     }
 
-    public static BlochData brokenDocumentMissingSegments() {
+    public static SimulationOutput brokenDocumentMissingSegments() {
         var field = sampleField();
         field.segments = null;
-        return new BlochData(field);
+        return new SimulationOutput(field);
     }
 
     public static List<PulseSegment> pulseA() {
@@ -72,8 +72,8 @@ public final class TestBlochDataFactory {
         );
     }
 
-    public static BlochData incoherentTransverseDocument() {
-        return new BlochData(incoherentField());
+    public static SimulationOutput incoherentTransverseDocument() {
+        return new SimulationOutput(incoherentField());
     }
 
     public static List<PulseSegment> freePrecessionPulse() {

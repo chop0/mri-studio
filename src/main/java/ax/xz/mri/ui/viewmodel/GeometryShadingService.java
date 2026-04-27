@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.Trajectory;
@@ -77,7 +77,7 @@ public class GeometryShadingService {
 
     public void request(
         GeometryViewModel geometry,
-        BlochData data,
+        SimulationOutput data,
         List<PulseSegment> pulse,
         double cursorTimeMicros,
         ReferenceFrameViewModel reference
@@ -135,6 +135,19 @@ public class GeometryShadingService {
         });
     }
 
+    /**
+     * Cancel any in-flight shading work and drop the current snapshot. Used
+     * when the active result switches to a hardware run with no spatial state.
+     */
+    public void clear(GeometryViewModel geometry) {
+        generation.incrementAndGet();
+        uiDispatcher.accept(() -> {
+            geometry.shadingSnapshot.set(null);
+            geometry.shadingComputing.set(false);
+            geometry.statusMessage.set(null);
+        });
+    }
+
     public void dispose() {
         disposer.run();
         prewarmPool.shutdownNow();
@@ -144,7 +157,7 @@ public class GeometryShadingService {
      * If this (data, pulse) pair hasn't been pre-warmed yet, do so now.
      * Runs to completion — pre-warm is NOT cancellable by generation advances.
      */
-    private void ensureWarmed(BlochData data, List<PulseSegment> pulse) {
+    private void ensureWarmed(SimulationOutput data, List<PulseSegment> pulse) {
         int dataTag = System.identityHashCode(data.field()) ^ System.identityHashCode(pulse);
         if (warmedDataTag == dataTag) return;
         prewarmCursorCache(data, pulse);
@@ -160,7 +173,7 @@ public class GeometryShadingService {
      * based on {@link #generation}, because skipping the work would leave the
      * cursor cache empty and every future scrub would start from scratch.
      */
-    private void prewarmCursorCache(BlochData data, List<PulseSegment> pulse) {
+    private void prewarmCursorCache(SimulationOutput data, List<PulseSegment> pulse) {
         var field = data.field();
         if (field.segments == null || field.segments.isEmpty()) return;
         double acc = 0;
@@ -196,7 +209,7 @@ public class GeometryShadingService {
      *         newer request and aborted early.
      */
     private GeometryShadingSnapshot computeSnapshot(
-        BlochData data,
+        SimulationOutput data,
         List<PulseSegment> pulse,
         double cursorTimeMicros,
         Trajectory referenceTrajectory,

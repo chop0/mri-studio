@@ -81,7 +81,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().reference.enabled,
             paneContext.session().reference.r,
             paneContext.session().reference.z,
@@ -352,7 +352,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
     private java.util.List<AxisScrubBar.Span> rfSpans() {
         return AxisScrubBar.rfSpans(
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get(),
             Color.web("#1565c0"),
             0.20
@@ -393,7 +393,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
     protected final PulseTimelineAnalysis.Analysis pulseTimelineAnalysis() {
         return PulseTimelineAnalysis.compute(
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get(),
             paneContext.session().derived.signalTrace.get()
         );

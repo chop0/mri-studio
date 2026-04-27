@@ -2,7 +2,7 @@ package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.field.FieldMap;
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CircuitCompiler;
@@ -19,14 +19,14 @@ import java.util.List;
  * constant baked into {@code staticBz} is the rotating-frame reference offset
  * {@code −B0ref}; everything else is dynamic.
  */
-public final class BlochDataFactory {
-    private BlochDataFactory() {}
+public final class SimulationOutputFactory {
+    private SimulationOutputFactory() {}
 
-    public static BlochData build(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
-        return new BlochData(buildFieldMap(config, segments, repository));
+    public static SimulationOutput build(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
+        return new SimulationOutput(buildFieldMap(config, segments, repository));
     }
 
-    public static BlochData build(SimulationConfig config, List<Segment> segments) {
+    public static SimulationOutput build(SimulationConfig config, List<Segment> segments) {
         return build(config, segments, null);
     }
 

@@ -1,21 +1,35 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.hardware.HardwarePluginRegistry;
+import ax.xz.mri.model.circuit.CircuitComponent;
+import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.SequenceDocument;
+import ax.xz.mri.ui.viewmodel.HardwareRunSession;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
 import ax.xz.mri.ui.workbench.PaneContext;
+import ax.xz.mri.ui.workbench.StudioIconKind;
+import ax.xz.mri.ui.workbench.StudioIcons;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineCanvas;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineOverviewBar;
 import ax.xz.mri.util.SiFormat;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.StringBinding;
+import javafx.collections.ObservableSet;
+import javafx.collections.SetChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBoxTreeItem;
+import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuButton;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Tooltip;
+import javafx.scene.control.TreeItem;
+import javafx.scene.control.TreeView;
+import javafx.scene.control.cell.CheckBoxTreeCell;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
@@ -25,30 +39,20 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.util.StringConverter;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Root pane for the clip-based sequence editor ("DAW").
  *
- * <h3>Layout</h3>
- * <pre>
- *   ┌──────────────────────────────────────────────────────────┐
- *   │ Toolbar (tools │ undo/redo │ zoom │ save)                │
- *   ├──────────────────────────────────────────────────────────┤
- *   │ Overview bar (clip spans + mini waveforms + window)      │
- *   ├──────────────────────────────────────────────────────────┤
- *   │                                                          │
- *   │ Timeline canvas (tracks + clips)                         │
- *   │                                                          │
- *   ├──────────────────────────────────────────────────────────┤
- *   │ Status strip (selection │ span │ dt │ cursor │ total)    │
- *   └──────────────────────────────────────────────────────────┘
- * </pre>
+ * <p>Layout (top to bottom):
+ * toolbar (tools, undo/redo, zoom, outputs, save) → overview bar →
+ * timeline canvas (editable tracks + read-only output rows) → status strip.
  *
- * <p>Everything here is pure composition: the pane owns the three view
- * components ({@link TimelineOverviewBar}, {@link TimelineCanvas},
- * {@link SequenceToolPalette}) and wires them to a single
- * {@link SequenceEditSession}. No rendering logic, no event handling beyond
- * keyboard shortcuts.
+ * <p>Hardware-run controls live in the inspector's "Hardware" section, not in
+ * this toolbar — see {@link InspectorPane}.
  */
 public final class SequenceEditorPane extends WorkbenchPane {
 
@@ -60,6 +64,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
     private final TimelineCanvas trackCanvas;
 
     private SequenceSimulationSession simSession;
+    private HardwareRunSession hardwareSession;
     private Runnable onTitleChanged;
     private String sequenceName = "";
 
@@ -67,7 +72,6 @@ public final class SequenceEditorPane extends WorkbenchPane {
         super(paneContext);
         setPaneTitle("Sequence Editor");
 
-        // ── Collaborators ───────────────────────────────────────────────────
         toolPalette  = new SequenceToolPalette(editSession);
         overviewBar  = new TimelineOverviewBar(editSession, paneContext.session().viewport);
         trackCanvas  = new TimelineCanvas(editSession);
@@ -80,7 +84,6 @@ public final class SequenceEditorPane extends WorkbenchPane {
         editSession.setRepositorySupplier(() -> paneContext.session().project.repository.get());
         editSession.revision.addListener((obs, o, n) -> notifyTitleChanged());
 
-        // ── Layout ──────────────────────────────────────────────────────────
         var root = new BorderPane();
         root.getStyleClass().add("sequence-editor");
         root.setTop(buildToolbar());
@@ -88,30 +91,21 @@ public final class SequenceEditorPane extends WorkbenchPane {
         root.setBottom(buildStatusStrip(paneContext));
         setPaneContent(root);
 
-        // ── Keyboard shortcuts ──────────────────────────────────────────────
         wireKeyboardShortcuts(root);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Toolbar (tools, undo/redo, zoom, save)
+    // Toolbar (tools, undo/redo, zoom, outputs, save)
     // ══════════════════════════════════════════════════════════════════════════
 
     private HBox buildToolbar() {
-        var undoBtn = new Button("\u21A9");
-        undoBtn.setTooltip(new Tooltip("Undo (\u2318Z)"));
+        var undoBtn = iconButton(StudioIconKind.UNDO, "Undo (⌘Z)", editSession::undo);
         undoBtn.disableProperty().bind(editSession.canUndoProperty().not());
-        undoBtn.setOnAction(e -> editSession.undo());
-        undoBtn.setFocusTraversable(false);
-        undoBtn.getStyleClass().add("seq-toolbar-button");
 
-        var redoBtn = new Button("\u21AA");
-        redoBtn.setTooltip(new Tooltip("Redo (\u2318\u21E7Z)"));
+        var redoBtn = iconButton(StudioIconKind.REDO, "Redo (⌘⇧Z)", editSession::redo);
         redoBtn.disableProperty().bind(editSession.canRedoProperty().not());
-        redoBtn.setOnAction(e -> editSession.redo());
-        redoBtn.setFocusTraversable(false);
-        redoBtn.getStyleClass().add("seq-toolbar-button");
 
-        var zoomOutBtn = new Button("\u2212");
+        var zoomOutBtn = new Button("-");
         zoomOutBtn.setTooltip(new Tooltip("Zoom out"));
         zoomOutBtn.setOnAction(e -> {
             double centre = (editSession.viewStart.get() + editSession.viewEnd.get()) / 2;
@@ -130,16 +124,19 @@ public final class SequenceEditorPane extends WorkbenchPane {
         zoomInBtn.getStyleClass().add("seq-toolbar-button");
 
         var fitBtn = new Button("Fit");
-        fitBtn.setTooltip(new Tooltip("Zoom to fit"));
+        fitBtn.setTooltip(new Tooltip("Zoom to fit (⌘F)"));
         fitBtn.setOnAction(e -> editSession.fitView());
         fitBtn.setFocusTraversable(false);
         fitBtn.getStyleClass().add("seq-toolbar-button");
 
         var saveBtn = new Button("Save");
-        saveBtn.setTooltip(new Tooltip("Save (\u2318S)"));
+        saveBtn.setGraphic(StudioIcons.create(StudioIconKind.SAVE));
+        saveBtn.setTooltip(new Tooltip("Save (⌘S)"));
         saveBtn.setOnAction(e -> saveSequence());
         saveBtn.setFocusTraversable(false);
         saveBtn.getStyleClass().addAll("seq-toolbar-button", "primary");
+
+        var outputsBtn = buildOutputsPopover();
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -150,6 +147,8 @@ public final class SequenceEditorPane extends WorkbenchPane {
             undoBtn, redoBtn,
             verticalSeparator(),
             zoomOutBtn, zoomInBtn, fitBtn,
+            verticalSeparator(),
+            outputsBtn,
             spacer,
             saveBtn
         );
@@ -157,6 +156,161 @@ public final class SequenceEditorPane extends WorkbenchPane {
         toolbar.setPadding(new Insets(3, 6, 3, 4));
         toolbar.getStyleClass().add("seq-toolbar");
         return toolbar;
+    }
+
+    /**
+     * Tree-select popover that drives which probe rows are rendered beneath
+     * the editable tracks. The tree groups per-probe checkboxes by run
+     * context: a "Simulation" parent toggles every sim probe, "Hardware"
+     * toggles every hardware probe, individual leaves toggle a single probe.
+     * State is bound directly to {@link SequenceEditSession#enabledSimOutputs}
+     * and {@link SequenceEditSession#enabledHardwareOutputs}; toggling a leaf
+     * triggers an immediate canvas repaint via the session's set listeners.
+     */
+    private MenuButton buildOutputsPopover() {
+        var btn = new MenuButton("Outputs");
+        btn.setGraphic(StudioIcons.create(StudioIconKind.OUTPUTS));
+        btn.setFocusTraversable(false);
+        btn.getStyleClass().add("seq-toolbar-button");
+        btn.setTooltip(new Tooltip("Show / hide read-only run output rows"));
+
+        var tree = new TreeView<OutputTreeNode>();
+        tree.setShowRoot(false);
+        // Custom cell factory: leaves are CheckBoxTreeItem (rendered with a
+        // checkbox); branches without children carry a plain TreeItem holding
+        // a hint, which we render as muted italic text without a checkbox.
+        tree.setCellFactory(tv -> new javafx.scene.control.cell.CheckBoxTreeCell<OutputTreeNode>(
+            item -> {
+                if (item instanceof CheckBoxTreeItem<OutputTreeNode> cb) return cb.selectedProperty();
+                return null;
+            },
+            new StringConverter<>() {
+                @Override public String toString(TreeItem<OutputTreeNode> item) {
+                    return item == null || item.getValue() == null ? "" : item.getValue().label();
+                }
+                @Override public TreeItem<OutputTreeNode> fromString(String s) { return null; }
+            }
+        ) {
+            @Override
+            public void updateItem(OutputTreeNode item, boolean empty) {
+                super.updateItem(item, empty);
+                var ti = getTreeItem();
+                if (item != null && ti != null && item.hint() && !(ti instanceof CheckBoxTreeItem<?>)) {
+                    setGraphic(null);
+                    setText(item.label());
+                    setStyle("-fx-text-fill: #7a8290; -fx-font-style: italic;");
+                    setDisable(true);
+                } else {
+                    setStyle("");
+                    setDisable(false);
+                }
+            }
+        });
+        tree.setPrefSize(220, 200);
+        tree.setRoot(buildOutputsTree());
+        // Rebuild the tree when the underlying probe set might change.
+        editSession.activeConfig.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
+        editSession.activeHardwareConfig.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
+        editSession.lastSimulationTraces.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
+        editSession.lastHardwareTraces.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
+
+        var item = new CustomMenuItem(tree);
+        item.setHideOnClick(false);
+        btn.getItems().add(item);
+        return btn;
+    }
+
+    /** Build the two-level tree: Simulation [...] / Hardware [...]. */
+    private TreeItem<OutputTreeNode> buildOutputsTree() {
+        var root = new TreeItem<>(new OutputTreeNode("Outputs", false));
+
+        var simNames = collectSimProbeNames();
+        if (!simNames.isEmpty()) root.getChildren().add(makeGroup("Simulation",
+            simNames, editSession.enabledSimOutputs));
+        else root.getChildren().add(emptyBranch("Simulation", "No probes in active config"));
+
+        var hwNames = collectHardwareProbeNames();
+        if (!hwNames.isEmpty()) root.getChildren().add(makeGroup("Hardware",
+            hwNames, editSession.enabledHardwareOutputs));
+        else root.getChildren().add(emptyBranch("Hardware", "No hardware config bound"));
+
+        return root;
+    }
+
+    private CheckBoxTreeItem<OutputTreeNode> makeGroup(String groupLabel,
+                                                       Set<String> probeNames,
+                                                       ObservableSet<String> backingSet) {
+        var group = new CheckBoxTreeItem<>(new OutputTreeNode(groupLabel, false));
+        group.setExpanded(true);
+        for (var name : probeNames) {
+            var leaf = new CheckBoxTreeItem<>(new OutputTreeNode(name, false));
+            leaf.setSelected(backingSet.contains(name));
+            // Two-way bind: leaf checkbox <-> backingSet membership.
+            leaf.selectedProperty().addListener((obs, o, n) -> {
+                if (Boolean.TRUE.equals(n)) backingSet.add(name);
+                else backingSet.remove(name);
+            });
+            backingSet.addListener((SetChangeListener<String>) c -> {
+                boolean shouldBeSelected = backingSet.contains(name);
+                if (leaf.isSelected() != shouldBeSelected) leaf.setSelected(shouldBeSelected);
+            });
+            group.getChildren().add(leaf);
+        }
+        return group;
+    }
+
+    /**
+     * Branch for a context that has no probes available — the single child is
+     * a plain {@link TreeItem} (not {@link CheckBoxTreeItem}) carrying a hint;
+     * the cell factory renders it as italic muted text without a checkbox.
+     */
+    private TreeItem<OutputTreeNode> emptyBranch(String groupLabel, String hint) {
+        var group = new TreeItem<>(new OutputTreeNode(groupLabel, false));
+        group.setExpanded(true);
+        group.getChildren().add(new TreeItem<>(new OutputTreeNode(hint, true)));
+        return group;
+    }
+
+    private Set<String> collectSimProbeNames() {
+        var out = new LinkedHashSet<String>();
+        var circuit = editSession.activeCircuit();
+        if (circuit != null) {
+            for (CircuitComponent.Probe p : circuit.probes()) out.add(p.name());
+        }
+        // Include probe names from the trace map even if the active circuit
+        // doesn't list them (stale traces from a previous config).
+        var traces = editSession.lastSimulationTraces.get();
+        if (traces != null) out.addAll(traces.byProbe().keySet());
+        return out;
+    }
+
+    private Set<String> collectHardwareProbeNames() {
+        var out = new LinkedHashSet<String>();
+        HardwareConfigDocument hwConfig = editSession.activeHardwareConfig.get();
+        if (hwConfig != null && hwConfig.config() != null) {
+            HardwarePluginRegistry.byId(hwConfig.config().pluginId()).ifPresent(plugin ->
+                out.addAll(plugin.capabilities().probeNames()));
+        }
+        var traces = editSession.lastHardwareTraces.get();
+        if (traces != null) out.addAll(traces.byProbe().keySet());
+        return out;
+    }
+
+    /**
+     * Internal value type for the Outputs tree — {@code hint} marks an
+     * informational placeholder (e.g. "No hardware config bound") so the
+     * cell factory can render it as italic muted text without a checkbox.
+     */
+    private record OutputTreeNode(String label, boolean hint) {}
+
+    private Button iconButton(StudioIconKind kind, String tooltip, Runnable action) {
+        var btn = new Button();
+        btn.setGraphic(StudioIcons.create(kind));
+        btn.setTooltip(new Tooltip(tooltip));
+        btn.setOnAction(e -> action.run());
+        btn.setFocusTraversable(false);
+        btn.getStyleClass().add("seq-toolbar-button");
+        return btn;
     }
 
     private Separator verticalSeparator() {
@@ -195,7 +349,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
             selection.setText(n == 0 ? "No selection" : (n == 1 ? "1 clip selected" : n + " clips selected"));
         };
         updateSel.run();
-        editSession.selectedClipIds.addListener((javafx.collections.SetChangeListener<String>) c -> updateSel.run());
+        editSession.selectedClipIds.addListener((SetChangeListener<String>) c -> updateSel.run());
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -276,7 +430,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // External API (matches the old pane)
+    // External API
     // ══════════════════════════════════════════════════════════════════════════
 
     /** Wire the simulation session (called by WorkbenchController after open). */
@@ -285,6 +439,14 @@ public final class SequenceEditorPane extends WorkbenchPane {
         editSession.applyActiveConfig(session.activeConfig.get());
         session.activeConfig.addListener((obs, o, n) -> editSession.applyActiveConfig(n));
     }
+
+    /** Wire the hardware run session (called once after construction). */
+    public void wireHardwareSession(HardwareRunSession session) {
+        this.hardwareSession = session;
+    }
+
+    /** Resolved hardware run session, if wired. Used by the inspector to surface the Run button. */
+    public HardwareRunSession hardwareSession() { return hardwareSession; }
 
     public void setOnTitleChanged(Runnable callback) { this.onTitleChanged = callback; }
 

@@ -257,7 +257,7 @@ public final class ClipInspectorSection {
 
         // Amplitude — with physical-peak readout driven by eigenfield metadata
         var track = session.findTrack(clip.trackId());
-        var ef = track != null ? session.eigenfieldForChannel(track.outputChannel()) : null;
+        var ef = track != null ? session.eigenfieldForChannel(track.simChannel()) : null;
         String units = ef != null ? ef.units() : "";
         var amp = nf().range(-1e6, 1e6).step(0.1).scientific().unit(units.isEmpty() ? "" : units);
         amp.setValue(clip.amplitude());
@@ -527,7 +527,7 @@ public final class ClipInspectorSection {
     private boolean isRfTrack(String trackId) {
         var track = session.findTrack(trackId);
         if (track == null) return false;
-        var src = session.sourceForChannel(track.outputChannel());
+        var src = session.sourceForChannel(track.simChannel());
         if (src == null) return false;
         var circuit = session.activeCircuit();
         if (circuit == null) return false;
@@ -599,7 +599,7 @@ public final class ClipInspectorSection {
             showInactivePreview(container, body, "Track not found.");
             return;
         }
-        var src = session.sourceForChannel(track.outputChannel());
+        var src = session.sourceForChannel(track.simChannel());
         if (src == null) {
             showInactivePreview(container, body, "Track has no driving voltage source.");
             return;

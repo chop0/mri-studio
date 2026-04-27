@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.workbench.pane;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.PhaseMapData;
 import ax.xz.mri.model.simulation.Trajectory;
@@ -74,7 +74,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             paneContext.session().viewport.tE,
             paneContext.session().viewport.tC,
             paneContext.session().viewport.maxTime,
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().document.currentPulse,
             paneContext.session().colouring.hueSource,
             paneContext.session().colouring.brightnessSource,
@@ -145,7 +145,10 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         g.setFill(BG);
         g.fillRect(0, 0, width, height);
         var phaseMap = dataProperty.get();
-        if (phaseMap == null) return;
+        if (phaseMap == null) {
+            paintUnavailablePlaceholder(g, width, height);
+            return;
+        }
 
         double tMin = paneContext.session().viewport.tS.get();
         double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
@@ -159,7 +162,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
         double[] referencePhaseOffsets = referencePhaseOffsets(phaseMap, referenceTrajectory);
         boolean[] signalProjectionAvailable = signalProjectionAvailability(
             phaseMap,
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get()
         );
         AxisScrubBar.draw(
@@ -215,8 +218,8 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             }
         }
 
-        if (viewModel.showSliceBounds() && paneContext.session().document.blochData.get() != null) {
-            var field = paneContext.session().document.blochData.get().field();
+        if (viewModel.showSliceBounds() && paneContext.session().document.simulationOutput.get() != null) {
+            var field = paneContext.session().document.simulationOutput.get().field();
             double sliceHalf = (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3;
             for (double zValue : new double[]{-sliceHalf, sliceHalf}) {
                 double y = PAD_TOP + plotHeight * (1 - (zValue - yMin) / (yMax - yMin));
@@ -342,7 +345,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
 
     private java.util.List<AxisScrubBar.Span> rfSpans() {
         return AxisScrubBar.rfSpans(
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get(),
             Color.web("#1565c0"),
             0.20
@@ -408,7 +411,7 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
 
     private static boolean[] signalProjectionAvailability(
         PhaseMapData phaseMap,
-        BlochData data,
+        SimulationOutput data,
         java.util.List<PulseSegment> pulse
     ) {
         if (phaseMap == null || data == null || data.field() == null || pulse == null) return new boolean[0];
@@ -429,5 +432,22 @@ public abstract class AbstractHeatMapPane extends CanvasWorkbenchPane {
             );
         }
         return available;
+    }
+
+    /**
+     * Centred placeholder shown when no spatial state is available — typically
+     * because the active run is a hardware run (no Bloch grid).
+     */
+    private void paintUnavailablePlaceholder(GraphicsContext g, double width, double height) {
+        boolean isHardware = paneContext.session().document.runResult.get()
+            instanceof ax.xz.mri.model.scenario.RunResult.Hardware;
+        String text = isHardware
+            ? "Spatial data unavailable for this hardware run"
+            : "No simulation data — run the sim to populate this view";
+        g.setFill(Color.web("#9aa2ad"));
+        g.setFont(javafx.scene.text.Font.font("SF Pro Text", 12));
+        g.setTextAlign(javafx.scene.text.TextAlignment.CENTER);
+        g.fillText(text, width / 2, height / 2);
+        g.setTextAlign(javafx.scene.text.TextAlignment.LEFT);
     }
 }

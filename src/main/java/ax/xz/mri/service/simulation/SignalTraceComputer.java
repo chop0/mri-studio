@@ -2,7 +2,7 @@ package ax.xz.mri.service.simulation;
 
 import ax.xz.mri.model.field.FieldInterpolator;
 import ax.xz.mri.model.field.FieldPoint;
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
 import ax.xz.mri.model.simulation.SignalTrace;
@@ -46,11 +46,11 @@ import java.util.Map;
 public final class SignalTraceComputer {
     private SignalTraceComputer() {}
 
-    public static SignalTrace compute(BlochData data, List<PulseSegment> pulse) {
+    public static SignalTrace compute(SimulationOutput data, List<PulseSegment> pulse) {
         return computeAll(data, pulse).primary();
     }
 
-    public static MultiProbeSignalTrace computeAll(BlochData data, List<PulseSegment> pulse) {
+    public static MultiProbeSignalTrace computeAll(SimulationOutput data, List<PulseSegment> pulse) {
         if (data == null || data.field() == null || pulse == null) return MultiProbeSignalTrace.empty();
         var f = data.field();
         var circuit = f.circuit;

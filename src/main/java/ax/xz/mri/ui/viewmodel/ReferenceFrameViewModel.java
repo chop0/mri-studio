@@ -1,6 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.Trajectory;
 import ax.xz.mri.service.simulation.BlochSimulator;
@@ -55,7 +55,7 @@ public class ReferenceFrameViewModel {
         generation.incrementAndGet();
     }
 
-    public void refresh(BlochData data, List<PulseSegment> pulse) {
+    public void refresh(SimulationOutput data, List<PulseSegment> pulse) {
         long currentGeneration = generation.incrementAndGet();
         if (!enabled.get() || data == null || pulse == null) {
             trajectory.set(null);

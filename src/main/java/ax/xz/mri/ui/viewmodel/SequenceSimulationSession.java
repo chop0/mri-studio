@@ -1,7 +1,9 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.simulation.BlochDataFactory;
+import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
+import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.service.simulation.SignalTraceComputer;
 import ax.xz.mri.project.SimulationConfigDocument;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
@@ -15,7 +17,7 @@ import java.util.TimerTask;
 /**
  * Manages live simulation for the sequence editor.
  *
- * <p>This is a thin bridge: it bakes the clip sequence, builds synthetic BlochData
+ * <p>This is a thin bridge: it bakes the clip sequence, builds synthetic SimulationOutput
  * from the active config, and pushes the result through
  * {@link StudioSession#loadSimulationResult} — the single entry point that feeds
  * all analysis panes. No local models, no generation counters, no races.
@@ -76,7 +78,7 @@ public final class SequenceSimulationSession {
         activeConfig.set(newConfig);
     }
 
-    /** Run simulation: bake sequence, build BlochData, push to analysis panes. */
+    /** Run simulation: bake sequence, build SimulationOutput, push to analysis panes. */
     public void simulate() {
         if (disposed) return;
         cancelPendingDebounce();
@@ -92,10 +94,15 @@ public final class SequenceSimulationSession {
             var doc = editSession.toDocument();
             var segments = doc.segments();
             var pulse = doc.pulse();
-            var data = BlochDataFactory.build(config, segments, projectSession.repository.get());
+            var data = SimulationOutputFactory.build(config, segments, projectSession.repository.get());
 
             // Push through the single unified path — this is the ONLY place data reaches the panes
             studioSession.loadSimulationResult(data, pulse);
+
+            // Cache the per-probe traces so the editor can render sim output rows
+            // independently of which run is currently focused on the analysis panes.
+            MultiProbeSignalTrace traces = SignalTraceComputer.computeAll(data, pulse);
+            editSession.lastSimulationTraces.set(traces);
 
             stale.set(false);
         } catch (RuntimeException | Error ex) {

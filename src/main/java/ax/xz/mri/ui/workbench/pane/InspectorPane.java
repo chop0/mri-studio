@@ -1,7 +1,10 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.hardware.HardwarePlugin;
+import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.ProjectNode;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SequenceDocument;
@@ -23,6 +26,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.TextInputDialog;
@@ -112,6 +116,7 @@ public final class InspectorPane extends WorkbenchPane {
         switch (node) {
             case SequenceDocument sequence -> populateSequence(sequence);
             case SimulationConfigDocument simConfig -> populateSimConfig(simConfig);
+            case HardwareConfigDocument hwConfig -> populateHardwareConfig(hwConfig);
             case EigenfieldDocument eigenfield -> {
                 content.getChildren().add(infoLine("Type", "Eigenfield"));
                 content.getChildren().add(infoLine("Name", eigenfield.name()));
@@ -217,7 +222,8 @@ public final class InspectorPane extends WorkbenchPane {
             });
 
             var simSession = findSimSessionForEditor(editSession);
-            var runBtn = new Button("\u25B6 Run");
+            var runBtn = new Button("Run");
+            runBtn.setGraphic(StudioIcons.create(StudioIconKind.RUN));
             runBtn.setOnAction(e -> { if (simSession != null) simSession.simulate(); });
             var autoToggle = new CheckBox("Auto-simulate");
             if (simSession != null) autoToggle.selectedProperty().bindBidirectional(simSession.autoSimulate);
@@ -230,7 +236,132 @@ public final class InspectorPane extends WorkbenchPane {
             );
         }
 
+        // ── Hardware section ────────────────────────────────────────────────
+        // Lives in the inspector (rather than the toolbar) so the user can
+        // pick a config and trigger a run from the same place they edit the
+        // sequence's other parameters.
+        box.getChildren().add(new Separator());
+        box.getChildren().add(buildHardwareSection(editSession));
+
         return box;
+    }
+
+    /**
+     * Hardware controls: pick a project hardware config from a combo, then
+     * (when one is bound) hit "Run on hardware" to push the baked sequence
+     * at the device. The combo lists every {@link HardwareConfigDocument} in
+     * the project plus a "(none)" entry so the user can detach.
+     */
+    private Node buildHardwareSection(SequenceEditSession editSession) {
+        var box = new VBox(8);
+        var title = new Label("Hardware");
+        title.getStyleClass().add("clip-inspector-section");
+        box.getChildren().add(title);
+
+        var repo = paneContext.session().project.repository.get();
+        var hwConfigs = repo.hardwareConfigIds().stream()
+            .map(id -> (HardwareConfigDocument) repo.node(id))
+            .filter(Objects::nonNull)
+            .toList();
+
+        if (hwConfigs.isEmpty()) {
+            var empty = new Label("No hardware configs. Create one via File menu.");
+            empty.getStyleClass().add("cfg-row-hint");
+            box.getChildren().add(empty);
+            return box;
+        }
+
+        final String NONE_LABEL = "(none)";
+        var combo = new ComboBox<String>();
+        combo.setPrefWidth(200);
+        combo.getItems().add(NONE_LABEL);
+        for (var hw : hwConfigs) combo.getItems().add(hw.name());
+
+        var hwSession = findHardwareSessionForEditor(editSession);
+
+        Runnable syncComboFromSession = () -> {
+            var active = editSession.activeHardwareConfig.get();
+            String target = active == null ? NONE_LABEL : active.name();
+            if (!Objects.equals(combo.getValue(), target)) {
+                var old = combo.getOnAction();
+                combo.setOnAction(null);
+                combo.setValue(target);
+                combo.setOnAction(old);
+            }
+        };
+        syncComboFromSession.run();
+        InvalidationListener hwListener = obs -> syncComboFromSession.run();
+        editSession.activeHardwareConfig.addListener(hwListener);
+        activeBindings.add(new ListenerBinding<>(editSession.activeHardwareConfig, hwListener));
+
+        combo.setOnAction(e -> {
+            var selected = combo.getValue();
+            HardwareConfigDocument target = null;
+            if (selected != null && !selected.equals(NONE_LABEL)) {
+                for (var hw : hwConfigs) {
+                    if (hw.name().equals(selected)) { target = hw; break; }
+                }
+            }
+            // Push through the run session so its active-config property and
+            // editSession.activeHardwareConfig stay in lockstep (the session
+            // mirrors back via its own listener). If no run session is
+            // attached, set the editSession view directly so the timeline
+            // routing menus still update.
+            if (hwSession != null) hwSession.activeConfig.set(target);
+            else editSession.activeHardwareConfig.set(target);
+        });
+        box.getChildren().add(row("Config", combo));
+
+        // Rebuild the run row in place each time the active config changes —
+        // when no config is bound we show a hint instead of a disabled button
+        // (a hint reads better than an inert button).
+        var runRow = new HBox(8);
+        runRow.setAlignment(Pos.CENTER_LEFT);
+        Runnable rebuildRunRow = () -> {
+            runRow.getChildren().clear();
+            var active = editSession.activeHardwareConfig.get();
+            if (active == null) {
+                var hint = new Label("Pick a config above to enable Run on hardware.");
+                hint.getStyleClass().add("cfg-row-hint");
+                runRow.getChildren().add(hint);
+                return;
+            }
+            var runHwBtn = new Button("Run on hardware");
+            runHwBtn.setGraphic(StudioIcons.create(StudioIconKind.RUN));
+            runHwBtn.setOnAction(e -> { if (hwSession != null) hwSession.run(); });
+            // Disable while a run is already in flight so we don't queue
+            // duplicate I/O at the device.
+            if (hwSession != null) runHwBtn.disableProperty().bind(hwSession.running);
+            runRow.getChildren().add(runHwBtn);
+        };
+        rebuildRunRow.run();
+        InvalidationListener runRowListener = obs -> rebuildRunRow.run();
+        editSession.activeHardwareConfig.addListener(runRowListener);
+        activeBindings.add(new ListenerBinding<>(editSession.activeHardwareConfig, runRowListener));
+        box.getChildren().add(runRow);
+
+        // Progress bar — only visible while a run is in flight. Driven by the
+        // run session's progress property; spans the section's full width.
+        if (hwSession != null) {
+            var progress = new ProgressBar();
+            progress.setMaxWidth(Double.MAX_VALUE);
+            progress.progressProperty().bind(hwSession.progress);
+            // Hide AND collapse the row when not running so the inspector
+            // doesn't reserve dead vertical space.
+            progress.visibleProperty().bind(hwSession.running);
+            progress.managedProperty().bind(hwSession.running);
+            box.getChildren().add(progress);
+        }
+
+        return box;
+    }
+
+    private ax.xz.mri.ui.viewmodel.HardwareRunSession findHardwareSessionForEditor(
+            SequenceEditSession editSession) {
+        return paneContext.controller().allHardwareSessions().stream()
+            .filter(s -> s.editSession == editSession)
+            .findFirst()
+            .orElse(null);
     }
 
     private ax.xz.mri.ui.viewmodel.SequenceSimulationSession findSimSessionForEditor(SequenceEditSession editSession) {
@@ -316,6 +447,53 @@ public final class InspectorPane extends WorkbenchPane {
         ));
     }
 
+    /**
+     * Inspector view for a {@link HardwareConfigDocument}. Embeds the plugin's
+     * own {@link ax.xz.mri.hardware.HardwareConfigEditor} so editing happens
+     * right in the navigator panel — no extra tab to manage. Live edits push
+     * back to the project via {@code updateHardwareConfig}.
+     */
+    private void populateHardwareConfig(HardwareConfigDocument hwConfig) {
+        var pluginId = hwConfig.config() != null ? hwConfig.config().pluginId() :
+                       (hwConfig.envelope() != null ? hwConfig.envelope().pluginId() : null);
+        var plugin = pluginId == null ? null : HardwarePluginRegistry.byId(pluginId).orElse(null);
+
+        content.getChildren().add(infoLine("Type", "Hardware Config"));
+        content.getChildren().add(infoLine("Name", hwConfig.name()));
+        content.getChildren().add(infoLine("Plugin", plugin != null ? plugin.displayName() : (pluginId == null ? "—" : pluginId)));
+
+        if (plugin != null) {
+            var caps = plugin.capabilities();
+            content.getChildren().add(infoLine("Outputs", String.valueOf(caps.outputChannels().size())));
+            content.getChildren().add(infoLine("Probes", String.valueOf(caps.probeNames().size())));
+            content.getChildren().add(infoLine("Max sample rate",
+                String.format("%.1f MS/s", caps.maxSampleRateHz() * 1e-6)));
+        } else {
+            var missing = new Label("Plugin not loaded — open a project that ships with this plugin to edit.");
+            missing.getStyleClass().add("cfg-row-warn");
+            missing.setWrapText(true);
+            content.getChildren().add(missing);
+        }
+
+        content.getChildren().add(new Separator());
+        content.getChildren().add(actionRow(
+            button("Open Editor", () -> paneContext.session().project.openNode(hwConfig.id())),
+            button("Rename", () -> renameHardwareConfig(hwConfig.id())),
+            button("Delete", () -> paneContext.session().project.deleteHardwareConfig(hwConfig.id()))
+        ));
+    }
+
+    private void renameHardwareConfig(ProjectNodeId configId) {
+        var repository = paneContext.session().project.repository.get();
+        if (!(repository.node(configId) instanceof HardwareConfigDocument hw)) return;
+        var dialog = new TextInputDialog(hw.name());
+        dialog.setTitle("Rename Hardware Config");
+        dialog.setHeaderText("Rename hardware config");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank())
+            .ifPresent(value -> paneContext.session().project.renameHardwareConfig(configId, value));
+    }
+
     private void populateCircuit(CircuitDocument circuit) {
         content.getChildren().add(infoLine("Type", "Circuit"));
         content.getChildren().add(infoLine("Name", circuit.name()));
@@ -341,7 +519,7 @@ public final class InspectorPane extends WorkbenchPane {
     private Node header(ProjectNode node) {
         var icon = switch (node.kind()) {
             case SEQUENCE -> StudioIcons.create(StudioIconKind.SEQUENCE);
-            case SIMULATION_CONFIG, CIRCUIT -> StudioIcons.create(StudioIconKind.SIMULATION);
+            case SIMULATION_CONFIG, CIRCUIT, HARDWARE_CONFIG -> StudioIcons.create(StudioIconKind.SIMULATION);
             case EIGENFIELD -> StudioIcons.create(StudioIconKind.EIGENFIELD);
         };
         var title = new Label(ProjectDisplayNames.label(node));

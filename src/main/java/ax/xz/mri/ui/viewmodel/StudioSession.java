@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.RunResult;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.ui.model.IsochromatCollectionModel;
 import ax.xz.mri.ui.model.IsochromatSelectionModel;
@@ -62,21 +63,43 @@ public class StudioSession {
     }
 
     /**
-     * The single entry point for feeding data to all analysis panes.
-     * Called by both the simulation session (primary) and the import path.
+     * The single entry point for feeding a {@link RunResult} to all analysis
+     * panes — called by the simulation session, the hardware run session, and
+     * the import path.
      *
-     * <p>Sets all analysis state in one shot — no listener cascades, no generation races.
-     * The order is carefully chosen: context first, then computation triggers.
+     * <p>Sets all analysis state in one shot — no listener cascades, no
+     * generation races. The order is carefully chosen: context first, then
+     * computation triggers. For a {@link RunResult.Hardware} run we set the
+     * pulse + probe traces and skip the simulator-only steps (spatial
+     * isochromat resimulation, derived field computations, reference-frame
+     * refresh) — those panes show a "Spatial data unavailable" placeholder.
      */
-    public void loadSimulationResult(BlochData data, List<PulseSegment> pulse) {
-        document.blochData.set(data);
-        document.currentPulse.set(pulse);
-        updateViewportBoundsPreservePosition(data);
-        points.setContext(data, pulse);
-        points.resimulateAll();
-        derived.recompute(data, pulse);
-        refreshReferenceFrame();
-        refreshGeometryShading();
+    public void loadRunResult(RunResult result) {
+        document.runResult.set(result);
+        if (result instanceof RunResult.Simulation sim) {
+            updateViewportBoundsPreservePosition(sim.output());
+            points.setContext(sim.output(), sim.pulse());
+            points.resimulateAll();
+            derived.recompute(sim.output(), sim.pulse());
+            refreshReferenceFrame();
+            refreshGeometryShading();
+        } else if (result instanceof RunResult.Hardware hw) {
+            updateViewportBoundsForHardware(hw.pulse());
+            points.setContext(null, null);
+            derived.acceptProbeTraces(hw.probeTraces());
+            reference.clear();
+            geometryShading.clear(geometry);
+        }
+    }
+
+    /**
+     * Backwards-compat convenience for callers that still produce a raw
+     * {@link SimulationOutput} + pulse pair. Wraps in a
+     * {@link RunResult.Simulation} and delegates to
+     * {@link #loadRunResult(RunResult)}.
+     */
+    public void loadSimulationResult(SimulationOutput data, List<PulseSegment> pulse) {
+        loadRunResult(new RunResult.Simulation(data, pulse));
     }
 
     /** Capture the full tool window state for the current document. */
@@ -123,20 +146,31 @@ public class StudioSession {
     }
 
     /**
-     * Push data to analysis panes for a tab switch without resetting tool state.
-     * Unlike loadSimulationResult, this does NOT reset points to defaults or recompute
-     * viewport bounds — the caller restores those from the document snapshot.
+     * Push a cached run result to the analysis panes for a tab switch without
+     * resetting tool state. Unlike {@link #loadRunResult(RunResult)}, this
+     * does not recompute viewport bounds — the caller restores those from
+     * the document snapshot.
      */
-    public void pushDataForTabSwitch(BlochData data, java.util.List<PulseSegment> pulse) {
-        document.blochData.set(data);
-        document.currentPulse.set(pulse);
-        if (data != null && pulse != null) {
-            points.setContext(data, pulse);
+    public void pushResultForTabSwitch(RunResult result) {
+        document.runResult.set(result);
+        if (result instanceof RunResult.Simulation sim
+                && sim.output() != null && sim.pulse() != null) {
+            points.setContext(sim.output(), sim.pulse());
             points.resimulateAll();
-            derived.recompute(data, pulse);
+            derived.recompute(sim.output(), sim.pulse());
             refreshReferenceFrame();
             refreshGeometryShading();
+        } else if (result instanceof RunResult.Hardware hw) {
+            points.setContext(null, null);
+            derived.acceptProbeTraces(hw.probeTraces());
+            reference.clear();
+            geometryShading.clear(geometry);
         }
+    }
+
+    /** Backwards-compat alias used by the legacy tab-switch caller. */
+    public void pushDataForTabSwitch(SimulationOutput data, java.util.List<PulseSegment> pulse) {
+        pushResultForTabSwitch(data == null ? null : new RunResult.Simulation(data, pulse));
     }
 
     public void dispose() {
@@ -146,7 +180,7 @@ public class StudioSession {
         reference.dispose();
     }
 
-    private void updateViewportBoundsPreservePosition(BlochData data) {
+    private void updateViewportBoundsPreservePosition(SimulationOutput data) {
         if (data == null || data.field() == null || data.field().segments == null) {
             viewport.setMaxTimePreservePosition(1000);
             return;
@@ -157,11 +191,22 @@ public class StudioSession {
         viewport.setMaxTimePreservePosition(total);
     }
 
+    private void updateViewportBoundsForHardware(List<PulseSegment> pulse) {
+        if (pulse == null || pulse.isEmpty()) {
+            viewport.setMaxTimePreservePosition(1000);
+            return;
+        }
+        // Without segment timing on a hardware run we approximate from step count;
+        // the device sample period is captured per-result by the plugin.
+        int steps = pulse.stream().mapToInt(p -> p.steps().size()).sum();
+        viewport.setMaxTimePreservePosition(Math.max(1000, steps));
+    }
+
     private void refreshGeometryShading() {
-        geometryShading.request(geometry, document.blochData.get(), document.currentPulse.get(), viewport.tC.get(), reference);
+        geometryShading.request(geometry, document.simulationOutput.get(), document.currentPulse.get(), viewport.tC.get(), reference);
     }
 
     private void refreshReferenceFrame() {
-        reference.refresh(document.blochData.get(), document.currentPulse.get());
+        reference.refresh(document.simulationOutput.get(), document.currentPulse.get());
     }
 }

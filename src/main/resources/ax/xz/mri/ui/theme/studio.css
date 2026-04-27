@@ -800,9 +800,6 @@
     -fx-border-radius: 3;
     -fx-text-fill: -studio-text;
     -fx-font-size: 11px;
-    -fx-padding: 2 10 2 10;
-    -fx-min-height: 22;
-    -fx-pref-height: 22;
     -fx-cursor: hand;
 }
 .seq-toolbar-button:hover    { -fx-background-color: linear-gradient(to bottom, #ffffff, #dbe4f0); -fx-border-color: -studio-border-strong; }

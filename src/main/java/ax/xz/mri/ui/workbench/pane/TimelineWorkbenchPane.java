@@ -83,7 +83,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
 
         bindRedraw(
             paneContext.session().document.currentPulse,
-            paneContext.session().document.blochData,
+            paneContext.session().document.simulationOutput,
             paneContext.session().derived.signalTrace,
             paneContext.session().viewport.tS,
             paneContext.session().viewport.tE,
@@ -181,7 +181,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
     @Override
     protected void paint(javafx.scene.canvas.GraphicsContext g, double width, double height) {
         var pulse = paneContext.session().document.currentPulse.get();
-        var data = paneContext.session().document.blochData.get();
+        var data = paneContext.session().document.simulationOutput.get();
         g.setFill(BG);
         g.fillRect(0, 0, width, height);
         if (pulse == null || data == null || data.field() == null) return;
@@ -591,7 +591,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
     private MeasurementHoverTarget findHoveredMeasurement(double mouseX, double mouseY, double mainTop, double trackHeight) {
         if (hoveredTrackIndex != 3) return null;
         var analysis = PulseTimelineAnalysis.compute(
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get(),
             paneContext.session().derived.signalTrace.get()
         );
@@ -618,7 +618,7 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         }
         double time = pixelToTime(mouseX);
         var analysis = PulseTimelineAnalysis.compute(
-            paneContext.session().document.blochData.get(),
+            paneContext.session().document.simulationOutput.get(),
             paneContext.session().document.currentPulse.get(),
             paneContext.session().derived.signalTrace.get()
         );

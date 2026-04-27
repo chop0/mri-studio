@@ -6,30 +6,30 @@ import ax.xz.mri.model.circuit.CircuitLayout;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CircuitCompiler;
-import ax.xz.mri.support.TestBlochDataFactory;
+import ax.xz.mri.support.TestSimulationOutputFactory;
 
 import java.util.List;
 
 public final class OptimisationTestSupport {
     private OptimisationTestSupport() {}
 
-    public static BlochData sampleDocument() {
-        return TestBlochDataFactory.sampleDocument();
+    public static SimulationOutput sampleDocument() {
+        return TestSimulationOutputFactory.sampleDocument();
     }
 
     public static List<PulseSegment> pulseA() {
-        return TestBlochDataFactory.pulseA();
+        return TestSimulationOutputFactory.pulseA();
     }
 
     public static List<PulseSegment> pulseB() {
-        return TestBlochDataFactory.pulseB();
+        return TestSimulationOutputFactory.pulseB();
     }
 
     public static SequenceTemplate finiteTemplateFor(List<PulseSegment> pulse) {

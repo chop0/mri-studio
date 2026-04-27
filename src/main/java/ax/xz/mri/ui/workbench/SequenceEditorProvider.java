@@ -1,10 +1,12 @@
 package ax.xz.mri.ui.workbench;
 
-import ax.xz.mri.model.scenario.BlochData;
+import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.ui.viewmodel.DocumentSnapshot;
+import ax.xz.mri.ui.viewmodel.HardwareRunSession;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
 import ax.xz.mri.ui.viewmodel.StudioSession;
@@ -32,6 +34,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	public final SequenceEditorPane editorPane;
 	public final SequenceEditSession editSession;
 	public final SequenceSimulationSession simSession;
+	public final HardwareRunSession hardwareSession;
 	private final javafx.scene.layout.BorderPane root;
 	private final HBox configStripContainer;
 	private final StudioSession sessionRef;
@@ -40,7 +43,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	private SimulationConfig savedConfig;
 
 	// Cached simulation result — restored on tab switch instead of re-simulating
-	public BlochData cachedBlochData;
+	public SimulationOutput cachedSimulationOutput;
 	public List<PulseSegment> cachedPulse;
 
 	public SequenceEditorProvider(SequenceDocument document, StudioSession session,
@@ -49,9 +52,24 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		this.editorPane = new SequenceEditorPane(new PaneContext(session, controller, PaneId.SEQUENCE_EDITOR));
 		this.editSession = editorPane.editSession();
 		this.simSession = new SequenceSimulationSession(editSession, session);
+		this.hardwareSession = new HardwareRunSession(editSession, session);
 
 		editorPane.open(document);
 		editorPane.wireSimSession(simSession);
+		editorPane.wireHardwareSession(hardwareSession);
+
+		// Restore last-used hardware config preference if persisted on the document.
+		var hwId = document.preferredHardwareConfigId();
+		if (hwId != null) {
+			var hw = session.project.repository.get().hardwareConfig(hwId);
+			if (hw != null) {
+				editSession.activeHardwareConfig.set(hw);
+				hardwareSession.activeConfig.set(hw);
+			}
+		}
+		// Mirror the active hardware config back onto the edit session so the
+		// track context-menu Route-to-Hardware submenu sees it.
+		hardwareSession.activeConfig.addListener((obs, o, n) -> editSession.activeHardwareConfig.set(n));
 
 		// Wire the edit session's config association to the sim session.
 		// When activeSimConfigId changes (via undo/redo or setActiveSimConfig),
@@ -121,8 +139,8 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	@Override
 	public void activate(StudioSession session) {
 		session.activeEditSession.set(editSession);
-		if (cachedBlochData != null) {
-			session.pushDataForTabSwitch(cachedBlochData, cachedPulse);
+		if (cachedSimulationOutput != null) {
+			session.pushDataForTabSwitch(cachedSimulationOutput, cachedPulse);
 		} else {
 			simSession.simulate();
 		}
@@ -130,7 +148,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 
 	@Override
 	public DocumentSnapshot captureState(StudioSession session) {
-		cachedBlochData = session.document.blochData.get();
+		cachedSimulationOutput = session.document.simulationOutput.get();
 		cachedPulse = session.document.currentPulse.get();
 		return session.captureToolSnapshot();
 	}
@@ -141,6 +159,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	@Override
 	public void dispose() {
 		simSession.dispose();
+		hardwareSession.dispose();
 		editorPane.dispose();
 	}
 

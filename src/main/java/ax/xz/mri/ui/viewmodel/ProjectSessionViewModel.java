@@ -5,7 +5,12 @@ import ax.xz.mri.model.sequence.ClipBaker;
 import ax.xz.mri.ui.wizard.starters.SequenceStarter;
 import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
+import ax.xz.mri.hardware.HardwareConfig;
+import ax.xz.mri.hardware.HardwareException;
+import ax.xz.mri.hardware.HardwarePlugin;
+import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.ProjectManifest;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectRepository;
@@ -37,6 +42,7 @@ public final class ProjectSessionViewModel {
     private final ProjectSerialiser serialiser = new ProjectSerialiser();
 
     private Consumer<SimulationConfigDocument> onSimConfigOpened;
+    private Consumer<HardwareConfigDocument> onHardwareConfigOpened;
     private Consumer<SequenceDocument> onSequenceOpened;
     private Consumer<EigenfieldDocument> onEigenfieldOpened;
     private BiConsumer<ProjectNodeId, ProjectNodeId> onNodeSelected;
@@ -49,6 +55,9 @@ public final class ProjectSessionViewModel {
 
     public void setOnSimConfigOpened(Consumer<SimulationConfigDocument> callback) {
         this.onSimConfigOpened = callback;
+    }
+    public void setOnHardwareConfigOpened(Consumer<HardwareConfigDocument> callback) {
+        this.onHardwareConfigOpened = callback;
     }
     public void setOnSequenceOpened(Consumer<SequenceDocument> callback) {
         this.onSequenceOpened = callback;
@@ -108,6 +117,19 @@ public final class ProjectSessionViewModel {
         }
         cleanupDeletedDirs(root.resolve("circuits"), currentCircuitSlugs);
 
+        var currentHardwareSlugs = new HashSet<String>();
+        for (var configId : repo.hardwareConfigIds()) {
+            var config = (HardwareConfigDocument) repo.node(configId);
+            String hSlug = slug(config.name());
+            currentHardwareSlugs.add(hSlug);
+            // Persist the envelope explicitly so the plugin's typed config can survive without
+            // global Jackson subtype registration (see HardwareConfigEnvelope).
+            var envelope = config.serialise(serialiser.mapper());
+            var stored = HardwareConfigDocument.fromJson(config.id(), config.name(), envelope);
+            serialiser.writeJson(root.resolve("hardware").resolve(hSlug).resolve("hardware.json"), stored);
+        }
+        cleanupDeletedDirs(root.resolve("hardware"), currentHardwareSlugs);
+
         explorer.refresh();
     }
 
@@ -159,6 +181,21 @@ public final class ProjectSessionViewModel {
             }
         }
 
+        var hardwareDir = root.resolve("hardware");
+        if (Files.isDirectory(hardwareDir)) {
+            try (var files = Files.walk(hardwareDir)) {
+                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("hardware.json")).toList()) {
+                    var stored = serialiser.readJson(path, HardwareConfigDocument.class);
+                    try {
+                        loadedRepository.addHardwareConfig(stored.resolve(serialiser.mapper()));
+                    } catch (HardwareException ex) {
+                        // Plugin missing or config malformed — skip with a warning.
+                        System.err.println("Failed to load hardware config " + path + ": " + ex.getMessage());
+                    }
+                }
+            }
+        }
+
         var sequencesDir = root.resolve("sequences");
         if (Files.isDirectory(sequencesDir)) {
             try (var files = Files.walk(sequencesDir)) {
@@ -198,6 +235,10 @@ public final class ProjectSessionViewModel {
             case SimulationConfigDocument simConfig -> {
                 inspector.inspectedNodeId.set(nodeId);
                 if (onSimConfigOpened != null) onSimConfigOpened.accept(simConfig);
+            }
+            case HardwareConfigDocument hwConfig -> {
+                inspector.inspectedNodeId.set(nodeId);
+                if (onHardwareConfigOpened != null) onHardwareConfigOpened.accept(hwConfig);
             }
             case EigenfieldDocument eigen -> {
                 inspector.inspectedNodeId.set(nodeId);
@@ -253,6 +294,43 @@ public final class ProjectSessionViewModel {
 
     public void renameSimConfig(ProjectNodeId configId, String newName) {
         repository.get().renameSimConfig(configId, newName);
+        explorer.refresh();
+        selectNode(configId);
+        saveProjectQuietly();
+    }
+
+    /** Create a fresh hardware config bound to the given plugin id, with that plugin's defaults. */
+    public HardwareConfigDocument createHardwareConfig(String name, String pluginId) {
+        var plugin = HardwarePluginRegistry.byId(pluginId).orElseThrow(() ->
+            new IllegalArgumentException("No hardware plugin registered for id: " + pluginId));
+        return createHardwareConfig(name, plugin, plugin.defaultConfig());
+    }
+
+    /** Create a hardware config with an explicit (already-edited) {@link HardwareConfig}. */
+    public HardwareConfigDocument createHardwareConfig(String name, HardwarePlugin plugin, HardwareConfig config) {
+        var doc = HardwareConfigDocument.of(new ProjectNodeId("hwcfg-" + UUID.randomUUID()), name, config);
+        repository.get().addHardwareConfig(doc);
+        explorer.refresh();
+        saveProjectQuietly();
+        return doc;
+    }
+
+    public void updateHardwareConfig(HardwareConfigDocument updated) {
+        repository.get().updateHardwareConfig(updated);
+        saveProjectQuietly();
+    }
+
+    public void deleteHardwareConfig(ProjectNodeId configId) {
+        repository.get().removeHardwareConfig(configId);
+        if (configId.equals(inspector.inspectedNodeId.get())) {
+            inspector.inspectedNodeId.set(null);
+        }
+        explorer.refresh();
+        saveProjectQuietly();
+    }
+
+    public void renameHardwareConfig(ProjectNodeId configId, String newName) {
+        repository.get().renameHardwareConfig(configId, newName);
         explorer.refresh();
         selectNode(configId);
         saveProjectQuietly();
