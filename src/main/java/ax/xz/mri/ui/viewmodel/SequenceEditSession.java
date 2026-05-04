@@ -87,19 +87,42 @@ public final class SequenceEditSession {
     public final ObservableSet<String> collapsedTrackIds = FXCollections.observableSet(new LinkedHashSet<>());
 
     // ── Viewport (μs) ───────────────────────────────────────────────────────
-    public final DoubleProperty viewStart = new SimpleDoubleProperty(0);
-    public final DoubleProperty viewEnd = new SimpleDoubleProperty(DEFAULT_DURATION);
+    /**
+     * Shared viewport state. Production wires the studio's global
+     * {@link ViewportViewModel} via {@link #setViewport}; tests get the
+     * default private instance so they don't need to know about it.
+     */
+    private ViewportViewModel viewport = new ViewportViewModel();
 
     // ── Active simulation config ────────────────────────────────────────────
     public final ObjectProperty<ProjectNodeId> activeSimConfigId = new SimpleObjectProperty<>();
 
-    /** Currently bound hardware config for this sequence — drives "Run on hardware" + the routing menus. */
-    public final ObjectProperty<HardwareConfigDocument> activeHardwareConfig = new SimpleObjectProperty<>();
+    /**
+     * Currently bound hardware config for this sequence — drives "Run on hardware"
+     * + the routing menus.
+     *
+     * <p>This is the <em>id</em>, not the document. The document is resolved through
+     * the project repository on demand via {@link #activeHardwareConfigDoc()}. Holding
+     * a doc reference here is a state-management trap: when the repo replaces the
+     * document (rename, save, in-place edit), every cached reference goes stale, the
+     * UI shows the old name, and re-binding through "==" comparisons silently fails.
+     * The id is stable across all those mutations.
+     */
+    public final ObjectProperty<ProjectNodeId> activeHardwareConfigId = new SimpleObjectProperty<>();
 
     /** Whether to show the read-only sim probe-output rows beneath the editable tracks. */
     public final ObservableSet<String> enabledSimOutputs = FXCollections.observableSet(new LinkedHashSet<>());
     /** Probe names whose hardware-output rows are visible beneath the editable tracks. */
     public final ObservableSet<String> enabledHardwareOutputs = FXCollections.observableSet(new LinkedHashSet<>());
+
+    /**
+     * Per-row height (px) for the read-only output band. View-level (not
+     * undoable, not persisted to the document) — the user adjusts it by
+     * dragging the divider above the output band in the timeline canvas.
+     * Defaults match the historical fixed value so existing layouts don't
+     * jump on first open.
+     */
+    public final DoubleProperty outputRowHeight = new SimpleDoubleProperty(30.0);
 
     /** Last simulator probe traces — kept separately from {@link #lastHardwareTraces} so both can render side-by-side. */
     public final ObjectProperty<MultiProbeSignalTrace> lastSimulationTraces = new SimpleObjectProperty<>();
@@ -125,6 +148,14 @@ public final class SequenceEditSession {
     public ReadOnlyBooleanProperty canUndoProperty() { return canUndo; }
     public ReadOnlyBooleanProperty canRedoProperty() { return canRedo; }
 
+    public ViewportViewModel viewport() { return viewport; }
+
+    /** Wire the studio's shared viewport. Production calls this once after construction. */
+    public void setViewport(ViewportViewModel viewport) {
+        this.viewport = viewport;
+        viewport.setMaxTimePreservePosition(totalDuration.get());
+    }
+
     public SequenceEditSession() {
         // When the active config changes we do NOT stomp the user's track
         // arrangement — tracks are state. We only prune collapse-state entries
@@ -138,19 +169,28 @@ public final class SequenceEditSession {
         // probe trace around after the user picks a different (or no) config
         // would render misleading rows. Clear the trace and any per-probe
         // enables that no longer correspond to the new device's capabilities.
-        activeHardwareConfig.addListener((obs, oldCfg, newCfg) -> {
-            if (oldCfg == newCfg) return;
+        //
+        // Listening on the id (not the doc) means in-place edits to the same
+        // bound config don't pointlessly clear traces or rebind probe enables —
+        // the binding hasn't changed, only the device's settings have.
+        activeHardwareConfigId.addListener((obs, oldId, newId) -> {
+            if (Objects.equals(oldId, newId)) return;
             lastHardwareTraces.set(null);
+            var newCfg = activeHardwareConfigDoc();
             // Drop enables that aren't valid for the new device. With no
             // device, drop everything — all rows would render as "no trace
             // available" placeholders, which is just visual noise.
-            if (newCfg == null) {
+            if (newCfg == null || newCfg.config() == null) {
                 enabledHardwareOutputs.clear();
             } else {
                 var plugin = HardwarePluginRegistry.byId(newCfg.config().pluginId()).orElse(null);
                 if (plugin != null) {
                     var validProbes = new LinkedHashSet<>(plugin.capabilities().probeNames());
                     enabledHardwareOutputs.removeIf(name -> !validProbes.contains(name));
+                    // Auto-enable every advertised probe when a config is freshly
+                    // bound — otherwise the trace pane has nothing to plot until
+                    // the user finds the Outputs popover and ticks it themselves.
+                    enabledHardwareOutputs.addAll(validProbes);
                 }
             }
             // Drop hardware routings that aren't valid in the new context.
@@ -191,8 +231,8 @@ public final class SequenceEditSession {
 
         selectedClipIds.clear();
         primarySelectedClipId.set(null);
-        viewStart.set(0);
-        viewEnd.set(totalDuration.get());
+        viewport.setMaxTimePreservePosition(totalDuration.get());
+        viewport.fitViewportToData();
         undoStack.clear();
         redoStack.clear();
         canUndo.set(false);
@@ -209,7 +249,8 @@ public final class SequenceEditSession {
         return new SequenceDocument(
             orig.id(), orig.name(),
             baked.segments(), baked.pulseSegments(),
-            clipSeq, activeSimConfigId.get()
+            clipSeq, activeSimConfigId.get(),
+            activeHardwareConfigId.get()
         );
     }
 
@@ -217,11 +258,27 @@ public final class SequenceEditSession {
         var orig = originalDocument.get();
         if (orig == null) return false;
         if (!Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
+        if (!Objects.equals(activeHardwareConfigId.get(), orig.preferredHardwareConfigId())) return true;
         var origClipSeq = orig.clipSequence();
         return !clips.equals(origClipSeq.clips())
             || !tracks.equals(origClipSeq.tracks())
             || dt.get() != origClipSeq.dt()
             || totalDuration.get() != origClipSeq.totalDuration();
+    }
+
+    /**
+     * Resolve the currently bound hardware config document via the project
+     * repository. Returns {@code null} if nothing is bound, the binding points
+     * to an unknown id (e.g. the config was deleted), or no repository
+     * supplier is wired. The result is always fresh — never a cached reference
+     * that could go stale after a rename or in-place edit.
+     */
+    public HardwareConfigDocument activeHardwareConfigDoc() {
+        var id = activeHardwareConfigId.get();
+        if (id == null) return null;
+        var repo = repositorySupplier.get();
+        if (repo == null) return null;
+        return repo.hardwareConfig(id);
     }
 
     /** Establish the "last-saved" config baseline after a load. */
@@ -345,6 +402,22 @@ public final class SequenceEditSession {
             if (primarySelectedClipId.get() != null && findClip(primarySelectedClipId.get()) == null) {
                 primarySelectedClipId.set(selectedClipIds.isEmpty() ? null : selectedClipIds.iterator().next());
             }
+        });
+    }
+
+    /**
+     * Move a track to a different position in the lane stack. {@code newIndex}
+     * is interpreted as the destination index <em>after</em> removal — passing
+     * the track's current index is a no-op.
+     */
+    public void reorderTrack(String trackId, int newIndex) {
+        int from = indexOfTrack(trackId);
+        if (from < 0) return;
+        int to = MathUtil.clamp(newIndex, 0, tracks.size() - 1);
+        if (from == to) return;
+        mutate(() -> {
+            var moved = tracks.remove(from);
+            tracks.add(to, moved);
         });
     }
 
@@ -640,7 +713,9 @@ public final class SequenceEditSession {
         if (duration <= 0) return;
         mutate(() -> {
             totalDuration.set(duration);
-            if (viewEnd.get() > duration) viewEnd.set(duration);
+            // Push the new bound into the viewport; normalize() handles
+            // clamping vS/vE/tS/tE to fit if they overhung the old maxTime.
+            viewport.setMaxTimePreservePosition(duration);
         });
     }
 
@@ -723,7 +798,7 @@ public final class SequenceEditSession {
 
     public double snapTime(double rawTime) {
         if (!snapEnabled.get()) return rawTime;
-        double viewSpan = viewEnd.get() - viewStart.get();
+        double viewSpan = viewport.vE.get() - viewport.vS.get();
         double threshold = viewSpan * SNAP_THRESHOLD_FRACTION;
 
         double bestSnap = rawTime;
@@ -745,34 +820,12 @@ public final class SequenceEditSession {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Viewport helpers
-    // ══════════════════════════════════════════════════════════════════════════
-
-    public void zoomViewAround(double centreTime, double factor) {
-        double span = viewEnd.get() - viewStart.get();
-        double newSpan = Math.max(dt.get() * 2, Math.min(span * factor, totalDuration.get() * 4));
-        double newStart = centreTime - (centreTime - viewStart.get()) / span * newSpan;
-        viewStart.set(Math.max(0, newStart));
-        viewEnd.set(newStart + newSpan);
-    }
-
-    public void panView(double deltaMicros) {
-        viewStart.set(viewStart.get() + deltaMicros);
-        viewEnd.set(viewEnd.get() + deltaMicros);
-    }
-
-    public void fitView() {
-        viewStart.set(0);
-        viewEnd.set(totalDuration.get());
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
     // Clip creation factories
     // ══════════════════════════════════════════════════════════════════════════
 
     /** Create a clip with a duration equal to 15 % of the visible span. */
     public SignalClip createDefaultClip(ClipKind kind, String trackId, double startTime) {
-        double clipDuration = Math.max(dt.get() * 5, (viewEnd.get() - viewStart.get()) * 0.15);
+        double clipDuration = Math.max(dt.get() * 5, (viewport.vE.get() - viewport.vS.get()) * 0.15);
         var track = findTrack(trackId);
         return SignalClip.freshCentred(trackId, kind, startTime, clipDuration,
             track != null ? defaultAmplitudeForChannel(track.simChannel()) : 1.0);

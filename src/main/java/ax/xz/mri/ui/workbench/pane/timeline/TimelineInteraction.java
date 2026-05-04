@@ -6,6 +6,7 @@ import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.util.MathUtil;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
@@ -34,12 +35,15 @@ import java.util.function.Supplier;
  */
 public final class TimelineInteraction {
 
-    private static final double EDGE_HIT_WIDTH = 6;
+    private static final double EDGE_HIT_WIDTH = 8;
     private static final double SPLINE_HIT_RADIUS = 6;
     private static final double COLLAPSE_HIT_X = 2;
     private static final double COLLAPSE_HIT_W = 14;
+    /** Vertical thickness (px, half above + half below) of the resize hit band on the output-band divider. */
+    private static final double DIVIDER_HIT_PAD = 4;
 
     private final SequenceEditSession session;
+    private final ViewportViewModel viewport;
     private final Supplier<TimelineGeometry> geometrySupplier;
     private final Runnable onRedraw;
     private final Consumer<Cursor> onCursor;
@@ -52,12 +56,16 @@ public final class TimelineInteraction {
     private ContextMenu activeMenu;
     /** Set true while a primary-button drag started in the time-axis strip — drives playhead scrubbing. */
     private boolean scrubbing;
+    /** Clip currently hovered with Alt held — drives the vertical double-arrow amplitude affordance overlay. */
+    private String altHoverClipId;
 
     public TimelineInteraction(SequenceEditSession session,
+                               ViewportViewModel viewport,
                                Supplier<TimelineGeometry> geometrySupplier,
                                Runnable onRedraw,
                                Consumer<Cursor> onCursor) {
         this.session = session;
+        this.viewport = viewport;
         this.geometrySupplier = geometrySupplier;
         this.onRedraw = onRedraw;
         this.onCursor = onCursor;
@@ -70,6 +78,7 @@ public final class TimelineInteraction {
 
     public ClipDragState drag()       { return drag; }
     public double snapGuideTime()     { return snapGuideTime; }
+    public String altHoverClipId()    { return altHoverClipId; }
     public void setActiveCreationKind(ClipKind kind) { this.activeCreationKind = kind; }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -82,6 +91,18 @@ public final class TimelineInteraction {
         var geom = geometrySupplier.get();
         double mx = e.getX(), my = e.getY();
 
+        // Output-band divider drag: grab the line at the top of the
+        // read-only output band and resize the per-row height. Tested
+        // BEFORE the time-axis strip because the divider would otherwise
+        // be shadowed by the strip when the band is empty.
+        if (isOnOutputBandDivider(geom, my)) {
+            drag = new ClipDragState.ResizeOutputBand(my,
+                session.outputRowHeight.get(),
+                Math.max(1, geom.outputRows().size()));
+            onCursor.accept(Cursor.V_RESIZE);
+            return;
+        }
+
         // Time-axis strip click: scrub the playhead. The strip lives below
         // the editable + output bands, between plotBottom and the canvas
         // height. A click sets the cursor; subsequent drag motion keeps
@@ -93,15 +114,25 @@ public final class TimelineInteraction {
             return;
         }
 
-        // Label column click: toggle collapse on the hit track.
+        // Label column: collapse button, double-click to rename, drag to reorder.
         if (mx < geom.labelWidth()) {
             int ti = geom.trackAtY(my);
-            if (ti >= 0) {
-                var track = geom.tracks().get(ti);
-                if (inCollapseButton(mx)) {
-                    session.setTrackCollapsed(track.id(), !geom.isCollapsed(track));
-                }
+            if (ti < 0) return;
+            var track = geom.tracks().get(ti);
+            if (inCollapseButton(mx)) {
+                session.setTrackCollapsed(track.id(), !geom.isCollapsed(track));
+                return;
             }
+            if (e.getClickCount() >= 2) {
+                promptRenameTrack(track);
+                return;
+            }
+            // Single press anywhere else in the label arms a track-reorder
+            // drag. The drop position is recomputed each onDrag step from
+            // mouse Y; release commits via SequenceEditSession.reorderTrack.
+            drag = new ClipDragState.MoveTrack(track.id(), ti, ti);
+            onCursor.accept(Cursor.MOVE);
+            onRedraw.run();
             return;
         }
 
@@ -124,7 +155,7 @@ public final class TimelineInteraction {
         }
 
         if (e.isAltDown() || e.isMiddleButtonDown()) {
-            drag = new ClipDragState.PanView(geom.xToTime(mx), session.viewStart.get());
+            drag = new ClipDragState.PanView(geom.xToTime(mx), viewport.vS.get());
             onCursor.accept(Cursor.CLOSED_HAND);
             return;
         }
@@ -153,6 +184,9 @@ public final class TimelineInteraction {
             case ClipDragState.Amplitude a -> onAmplitude(geom, a, my);
             case ClipDragState.SplinePoint sp -> onSplinePoint(geom, sp, mx, my);
             case ClipDragState.PanView p -> onPan(geom, p, mx);
+            case ClipDragState.ResizeOutputBand rob -> onResizeOutputBand(rob, my);
+            case ClipDragState.MoveTrack mt ->
+                drag = new ClipDragState.MoveTrack(mt.trackId(), mt.originIndex(), dropIndexAtY(geom, my));
             case ClipDragState.CreateClip c ->
                 drag = new ClipDragState.CreateClip(c.kind(), c.trackId(), c.startTimeMicros(), mx);
             case ClipDragState.RubberBand rb ->
@@ -176,6 +210,9 @@ public final class TimelineInteraction {
         switch (drag) {
             case ClipDragState.CreateClip c -> finishCreate(c, geom, e.getX());
             case ClipDragState.RubberBand rb -> finishRubberBand(rb, geom, e);
+            case ClipDragState.MoveTrack mt -> {
+                if (mt.dropIndex() != mt.originIndex()) session.reorderTrack(mt.trackId(), mt.dropIndex());
+            }
             default -> { /* nothing */ }
         }
 
@@ -198,8 +235,17 @@ public final class TimelineInteraction {
     public void onMouseMoved(MouseEvent e) {
         var geom = geometrySupplier.get();
         double mx = e.getX(), my = e.getY();
+        // Output-band divider takes priority over the label column so the
+        // resize cursor still shows when the user reaches into the label
+        // gutter to grab the divider.
+        if (isOnOutputBandDivider(geom, my)) {
+            onCursor.accept(Cursor.V_RESIZE);
+            return;
+        }
         if (mx < geom.labelWidth()) {
-            onCursor.accept(Cursor.DEFAULT);
+            // Collapse button keeps the default pointer; the rest of the
+            // label is grabbable for drag-to-reorder.
+            onCursor.accept(inCollapseButton(mx) ? Cursor.DEFAULT : Cursor.OPEN_HAND);
             return;
         }
         // Hovering the time-axis strip shows the H_RESIZE cursor as a hint
@@ -209,6 +255,9 @@ public final class TimelineInteraction {
             return;
         }
         var hit = hitTest(geom, mx, my);
+        String prevAltHover = altHoverClipId;
+        altHoverClipId = (hit != null && hit.zone == HitZone.BODY && e.isAltDown()) ? hit.clipId : null;
+        if (!java.util.Objects.equals(prevAltHover, altHoverClipId)) onRedraw.run();
         if (hit != null) {
             onCursor.accept(switch (hit.zone) {
                 case LEFT_EDGE, RIGHT_EDGE -> Cursor.H_RESIZE;
@@ -224,7 +273,22 @@ public final class TimelineInteraction {
 
     public void onScroll(ScrollEvent e) {
         var geom = geometrySupplier.get();
-        session.zoomViewAround(geom.xToTime(e.getX()), e.getDeltaY() > 0 ? 0.8 : 1.25);
+        // ⌘/Ctrl + wheel zooms toward the cursor; bare wheel pans
+        // horizontally. Trackpad horizontal swipes (deltaX) also pan, in case
+        // the user prefers two-finger swipe over modified scroll.
+        if (e.isShortcutDown()) {
+            viewport.zoomViewportAround(geom.xToTime(e.getX()),
+                e.getDeltaY() > 0 ? 0.8 : 1.25);
+            return;
+        }
+        double pxDelta = e.getDeltaX() != 0 ? e.getDeltaX() : e.getDeltaY();
+        if (pxDelta == 0) return;
+        double span = viewport.vE.get() - viewport.vS.get();
+        double width = Math.max(1, geom.plotWidth());
+        double deltaTime = -pxDelta * span / width;
+        double max = Math.max(viewport.maxTime.get(), 1);
+        double newStart = MathUtil.clamp(viewport.vS.get() + deltaTime, 0, Math.max(0, max - span));
+        viewport.setViewport(newStart, newStart + span);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -353,12 +417,38 @@ public final class TimelineInteraction {
     }
 
     private void onPan(TimelineGeometry geom, ClipDragState.PanView p, double mx) {
-        double span = session.viewEnd.get() - session.viewStart.get();
+        double span = viewport.vE.get() - viewport.vS.get();
         double mouseFraction = (mx - geom.plotLeft()) / geom.plotWidth();
         double mouseTimeInOriginalView = p.viewStartAnchorMicros() + mouseFraction * span;
         double offset = p.anchorTimeMicros() - mouseTimeInOriginalView;
-        session.viewStart.set(p.viewStartAnchorMicros() + offset);
-        session.viewEnd.set(p.viewStartAnchorMicros() + span + offset);
+        double newStart = p.viewStartAnchorMicros() + offset;
+        viewport.setViewport(newStart, newStart + span);
+    }
+
+    /**
+     * Adjust per-row output height as the user drags the divider above the
+     * output band. Dragging up grows each row; dragging down shrinks. The
+     * effective per-row height is the original height plus the total
+     * vertical mouse travel divided by the row count, clamped to safe
+     * bounds.
+     */
+    private void onResizeOutputBand(ClipDragState.ResizeOutputBand rob, double my) {
+        double deltaY = rob.anchorY() - my;
+        double newRowHeight = rob.originalRowHeight() + deltaY / rob.rowCount();
+        newRowHeight = Math.max(TimelineCanvas.OUTPUT_ROW_MIN_HEIGHT,
+            Math.min(TimelineCanvas.OUTPUT_ROW_MAX_HEIGHT, newRowHeight));
+        session.outputRowHeight.set(newRowHeight);
+    }
+
+    /**
+     * The divider line above the read-only output band is a draggable
+     * resize handle. Active only when the band actually has rows — with no
+     * traces enabled, the band collapses and the divider is meaningless.
+     */
+    private boolean isOnOutputBandDivider(TimelineGeometry geom, double my) {
+        if (geom.outputRows().isEmpty()) return false;
+        double dividerY = geom.outputBandTop();
+        return Math.abs(my - dividerY) <= DIVIDER_HIT_PAD;
     }
 
     private void finishCreate(ClipDragState.CreateClip c, TimelineGeometry geom, double endX) {
@@ -438,6 +528,22 @@ public final class TimelineInteraction {
         return mx >= COLLAPSE_HIT_X && mx <= COLLAPSE_HIT_X + COLLAPSE_HIT_W;
     }
 
+    /**
+     * Index a track-reorder drag would land on if released at this Y.
+     * Above the first lane → 0; below the last → end. Within the stack,
+     * inserts above whichever lane the mouse is in the upper half of.
+     */
+    private static int dropIndexAtY(TimelineGeometry geom, double my) {
+        int n = geom.tracks().size();
+        if (n == 0) return 0;
+        for (int i = 0; i < n; i++) {
+            double top = geom.trackTop(i);
+            double mid = top + geom.trackHeight(i) / 2.0;
+            if (my < mid) return i;
+        }
+        return n - 1;
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // Context menu
     // ══════════════════════════════════════════════════════════════════════════
@@ -483,7 +589,7 @@ public final class TimelineInteraction {
         }
 
         var zoomFit = new MenuItem("Zoom to Fit");
-        zoomFit.setOnAction(ev -> session.fitView());
+        zoomFit.setOnAction(ev -> viewport.fitViewportToData());
         menu.getItems().add(zoomFit);
 
         // Append a global "Add Track…" submenu for when right-clicking in a
@@ -550,7 +656,7 @@ public final class TimelineInteraction {
     }
 
     private Menu buildHardwareRouteMenu(Track track) {
-        var hwConfig = session.activeHardwareConfig.get();
+        var hwConfig = session.activeHardwareConfigDoc();
         var menu = new Menu("Send to hardware output");
         if (hwConfig == null) {
             var hint = new MenuItem("(no hardware config bound)");

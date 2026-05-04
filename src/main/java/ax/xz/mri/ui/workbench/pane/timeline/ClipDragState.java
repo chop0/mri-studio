@@ -52,4 +52,19 @@ public sealed interface ClipDragState {
 
     /** Empty-space click-drag: rubber-band selection. */
     record RubberBand(double startX, double startY, double endX, double endY) implements ClipDragState {}
+
+    /**
+     * Dragging the divider above the read-only output band to resize the
+     * per-row output trace lanes. Captured at press time: the mouse's Y
+     * pixel position and the row count, so each drag delta translates 1:1
+     * into per-row height pixels.
+     */
+    record ResizeOutputBand(double anchorY, double originalRowHeight, int rowCount) implements ClipDragState {}
+
+    /**
+     * Reordering a track by dragging its label. {@code originIndex} is where
+     * the track sat at press time; {@code dropIndex} is the prospective new
+     * insertion point, recomputed from mouse Y on each drag step.
+     */
+    record MoveTrack(String trackId, int originIndex, int dropIndex) implements ClipDragState {}
 }

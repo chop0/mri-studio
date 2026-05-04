@@ -168,9 +168,24 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
                 updateStatus(event.getX(), event.getY());
                 return;
             }
+            // ⌘/Ctrl + wheel zooms toward the cursor; bare wheel pans
+            // horizontally. Two-finger trackpad swipes (deltaX) also pan.
+            var ctl = paneContext.session().timeline.viewportController;
+            if (event.isShortcutDown()) {
+                ctl.zoomViewportAround(pixelToTime(event.getX()),
+                    event.getDeltaY() > 0 ? 0.8 : 1.25);
+                return;
+            }
+            double pxDelta = event.getDeltaX() != 0 ? event.getDeltaX() : event.getDeltaY();
+            if (pxDelta == 0) return;
+            double vp = paneContext.session().viewport.vE.get() - paneContext.session().viewport.vS.get();
+            double plotWidth = Math.max(1, canvas.getWidth() - PAD_L - PAD_R);
+            ctl.panViewportBy(-pxDelta * vp / plotWidth);
+        });
+        canvas.setOnZoom(event -> {
+            // Trackpad pinch — continuous factor from JavaFX.
             paneContext.session().timeline.viewportController.zoomViewportAround(
-                pixelToTime(event.getX()), event.getDeltaY() > 0 ? 0.8 : 1.25
-            );
+                pixelToTime(event.getX()), 1.0 / event.getZoomFactor());
         });
         canvas.setOnContextMenuRequested(event -> {
             var menu = buildContextMenu(event.getX(), event.getY());
@@ -439,9 +454,11 @@ public class TimelineWorkbenchPane extends CanvasWorkbenchPane {
         fit.setOnAction(event -> paneContext.session().timeline.viewportController.fitViewportToData());
         var resetAnalysis = new MenuItem("Analysis window = viewport");
         resetAnalysis.setOnAction(event -> paneContext.session().timeline.viewportController.setAnalysisWindowToViewport());
+        var zoomToAnalysis = new MenuItem("Viewport = analysis window");
+        zoomToAnalysis.setOnAction(event -> paneContext.session().timeline.viewportController.zoomViewportToAnalysisWindow());
         var trackLabel = new MenuItem("Track: " + hoveredTrackLabel(mouseY));
         trackLabel.setDisable(true);
-        menu.getItems().addAll(trackLabel, new SeparatorMenuItem(), setCursor, fit, resetAnalysis, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+        menu.getItems().addAll(trackLabel, new SeparatorMenuItem(), setCursor, fit, resetAnalysis, zoomToAnalysis, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
         return menu;
     }
 

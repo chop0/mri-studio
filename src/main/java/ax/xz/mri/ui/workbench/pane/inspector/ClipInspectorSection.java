@@ -15,9 +15,12 @@ import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.preview.FieldPreviewWindow;
 import ax.xz.mri.ui.preview.SchematicHighlightRequest;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.workbench.pane.config.ComboSync;
+import ax.xz.mri.ui.workbench.pane.config.ListenerBinding;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.SegmentedControl;
 import ax.xz.mri.util.SiFormat;
+import javafx.application.Platform;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.geometry.Pos;
@@ -59,6 +62,8 @@ public final class ClipInspectorSection {
     private final String clipId;
     private final VBox root = new VBox(8);
     private final List<Consumer<SignalClip>> pullers = new ArrayList<>();
+    /** Listeners attached during {@link #build} that need to come off on rebuild or dispose. */
+    private final List<ListenerBinding> sectionBindings = new ArrayList<>();
     private ClipKind builtForKind; // the shape kind last used to build the param UI
 
     /** Observable points-of-interest; rotations are shown per entry for RF clips. May be {@code null}. */
@@ -104,6 +109,8 @@ public final class ClipInspectorSection {
         if (poiEntries != null && poiListener != null) {
             poiEntries.removeListener(poiListener);
         }
+        for (var b : sectionBindings) b.detach();
+        sectionBindings.clear();
     }
 
     /**
@@ -130,6 +137,8 @@ public final class ClipInspectorSection {
     private void build(SignalClip clip) {
         root.getChildren().clear();
         pullers.clear();
+        for (var b : sectionBindings) b.detach();
+        sectionBindings.clear();
         poiRefresher = null;
 
         root.getChildren().addAll(
@@ -160,18 +169,13 @@ public final class ClipInspectorSection {
         var shapeCombo = new ComboBox<ClipKind>();
         shapeCombo.getItems().addAll(ClipKind.values());
         shapeCombo.setValue(clip.shape().kind());
-        shapeCombo.setOnAction(e -> {
-            var selected = shapeCombo.getValue();
-            if (selected != null) session.changeClipKind(clipId, selected);
-        });
-        pullers.add(c -> {
-            if (c != null && shapeCombo.getValue() != c.shape().kind()) {
-                var old = shapeCombo.getOnAction();
-                shapeCombo.setOnAction(null);
-                shapeCombo.setValue(c.shape().kind());
-                shapeCombo.setOnAction(old);
-            }
-        });
+        ComboSync.onUserPick(shapeCombo, k -> k,
+            () -> {
+                var c = session.findClip(clipId);
+                return c == null ? null : c.shape().kind();
+            },
+            kind -> session.changeClipKind(clipId, kind));
+        pullers.add(c -> ComboSync.syncValue(shapeCombo, c == null ? null : c.shape().kind()));
 
         var arrow = new Label("\u2192");
         arrow.getStyleClass().add("clip-inspector-arrow");
@@ -182,29 +186,37 @@ public final class ClipInspectorSection {
     }
 
     private Node buildTrackPicker(SignalClip clip) {
-        var tracks = session.tracks;
         var combo = new ComboBox<Track>();
         combo.setPrefWidth(200);
-        combo.getItems().setAll(tracks);
         combo.setCellFactory(lv -> trackCell());
         combo.setButtonCell(trackCell());
+        combo.getItems().setAll(session.tracks);
         combo.setValue(session.findTrack(clip.trackId()));
-        combo.setOnAction(e -> {
-            var t = combo.getValue();
-            if (t != null) session.changeClipTrack(clipId, t.id());
-        });
-        // Keep combo in sync when the session's track list or the clip's track id changes.
-        Runnable sync = () -> {
-            var current = session.findClip(clipId);
-            if (current == null) return;
+
+        // ComboSync's action handler short-circuits when the new selection's
+        // key already matches the model's current key, so a programmatic
+        // setValue() can't recurse into changeClipTrack.
+        ComboSync.onUserPick(combo, Track::id,
+            () -> {
+                var c = session.findClip(clipId);
+                return c == null ? null : c.trackId();
+            },
+            newTrackId -> session.changeClipTrack(clipId, newTrackId));
+
+        // Items list — rebuild only when the *track set* changes, not on every
+        // revision bump. Deferred because mutating ObservableList items inside
+        // a ListChangeListener callback re-enters JavaFX's change builder.
+        ListChangeListener<Track> tracksListener = c -> Platform.runLater(() -> {
             combo.getItems().setAll(session.tracks);
-            var old = combo.getOnAction();
-            combo.setOnAction(null);
-            combo.setValue(session.findTrack(current.trackId()));
-            combo.setOnAction(old);
-        };
-        session.tracks.addListener((javafx.collections.ListChangeListener<Track>) c -> sync.run());
-        pullers.add(c -> sync.run());
+            var current = session.findClip(clipId);
+            ComboSync.syncValue(combo, current == null ? null : session.findTrack(current.trackId()));
+        });
+        session.tracks.addListener(tracksListener);
+        sectionBindings.add(ListenerBinding.ofList(session.tracks, tracksListener));
+
+        // Synchronous puller path — a no-op when the combo already shows
+        // the current track, which is the case during the user's own pick.
+        pullers.add(c -> ComboSync.syncValue(combo, session.findTrack(c.trackId())));
 
         return row("Track", combo);
     }
@@ -228,7 +240,9 @@ public final class ClipInspectorSection {
             label.setManaged(count > 1);
         };
         update.run();
-        session.selectedClipIds.addListener((javafx.collections.SetChangeListener<String>) c -> update.run());
+        javafx.collections.SetChangeListener<String> sel = c -> update.run();
+        session.selectedClipIds.addListener(sel);
+        sectionBindings.add(() -> session.selectedClipIds.removeListener(sel));
         return label;
     }
 

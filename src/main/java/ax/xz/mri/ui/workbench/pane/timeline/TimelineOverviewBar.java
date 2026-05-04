@@ -4,11 +4,11 @@ import ax.xz.mri.model.sequence.ClipEvaluator;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.ui.framework.ResizableCanvas;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
+import ax.xz.mri.ui.viewmodel.TimelineViewportController;
 import ax.xz.mri.ui.viewmodel.ViewportViewModel;
 import ax.xz.mri.ui.workbench.pane.AxisScrubBar;
 import ax.xz.mri.util.MathUtil;
 import javafx.animation.AnimationTimer;
-import javafx.beans.property.DoubleProperty;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
@@ -39,8 +39,8 @@ public final class TimelineOverviewBar extends ResizableCanvas {
 
     private final SequenceEditSession session;
     private final ViewportViewModel viewport;
+    private final TimelineViewportController controller;
     private final AxisScrubBar.Interaction interaction;
-    private final ViewportSync sync;
     private final AnimationTimer timer;
     private boolean dirty = true;
 
@@ -49,26 +49,21 @@ public final class TimelineOverviewBar extends ResizableCanvas {
     private int cachedPixelCount = -1;
     private double[][] cachedChannelSamples;
 
-    public TimelineOverviewBar(SequenceEditSession session, ViewportViewModel viewport) {
+    public TimelineOverviewBar(SequenceEditSession session,
+                                ViewportViewModel viewport,
+                                TimelineViewportController controller) {
         this.session = session;
         this.viewport = viewport;
+        this.controller = controller;
         getStyleClass().add("timeline-overview");
 
         this.interaction = new AxisScrubBar.Interaction(
-            AxisScrubBar.Orientation.HORIZONTAL, new OverviewWindowModel(session));
-
-        // Bidirectional viewport sync (editor ↔ global). Also mirrors into the
-        // analysis window (tS/tE) so downstream plots follow.
-        this.sync = new ViewportSync();
-        sync.bindBidirectional(session.viewStart, viewport.vS);
-        sync.bindBidirectional(session.viewEnd, viewport.vE);
-        sync.bindBidirectional(session.viewStart, viewport.tS);
-        sync.bindBidirectional(session.viewEnd, viewport.tE);
+            AxisScrubBar.Orientation.HORIZONTAL, new OverviewWindowModel(session, viewport, controller));
 
         setOnResized(this::markDirty);
         session.revision.addListener((obs, o, n) -> markDirty());
-        session.viewStart.addListener((obs, o, n) -> markDirty());
-        session.viewEnd.addListener((obs, o, n) -> markDirty());
+        viewport.vS.addListener((obs, o, n) -> markDirty());
+        viewport.vE.addListener((obs, o, n) -> markDirty());
         session.totalDuration.addListener((obs, o, n) -> markDirty());
         viewport.tC.addListener((obs, o, n) -> markDirty());
 
@@ -137,7 +132,7 @@ public final class TimelineOverviewBar extends ResizableCanvas {
         var markers = List.of(new AxisScrubBar.Marker(viewport.tC.get(), CURSOR));
         var spec = AxisScrubBar.Spec.horizontal(
             0, domain,
-            session.viewStart.get(), session.viewEnd.get(),
+            viewport.vS.get(), viewport.vE.get(),
             spans, markers);
         AxisScrubBar.draw(g, bounds, spec);
 
@@ -205,41 +200,19 @@ public final class TimelineOverviewBar extends ResizableCanvas {
     // Helpers
     // ══════════════════════════════════════════════════════════════════════════
 
-    private record OverviewWindowModel(SequenceEditSession session) implements AxisScrubBar.WindowModel {
+    private record OverviewWindowModel(SequenceEditSession session,
+                                       ViewportViewModel viewport,
+                                       TimelineViewportController controller) implements AxisScrubBar.WindowModel {
         @Override public double domainStart() { return 0; }
         @Override public double domainEnd()   { return Math.max(1, session.totalDuration.get()); }
-        @Override public double windowStart() { return session.viewStart.get(); }
-        @Override public double windowEnd()   { return session.viewEnd.get(); }
+        @Override public double windowStart() { return viewport.vS.get(); }
+        @Override public double windowEnd()   { return viewport.vE.get(); }
         @Override public void setWindow(double start, double end) {
-            session.viewStart.set(start);
-            session.viewEnd.set(end);
+            controller.setViewport(start, end);
         }
         @Override public void zoomAround(double anchor, double factor) {
-            session.zoomViewAround(anchor, factor);
+            controller.zoomViewportAround(anchor, factor);
         }
-        @Override public void resetWindow() { session.fitView(); }
-    }
-
-    /**
-     * One-shot helper for bidirectionally binding pairs of
-     * {@link DoubleProperty}s without the manual {@code syncing} flag pattern.
-     */
-    private static final class ViewportSync {
-        private boolean syncing;
-
-        void bindBidirectional(DoubleProperty a, DoubleProperty b) {
-            a.addListener((obs, o, n) -> {
-                if (syncing) return;
-                syncing = true;
-                try { b.set(n.doubleValue()); }
-                finally { syncing = false; }
-            });
-            b.addListener((obs, o, n) -> {
-                if (syncing) return;
-                syncing = true;
-                try { a.set(n.doubleValue()); }
-                finally { syncing = false; }
-            });
-        }
+        @Override public void resetWindow() { controller.fitViewportToData(); }
     }
 }

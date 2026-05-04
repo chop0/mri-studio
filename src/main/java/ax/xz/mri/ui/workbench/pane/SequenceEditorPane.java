@@ -7,6 +7,8 @@ import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.ui.viewmodel.HardwareRunSession;
 import ax.xz.mri.ui.viewmodel.SequenceEditSession;
 import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
+import ax.xz.mri.ui.viewmodel.TimelineViewportController;
+import ax.xz.mri.ui.viewmodel.ZoomDirection;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import ax.xz.mri.ui.workbench.StudioIcons;
@@ -62,6 +64,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
     private final SequenceToolPalette toolPalette;
     private final TimelineOverviewBar overviewBar;
     private final TimelineCanvas trackCanvas;
+    private final TimelineViewportController viewportController;
 
     private SequenceSimulationSession simSession;
     private HardwareRunSession hardwareSession;
@@ -72,10 +75,13 @@ public final class SequenceEditorPane extends WorkbenchPane {
         super(paneContext);
         setPaneTitle("Sequence Editor");
 
+        var viewport = paneContext.session().viewport;
+        viewportController = paneContext.session().timeline.viewportController;
+        editSession.setViewport(viewport);
+
         toolPalette  = new SequenceToolPalette(editSession);
-        overviewBar  = new TimelineOverviewBar(editSession, paneContext.session().viewport);
-        trackCanvas  = new TimelineCanvas(editSession);
-        trackCanvas.setViewport(paneContext.session().viewport);
+        overviewBar  = new TimelineOverviewBar(editSession, viewport, viewportController);
+        trackCanvas  = new TimelineCanvas(editSession, viewport);
 
         toolPalette.setOnActiveToolChanged(() ->
             trackCanvas.setActiveCreationKind(toolPalette.activeClipKind())
@@ -107,25 +113,19 @@ public final class SequenceEditorPane extends WorkbenchPane {
 
         var zoomOutBtn = new Button("-");
         zoomOutBtn.setTooltip(new Tooltip("Zoom out"));
-        zoomOutBtn.setOnAction(e -> {
-            double centre = (editSession.viewStart.get() + editSession.viewEnd.get()) / 2;
-            editSession.zoomViewAround(centre, 1.25);
-        });
+        zoomOutBtn.setOnAction(e -> viewportController.zoomViewportAt(viewCentre(), ZoomDirection.OUT));
         zoomOutBtn.setFocusTraversable(false);
         zoomOutBtn.getStyleClass().add("seq-toolbar-button");
 
         var zoomInBtn = new Button("+");
         zoomInBtn.setTooltip(new Tooltip("Zoom in"));
-        zoomInBtn.setOnAction(e -> {
-            double centre = (editSession.viewStart.get() + editSession.viewEnd.get()) / 2;
-            editSession.zoomViewAround(centre, 0.8);
-        });
+        zoomInBtn.setOnAction(e -> viewportController.zoomViewportAt(viewCentre(), ZoomDirection.IN));
         zoomInBtn.setFocusTraversable(false);
         zoomInBtn.getStyleClass().add("seq-toolbar-button");
 
         var fitBtn = new Button("Fit");
         fitBtn.setTooltip(new Tooltip("Zoom to fit (⌘F)"));
-        fitBtn.setOnAction(e -> editSession.fitView());
+        fitBtn.setOnAction(e -> viewportController.fitViewportToData());
         fitBtn.setFocusTraversable(false);
         fitBtn.getStyleClass().add("seq-toolbar-button");
 
@@ -210,7 +210,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
         tree.setRoot(buildOutputsTree());
         // Rebuild the tree when the underlying probe set might change.
         editSession.activeConfig.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
-        editSession.activeHardwareConfig.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
+        editSession.activeHardwareConfigId.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
         editSession.lastSimulationTraces.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
         editSession.lastHardwareTraces.addListener((obs, o, n) -> tree.setRoot(buildOutputsTree()));
 
@@ -286,7 +286,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
 
     private Set<String> collectHardwareProbeNames() {
         var out = new LinkedHashSet<String>();
-        HardwareConfigDocument hwConfig = editSession.activeHardwareConfig.get();
+        HardwareConfigDocument hwConfig = editSession.activeHardwareConfigDoc();
         if (hwConfig != null && hwConfig.config() != null) {
             HardwarePluginRegistry.byId(hwConfig.config().pluginId()).ifPresent(plugin ->
                 out.addAll(plugin.capabilities().probeNames()));
@@ -357,6 +357,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
         var strip = new HBox(10,
             selection,
             spacer,
+            statItem("zoom",   zoomBinding()),
             statItem("span",   viewSpanBinding()),
             statItem("dt",     dtBinding()),
             statItem("cursor", cursorBinding(paneContext)),
@@ -380,9 +381,28 @@ public final class SequenceEditorPane extends WorkbenchPane {
     }
 
     private StringBinding viewSpanBinding() {
+        var viewport = paneContext.session().viewport;
         return Bindings.createStringBinding(
-            () -> SiFormat.time(editSession.viewEnd.get() - editSession.viewStart.get()),
-            editSession.viewStart, editSession.viewEnd);
+            () -> SiFormat.time(viewport.vE.get() - viewport.vS.get()),
+            viewport.vS, viewport.vE);
+    }
+
+    /** Mid-point of the visible viewport — pivot for cursor-less zoom (toolbar buttons, key shortcuts). */
+    private double viewCentre() {
+        var viewport = paneContext.session().viewport;
+        return (viewport.vS.get() + viewport.vE.get()) / 2;
+    }
+
+    /** Multiplier of fit-to-data zoom — "1×" means the whole sequence is visible, "10×" means we're 10× zoomed in. */
+    private StringBinding zoomBinding() {
+        var viewport = paneContext.session().viewport;
+        return Bindings.createStringBinding(() -> {
+            double span = viewport.vE.get() - viewport.vS.get();
+            if (span <= 0) return "—";
+            double total = Math.max(1, viewport.maxTime.get());
+            double zoom = total / span;
+            return zoom < 10 ? String.format("%.1f×", zoom) : String.format("%.0f×", zoom);
+        }, viewport.vS, viewport.vE, viewport.maxTime);
     }
 
     private StringBinding dtBinding() {
@@ -418,7 +438,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
             } else if (new KeyCodeCombination(KeyCode.A, KeyCombination.SHORTCUT_DOWN).match(event)) {
                 editSession.selectAll(); event.consume();
             } else if (new KeyCodeCombination(KeyCode.F, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                editSession.fitView(); event.consume();
+                viewportController.fitViewportToData(); event.consume();
             } else if (event.getCode() == KeyCode.ESCAPE) {
                 toolPalette.activeTool.set(SequenceToolKind.SELECT);
                 editSession.clearSelection();

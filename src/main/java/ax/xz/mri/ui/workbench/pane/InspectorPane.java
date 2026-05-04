@@ -16,6 +16,8 @@ import ax.xz.mri.ui.workbench.ProjectDisplayNames;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import ax.xz.mri.ui.workbench.StudioIcons;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
+import ax.xz.mri.ui.workbench.pane.config.ComboSync;
+import ax.xz.mri.ui.workbench.pane.config.ListenerBinding;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.inspector.ClipInspectorSection;
 import javafx.beans.InvalidationListener;
@@ -36,7 +38,6 @@ import javafx.scene.layout.VBox;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Consumer;
 
 /**
  * Context-sensitive right sidebar.
@@ -52,7 +53,7 @@ import java.util.function.Consumer;
 public final class InspectorPane extends WorkbenchPane {
     private final VBox content = new VBox(10);
 
-    private final List<ListenerBinding<?>> activeBindings = new ArrayList<>();
+    private final List<ListenerBinding> activeBindings = new ArrayList<>();
     private ClipInspectorSection activeClipSection;
     private SequenceEditSession wiredSession;
 
@@ -68,6 +69,11 @@ public final class InspectorPane extends WorkbenchPane {
         paneContext.session().project.inspector.inspectedNodeId.addListener((obs, oldValue, newValue) -> rebuild());
         paneContext.session().project.explorer.structureRevision.addListener((obs, oldValue, newValue) -> rebuild());
         paneContext.session().activeEditSession.addListener((obs, oldSession, newSession) -> rebuild());
+        // (Note: we deliberately do NOT rebuild on contentRevision here —
+        // that channel fires on every keystroke during a live schematic or
+        // sim-config edit and would yank focus from clip-inspector spinners
+        // mid-typing. The hardware section listens narrowly inside its own
+        // builder.)
 
         rebuild();
     }
@@ -133,7 +139,7 @@ public final class InspectorPane extends WorkbenchPane {
 
         InvalidationListener primaryListener = obs -> rebuild();
         editSession.primarySelectedClipId.addListener(primaryListener);
-        activeBindings.add(new ListenerBinding<>(editSession.primarySelectedClipId, primaryListener));
+        activeBindings.add(ListenerBinding.of(editSession.primarySelectedClipId, primaryListener));
 
         InvalidationListener revisionListener = obs -> {
             if (activeClipSection == null) return;
@@ -145,7 +151,7 @@ public final class InspectorPane extends WorkbenchPane {
             }
         };
         editSession.revision.addListener(revisionListener);
-        activeBindings.add(new ListenerBinding<>(editSession.revision, revisionListener));
+        activeBindings.add(ListenerBinding.of(editSession.revision, revisionListener));
     }
 
     private Node sequenceSection(SequenceEditSession editSession) {
@@ -189,37 +195,25 @@ public final class InspectorPane extends WorkbenchPane {
             empty.getStyleClass().add("cfg-row-hint");
             box.getChildren().add(empty);
         } else {
+            // Map names ↔ ids locally so the combo holds plain Strings (rock-solid
+            // JavaFX behaviour) while the binding works in id-space.
+            var nameToId = new java.util.LinkedHashMap<String, ProjectNodeId>();
+            var idToName = new java.util.HashMap<ProjectNodeId, String>();
+            for (var cfg : configs) { nameToId.put(cfg.name(), cfg.id()); idToName.put(cfg.id(), cfg.name()); }
+
             var combo = new ComboBox<String>();
             combo.setPrefWidth(200);
-            for (var cfg : configs) combo.getItems().add(cfg.name());
+            combo.getItems().addAll(nameToId.keySet());
+            combo.setValue(idToName.get(editSession.activeSimConfigId.get()));
 
-            Consumer<ProjectNodeId> syncComboFromSession = id -> {
-                String target = null;
-                if (id != null) {
-                    for (var cfg : configs) if (cfg.id().equals(id)) { target = cfg.name(); break; }
-                }
-                if (!Objects.equals(combo.getValue(), target)) {
-                    var old = combo.getOnAction();
-                    combo.setOnAction(null);
-                    combo.setValue(target);
-                    combo.setOnAction(old);
-                }
-            };
-            syncComboFromSession.accept(editSession.activeSimConfigId.get());
-            InvalidationListener cfgListener = obs -> syncComboFromSession.accept(editSession.activeSimConfigId.get());
+            ComboSync.onUserPick(combo, name -> name,
+                () -> idToName.get(editSession.activeSimConfigId.get()),
+                name -> editSession.setActiveSimConfig(nameToId.get(name)));
+
+            InvalidationListener cfgListener = obs ->
+                ComboSync.syncValue(combo, idToName.get(editSession.activeSimConfigId.get()));
             editSession.activeSimConfigId.addListener(cfgListener);
-            activeBindings.add(new ListenerBinding<>(editSession.activeSimConfigId, cfgListener));
-
-            combo.setOnAction(e -> {
-                var selected = combo.getValue();
-                if (selected == null) return;
-                for (var cfg : configs) {
-                    if (cfg.name().equals(selected)) {
-                        editSession.setActiveSimConfig(cfg.id());
-                        break;
-                    }
-                }
-            });
+            activeBindings.add(ListenerBinding.of(editSession.activeSimConfigId, cfgListener));
 
             var simSession = findSimSessionForEditor(editSession);
             var runBtn = new Button("Run");
@@ -251,6 +245,14 @@ public final class InspectorPane extends WorkbenchPane {
      * (when one is bound) hit "Run on hardware" to push the baked sequence
      * at the device. The combo lists every {@link HardwareConfigDocument} in
      * the project plus a "(none)" entry so the user can detach.
+     *
+     * <p><b>Identity model.</b> The combo's items are {@code String} display
+     * names, but the underlying binding ({@code editSession.activeHardwareConfigId})
+     * is keyed by {@link ProjectNodeId}. Combo state is rebuilt every time the
+     * inspector rebuilds (which happens on any structural project change —
+     * including saves and renames), so the names stay fresh; the binding
+     * never reads stale name strings because it's matched through the
+     * id-to-name map captured at section build time.
      */
     private Node buildHardwareSection(SequenceEditSession editSession) {
         var box = new VBox(8);
@@ -259,70 +261,75 @@ public final class InspectorPane extends WorkbenchPane {
         box.getChildren().add(title);
 
         var repo = paneContext.session().project.repository.get();
-        var hwConfigs = repo.hardwareConfigIds().stream()
-            .map(id -> (HardwareConfigDocument) repo.node(id))
+        var availableConfigs = repo.hardwareConfigIds().stream()
+            .map(repo::hardwareConfig)
             .filter(Objects::nonNull)
             .toList();
-
-        if (hwConfigs.isEmpty()) {
+        if (availableConfigs.isEmpty()) {
             var empty = new Label("No hardware configs. Create one via File menu.");
             empty.getStyleClass().add("cfg-row-hint");
             box.getChildren().add(empty);
             return box;
         }
 
-        final String NONE_LABEL = "(none)";
-        var combo = new ComboBox<String>();
-        combo.setPrefWidth(200);
-        combo.getItems().add(NONE_LABEL);
-        for (var hw : hwConfigs) combo.getItems().add(hw.name());
-
         var hwSession = findHardwareSessionForEditor(editSession);
 
-        Runnable syncComboFromSession = () -> {
-            var active = editSession.activeHardwareConfig.get();
-            String target = active == null ? NONE_LABEL : active.name();
-            if (!Objects.equals(combo.getValue(), target)) {
-                var old = combo.getOnAction();
-                combo.setOnAction(null);
-                combo.setValue(target);
-                combo.setOnAction(old);
-            }
-        };
-        syncComboFromSession.run();
-        InvalidationListener hwListener = obs -> syncComboFromSession.run();
-        editSession.activeHardwareConfig.addListener(hwListener);
-        activeBindings.add(new ListenerBinding<>(editSession.activeHardwareConfig, hwListener));
+        // Use String items for rock-solid JavaFX behaviour (no null-in-items
+        // quirks, no custom cellFactory + converter interplay). The
+        // bidirectional map between display label and id lives entirely in
+        // this method — nothing else in the codebase reads name strings.
+        final String NONE_LABEL = "(none)";
+        var labelToId = new java.util.LinkedHashMap<String, ProjectNodeId>();
+        labelToId.put(NONE_LABEL, null);
+        var idToLabel = new java.util.LinkedHashMap<ProjectNodeId, String>();
+        for (var doc : availableConfigs) {
+            // Names can collide; disambiguate the second occurrence onwards
+            // with an id-suffix so the combo never has duplicate items.
+            var label = doc.name();
+            if (labelToId.containsKey(label)) label = label + " (" + doc.id().value().substring(0, Math.min(8, doc.id().value().length())) + ")";
+            labelToId.put(label, doc.id());
+            idToLabel.put(doc.id(), label);
+        }
 
-        combo.setOnAction(e -> {
-            var selected = combo.getValue();
-            HardwareConfigDocument target = null;
-            if (selected != null && !selected.equals(NONE_LABEL)) {
-                for (var hw : hwConfigs) {
-                    if (hw.name().equals(selected)) { target = hw; break; }
-                }
-            }
-            // Push through the run session so its active-config property and
-            // editSession.activeHardwareConfig stay in lockstep (the session
-            // mirrors back via its own listener). If no run session is
-            // attached, set the editSession view directly so the timeline
-            // routing menus still update.
-            if (hwSession != null) hwSession.activeConfig.set(target);
-            else editSession.activeHardwareConfig.set(target);
-        });
+        var combo = new ComboBox<String>();
+        combo.setPrefWidth(200);
+        combo.getItems().addAll(labelToId.keySet());
+
+        java.util.function.Supplier<String> labelForCurrentId = () -> {
+            var activeId = editSession.activeHardwareConfigId.get();
+            return activeId == null ? NONE_LABEL : idToLabel.getOrDefault(activeId, NONE_LABEL);
+        };
+        combo.setValue(labelForCurrentId.get());
+
+        ComboSync.onUserPick(combo, label -> label, labelForCurrentId,
+            label -> editSession.activeHardwareConfigId.set(labelToId.get(label)));
+
+        InvalidationListener idListener = obs -> ComboSync.syncValue(combo, labelForCurrentId.get());
+        editSession.activeHardwareConfigId.addListener(idListener);
+        activeBindings.add(ListenerBinding.of(editSession.activeHardwareConfigId, idListener));
         box.getChildren().add(row("Config", combo));
 
-        // Rebuild the run row in place each time the active config changes —
+        // Rebuild the run row in place each time the active id changes —
         // when no config is bound we show a hint instead of a disabled button
         // (a hint reads better than an inert button).
         var runRow = new HBox(8);
         runRow.setAlignment(Pos.CENTER_LEFT);
         Runnable rebuildRunRow = () -> {
             runRow.getChildren().clear();
-            var active = editSession.activeHardwareConfig.get();
-            if (active == null) {
+            var activeId = editSession.activeHardwareConfigId.get();
+            if (activeId == null) {
                 var hint = new Label("Pick a config above to enable Run on hardware.");
                 hint.getStyleClass().add("cfg-row-hint");
+                runRow.getChildren().add(hint);
+                return;
+            }
+            // Resolve the doc fresh — if the id refers to a config that was
+            // just deleted we want to surface that explicitly rather than
+            // silently disable the button.
+            var doc = editSession.activeHardwareConfigDoc();
+            if (doc == null) {
+                var hint = new Label("Bound config is missing — pick a different one.");
+                hint.getStyleClass().add("cfg-row-warn");
                 runRow.getChildren().add(hint);
                 return;
             }
@@ -336,8 +343,8 @@ public final class InspectorPane extends WorkbenchPane {
         };
         rebuildRunRow.run();
         InvalidationListener runRowListener = obs -> rebuildRunRow.run();
-        editSession.activeHardwareConfig.addListener(runRowListener);
-        activeBindings.add(new ListenerBinding<>(editSession.activeHardwareConfig, runRowListener));
+        editSession.activeHardwareConfigId.addListener(runRowListener);
+        activeBindings.add(ListenerBinding.of(editSession.activeHardwareConfigId, runRowListener));
         box.getChildren().add(runRow);
 
         // Progress bar — only visible while a run is in flight. Driven by the
@@ -569,9 +576,5 @@ public final class InspectorPane extends WorkbenchPane {
         dialog.setContentText("Name:");
         dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
             paneContext.session().project.renameSequence(sequenceId, value));
-    }
-
-    private record ListenerBinding<T extends javafx.beans.Observable>(T observable, InvalidationListener listener) {
-        void detach() { observable.removeListener(listener); }
     }
 }

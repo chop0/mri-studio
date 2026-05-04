@@ -76,7 +76,8 @@ public final class TimelineRenderer {
                               WaveformCache cache,
                               ClipDragState drag,
                               double snapGuideTime,
-                              Double cursorTime) {
+                              Double cursorTime,
+                              String altHoverClipId) {
         g.clearRect(0, 0, geom.width(), geom.height());
         g.setFill(BG);
         g.fillRect(0, 0, geom.width(), geom.height());
@@ -84,9 +85,53 @@ public final class TimelineRenderer {
         paintTracks(g, geom, session, cache);
         paintOutputBand(g, geom);
         paintOverlays(g, geom, drag);
+        paintAltAffordance(g, geom, session, altHoverClipId);
         paintCursor(g, geom, cursorTime);
         paintSnapGuide(g, geom, snapGuideTime);
         paintTimeAxis(g, geom);
+    }
+
+    /**
+     * Vertical double-headed arrow centred on a clip when the user hovers it
+     * with Alt held — signals that an Alt-drag will adjust amplitude.
+     */
+    private static void paintAltAffordance(GraphicsContext g, TimelineGeometry geom,
+                                           SequenceEditSession session, String clipId) {
+        if (clipId == null) return;
+        var clip = session.findClip(clipId);
+        if (clip == null) return;
+        int ti = -1;
+        for (int i = 0; i < geom.tracks().size(); i++) {
+            if (geom.tracks().get(i).id().equals(clip.trackId())) { ti = i; break; }
+        }
+        if (ti < 0) return;
+
+        double x1 = geom.timeToX(clip.startTime());
+        double x2 = geom.timeToX(clip.endTime());
+        double cx = (x1 + x2) / 2;
+        double top = geom.trackTop(ti);
+        double h = geom.trackHeight(ti);
+        double cy = top + h / 2;
+        double arrowH = Math.min(18, h * 0.5);
+        double half = arrowH / 2;
+
+        g.save();
+        g.setStroke(SELECTION_FRAME);
+        g.setLineWidth(1.6);
+        g.setFill(BG);
+        // Soft tint behind the glyph so it reads on busy waveform backgrounds.
+        g.setGlobalAlpha(0.85);
+        g.fillOval(cx - 7, cy - 9, 14, 18);
+        g.setGlobalAlpha(1);
+        // Vertical shaft
+        g.strokeLine(cx, cy - half, cx, cy + half);
+        // Top arrowhead
+        g.strokeLine(cx, cy - half, cx - 3, cy - half + 3);
+        g.strokeLine(cx, cy - half, cx + 3, cy - half + 3);
+        // Bottom arrowhead
+        g.strokeLine(cx, cy + half, cx - 3, cy + half - 3);
+        g.strokeLine(cx, cy + half, cx + 3, cy + half - 3);
+        g.restore();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -405,48 +450,86 @@ public final class TimelineRenderer {
         g.strokeLine(plotLeft, mid, plotLeft + plotWidth, mid);
         g.setLineDashes();
 
-        paintTraceMagnitude(g, row.trace(), top, h, plotLeft, plotWidth, trace);
+        paintTrace(g, row.trace(), top, h, plotLeft, plotWidth, trace);
     }
 
     /**
-     * Render the magnitude envelope of a {@link SignalTrace} into a row's
-     * vertical band. Plots √(re²+im²) so a complex demodulated probe shows up
-     * as a positive envelope above the centreline. The full trace is mapped
-     * across the row's plot rect — there's no time-clipping against the editor
-     * viewport, because output rows track the run's full timeline regardless
-     * of the user's current zoom.
+     * Render a {@link SignalTrace} into a row's vertical band.
+     *
+     * <p>Two layers stacked so a real-valued signal (DC mixing, Q=0) reads
+     * the same as a complex baseband signal:
+     * <ul>
+     *   <li><b>Magnitude envelope</b> — √(re²+im²) drawn as a faint mirrored
+     *       silhouette above and below the centreline. Useful for at-a-glance
+     *       "where is the signal" identification.</li>
+     *   <li><b>Real part (signed)</b> — drawn as the bold trace centred on
+     *       the row's midline; positive bumps go up, negative go down. For a
+     *       sinc test pulse this shows the actual sinc with its negative
+     *       lobes; pre-fix we plotted only magnitude and the negative lobes
+     *       flipped positive, hiding the shape entirely.</li>
+     * </ul>
+     *
+     * <p>The full trace is mapped across the row's plot rect — there's no
+     * time-clipping against the editor viewport, because output rows track
+     * the run's full timeline regardless of the user's current zoom.
      */
-    private static void paintTraceMagnitude(GraphicsContext g, SignalTrace trace,
-                                            double top, double h,
-                                            double plotLeft, double plotWidth, Color stroke) {
+    private static void paintTrace(GraphicsContext g, SignalTrace trace,
+                                   double top, double h,
+                                   double plotLeft, double plotWidth, Color stroke) {
         var pts = trace.points();
         if (pts.isEmpty()) return;
 
-        double maxMag = 0;
+        // Scale to the largest of |re|, |im|, magnitude so positive and
+        // negative excursions both fit. A sinc with main-lobe height M and
+        // negative side lobes of -0.2M is then mapped symmetrically.
+        double maxAbs = 0;
         for (var p : pts) {
             double m = Math.hypot(p.real(), p.imag());
-            if (m > maxMag) maxMag = m;
+            double a = Math.abs(p.real());
+            if (m > maxAbs) maxAbs = m;
+            if (a > maxAbs) maxAbs = a;
         }
-        if (maxMag <= 0) maxMag = 1;
+        if (maxAbs <= 0) maxAbs = 1;
 
         double padding = 4;
         double laneTop = top + padding;
         double laneBottom = top + h - padding;
-        double laneHeight = laneBottom - laneTop;
+        double mid = (laneTop + laneBottom) / 2;
+        double halfH = (laneBottom - laneTop) / 2;
 
         double tStart = pts.getFirst().tMicros();
         double tEnd = pts.getLast().tMicros();
         double tSpan = Math.max(1e-9, tEnd - tStart);
 
-        g.setStroke(stroke);
-        g.setLineWidth(1.1);
+        // Faint magnitude envelope, mirrored above and below the midline.
+        Color envColor = Color.color(stroke.getRed(), stroke.getGreen(), stroke.getBlue(), 0.18);
+        g.setFill(envColor);
         g.beginPath();
         for (int i = 0; i < pts.size(); i++) {
             var p = pts.get(i);
             double mag = Math.hypot(p.real(), p.imag());
             double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
-            // Map [0..maxMag] to [laneBottom..laneTop] — magnitude is non-negative.
-            double y = laneBottom - (mag / maxMag) * laneHeight;
+            double y = mid - (mag / maxAbs) * halfH;
+            if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        for (int i = pts.size() - 1; i >= 0; i--) {
+            var p = pts.get(i);
+            double mag = Math.hypot(p.real(), p.imag());
+            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
+            double y = mid + (mag / maxAbs) * halfH;
+            g.lineTo(x, y);
+        }
+        g.closePath();
+        g.fill();
+
+        // Bold signed-real trace.
+        g.setStroke(stroke);
+        g.setLineWidth(1.1);
+        g.beginPath();
+        for (int i = 0; i < pts.size(); i++) {
+            var p = pts.get(i);
+            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
+            double y = mid - (p.real() / maxAbs) * halfH;
             if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
         }
         g.stroke();
@@ -460,8 +543,27 @@ public final class TimelineRenderer {
         switch (drag) {
             case ClipDragState.RubberBand r -> paintRubberBand(g, r);
             case ClipDragState.CreateClip c -> paintCreateClipPreview(g, geom, c);
+            case ClipDragState.MoveTrack mt -> paintTrackDropIndicator(g, geom, mt);
             default -> { /* nothing */ }
         }
+    }
+
+    /** Insertion line during a track-reorder drag, plus a tinted band on the track being moved. */
+    private static void paintTrackDropIndicator(GraphicsContext g, TimelineGeometry geom, ClipDragState.MoveTrack mt) {
+        if (geom.tracks().isEmpty()) return;
+        int n = geom.tracks().size();
+        if (mt.originIndex() >= 0 && mt.originIndex() < n) {
+            double top = geom.trackTop(mt.originIndex());
+            double h = geom.trackHeight(mt.originIndex());
+            g.setFill(new javafx.scene.paint.Color(0, 0, 0, 0.06));
+            g.fillRect(0, top, geom.width(), h);
+        }
+        // Insertion goes ABOVE the drop lane when moving up, BELOW when moving down.
+        int drop = Math.max(0, Math.min(n - 1, mt.dropIndex()));
+        double y = drop <= mt.originIndex() ? geom.trackTop(drop) : geom.trackTop(drop) + geom.trackHeight(drop);
+        g.setStroke(SELECTION_FRAME);
+        g.setLineWidth(2);
+        g.strokeLine(0, y, geom.width(), y);
     }
 
     private static void paintRubberBand(GraphicsContext g, ClipDragState.RubberBand r) {
