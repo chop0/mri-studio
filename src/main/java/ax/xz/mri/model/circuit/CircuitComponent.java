@@ -538,10 +538,11 @@ public sealed interface CircuitComponent {
     // ─── Mixer (buffered demodulator) ────────────────────────────────────────
 
     /**
-     * Complex-baseband mixer. Senses the voltage at {@code in} with infinite
-     * input impedance, frame-shifts it by {@code exp(-j·2π·loHz·t)} in the
-     * simulator's rotating frame, and decomposes the result onto two
-     * buffered scalar outputs:
+     * Complex-baseband mixer (downconverter). Senses the voltage at
+     * {@code in} with infinite input impedance, frame-shifts it by
+     * {@code exp(-j·(2π·loHz − ω_sim)·t)} — the rotating-frame conjugate
+     * of {@link Modulator}'s upconversion — and decomposes the result
+     * onto two buffered scalar outputs:
      *
      * <ul>
      *   <li>{@link ComplexPairFormat#IQ}: {@code out0} = I (real part),
@@ -552,8 +553,12 @@ public sealed interface CircuitComponent {
      *
      * <p>Both outputs are true voltage-controlled voltage sources — they
      * can drive arbitrary loads (probes, filters) without affecting
-     * {@code in}. Mirror of {@link Modulator}, which takes two scalar
-     * inputs and upconverts into a single complex output.
+     * {@code in}. Exact mirror of {@link Modulator}: upconvert at the
+     * same {@code loHz} then downconvert and the original baseband I/Q
+     * pop out unchanged at {@code out0}/{@code out1}, regardless of the
+     * simulator's rotating-frame choice. The schematic feels like the
+     * lab frame: a probe placed after a {@link Mixer} in the schematic
+     * shows the recovered baseband, not the rotating-frame projection.
      */
     record Mixer(
         ComponentId id,

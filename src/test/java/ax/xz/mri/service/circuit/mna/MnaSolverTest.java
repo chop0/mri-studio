@@ -217,6 +217,78 @@ class MnaSolverTest {
         assertEquals(-Math.sin(theta), out.probeVReal()[1], 1e-6, "Q = Im(e^{-jθ}) = -sin θ");
     }
 
+    /**
+     * Round-trip a real source through Modulator(loHz) → Mixer(loHz) and
+     * verify the recovered baseband at the mixer's scalar outputs equals
+     * the original source value at every time step.
+     *
+     * <p>This is the "schematic feels like the lab frame" contract: a
+     * downconverter at the same frequency the upconverter used should
+     * undo it perfectly, regardless of the simulator's rotating-frame
+     * choice. We test with {@code omegaSim = 2π·656 kHz} (matches a
+     * 0.0154 T B0 reference, the user's reported configuration) and
+     * {@code loHz = 656 kHz} so {@code omegaSim != 0} — that's the
+     * regime where the mixer's rotating-frame projection went wrong.
+     *
+     * <p>Pre-fix behaviour: mixer rotated by {@code -2π·loHz·t} (lab-
+     * frame downconversion) but the modulator rotated by
+     * {@code (2π·loHz − ω_sim)·t} (rotating-frame upconversion). Their
+     * composition left a residual {@code exp(-j·ω_sim·t)} factor, so
+     * the mixer's scalar outputs oscillated at ω_sim — looking like
+     * an upconverted signal at the carrier instead of recovered DC.
+     */
+    @Test
+    void mixerModulatorRoundTripRecoversBasebandWhenOmegaSimNonzero() {
+        double omegaSim = 2 * Math.PI * 656_000;
+        double loHz = 656_000;
+        double srcI = 0.5;
+        double srcQ = 0.0;
+
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "",
+            "return Vec3.of(1, 0, 0);", "T");
+        repo = repo.withEigenfield(efIdDoc);
+        var efId = efIdDoc.id();
+        var rfI = voltageSource("src-i", "src-I", AmplitudeKind.REAL, srcI);
+        var rfQ = voltageSource("src-q", "src-Q", AmplitudeKind.REAL, 1.0);
+        var mod   = new CircuitComponent.Modulator(new ComponentId("mod"), "Mod", loHz);
+        var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", loHz);
+        var coil  = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
+        var probeI = new CircuitComponent.Probe(new ComponentId("probe-i"), "probe-I",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var probeQ = new CircuitComponent.Probe(new ComponentId("probe-q"), "probe-Q",
+            1.0, 0.0, Double.POSITIVE_INFINITY);
+        var wires = List.of(
+            wire("w-i-mod",   rfI.id(),   "out", mod.id(),   "in0"),
+            wire("w-q-mod",   rfQ.id(),   "out", mod.id(),   "in1"),
+            wire("w-mod-mx",  mod.id(),   "out", mixer.id(), "in"),
+            wire("w-mod-coil", mod.id(),  "out", coil.id(),  "in"),
+            wire("w-mx-pi",   mixer.id(), "out0", probeI.id(), "in"),
+            wire("w-mx-pq",   mixer.id(), "out1", probeQ.id(), "in")
+        );
+        var doc = new CircuitDocument(new ProjectNodeId("c"), "c",
+            List.of(rfI, rfQ, mod, mixer, coil, probeI, probeQ), wires, CircuitLayout.empty());
+        var compiled = CircuitCompiler.compile(doc, repo, R, Z);
+        var solver = new MnaSolver(compiled.mna(), compiled);
+        var out = new MnaSolver.StepOut(1, 2);
+
+        // Sample the round-trip at several non-zero times. If the mixer
+        // and modulator are properly frame-paired, the recovered
+        // baseband is time-invariant at the source's value.
+        double dt = 1e-7;
+        double[] testTimes = {0.0, 1.5e-6, 3.7e-6, 12.3e-6, 47.1e-6};
+        for (double t : testTimes) {
+            solver.step(new double[]{srcI, srcQ}, null, null, dt, t, omegaSim, out);
+            assertEquals(srcI, out.probeVReal()[0], 1e-6,
+                "I-probe at mixer.out0 should equal source I (" + srcI + ") at t=" + t
+                    + ", got " + out.probeVReal()[0] + " — round-trip leaked an "
+                    + "exp(-j·ω_sim·t) factor.");
+            assertEquals(srcQ, out.probeVReal()[1], 1e-6,
+                "Q-probe at mixer.out1 should equal source Q (" + srcQ + ") at t=" + t
+                    + ", got " + out.probeVReal()[1]);
+        }
+    }
+
     // ───────── Helpers ─────────
 
     private static CompiledCircuit compileSingleDriveCircuit(AmplitudeKind kind, double coilR) {

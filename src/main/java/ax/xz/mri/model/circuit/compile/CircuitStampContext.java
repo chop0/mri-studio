@@ -57,12 +57,15 @@ public interface CircuitStampContext {
     void stampSwitch(Node a, Node b, SwitchParams params);
 
     /**
-     * Complex-baseband mixer. Taps {@code in} with infinite impedance,
-     * frame-shifts by {@code exp(-j·2π·loHz·t)}, and stamps two buffered
-     * scalar outputs per {@code format}: IQ → (real, imag) or
-     * MAG_PHASE → (|·|, arg). The MNA resolves the output each step by
-     * iterating until {@code V_in} stabilises — one iteration suffices
-     * for DAG topologies.
+     * Complex-baseband mixer (downconverter). Taps {@code in} with
+     * infinite impedance, frame-shifts by
+     * {@code exp(-j·(2π·loHz − ω_sim)·t)} — the rotating-frame conjugate
+     * of {@link #stampModulator} — and stamps two buffered scalar
+     * outputs per {@code format}: IQ → (real, imag) or MAG_PHASE →
+     * (|·|, arg). Mod(loHz) followed by Mix(loHz) is identity at the
+     * scalar outputs, regardless of ω_sim. The MNA resolves the output
+     * each step by iterating until {@code V_in} stabilises — one
+     * iteration suffices for DAG topologies.
      */
     void stampMixer(Node in, Node out0, Node out1, double loHz,
                     ComplexPairFormat format);

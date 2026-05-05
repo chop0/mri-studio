@@ -60,8 +60,11 @@ public record MnaNetwork(
 
     // Mixer arrays: size = mixer count. Each mixer exposes two scalar
     // outputs (mixerOut0Branch / mixerOut1Branch) whose values come from
-    // decomposing V(mixerInNode[m]) · exp(-j·2π·mixerLoHz[m]·t) per
-    // mixerFormat[m] (IQ → real,imag; MAG_PHASE → |·|, arg).
+    // decomposing V(mixerInNode[m]) · exp(-j·(2π·mixerLoHz[m] − ω_sim)·t)
+    // per mixerFormat[m] (IQ → real,imag; MAG_PHASE → |·|, arg). The
+    // rotation is the rotating-frame conjugate of the Modulator's, so a
+    // Mod(loHz) → Mix(loHz) round-trip is exact identity on the I/Q
+    // baseband regardless of ω_sim.
     int[] mixerInNode,
     int[] mixerOut0Branch,
     int[] mixerOut1Branch,

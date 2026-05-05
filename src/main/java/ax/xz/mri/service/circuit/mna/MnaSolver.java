@@ -111,7 +111,7 @@ public final class MnaSolver {
         if (net.needsComplexIteration()) {
             int passes = 2;
             for (int pass = 0; pass < passes; pass++) {
-                boolean mConv = updateMixerOutputs(mixerOut0, mixerOut1, tSeconds);
+                boolean mConv = updateMixerOutputs(mixerOut0, mixerOut1, tSeconds, omegaSimRadPerSec);
                 boolean modConv = updateModulatorOutputs(modulatorOutRe, modulatorOutIm, tSeconds, omegaSimRadPerSec);
                 stampB(controls, emfReal, emfImag, dt, tSeconds, omegaSimRadPerSec,
                     mixerOut0, mixerOut1, modulatorOutRe, modulatorOutIm);
@@ -127,17 +127,30 @@ public final class MnaSolver {
 
     /**
      * Recompute each mixer's two scalar outputs from the current node-voltage
-     * solution. For IQ: out0 = Re(V_in · e^{-jθ}), out1 = Im(V_in · e^{-jθ}).
-     * For MAG_PHASE: out0 = |V_in|, out1 = arg(V_in · e^{-jθ}).
+     * solution. For IQ: out0 = Re(V_in · e^{-jθ}), out1 = Im(V_in · e^{-jθ})
+     * where θ = (2π·loHz − ω_sim)·t — the rotating-frame conjugate of the
+     * Modulator's rotation, so that {@code Modulator(loHz)} followed by
+     * {@code Mixer(loHz)} is the identity in the schematic's lab-frame
+     * convention regardless of the simulator's rotating-frame choice.
+     *
+     * <p>Pre-2026-05 the rotation was {@code 2π·loHz·t} alone (a true
+     * lab-frame downconversion), which left a residual
+     * {@code exp(-j·ω_sim·t)} on every mixer-modulator round-trip — a
+     * probe wired to the mixer's outputs saw an upconverted signal at
+     * the rotating-frame frequency instead of the recovered baseband.
+     * Pinned by {@code mixerModulatorRoundTripRecoversBasebandWhenOmegaSimNonzero}.
+     *
+     * <p>For MAG_PHASE: out0 = |V_in|, out1 = arg(V_in · e^{-jθ}).
      * Returns {@code true} if every slot is within 1e-12 of its previous value.
      */
-    private boolean updateMixerOutputs(double[] out0, double[] out1, double tSeconds) {
+    private boolean updateMixerOutputs(double[] out0, double[] out1, double tSeconds, double omegaSim) {
         boolean converged = true;
         for (int m = 0; m < net.mixerCount(); m++) {
             int inNode = net.mixerInNode()[m];
             double vInRe = inNode >= 0 ? xI[inNode] : 0;
             double vInIm = inNode >= 0 ? xQ[inNode] : 0;
-            double theta = 2 * Math.PI * net.mixerLoHz()[m] * tSeconds;
+            double deltaOmega = 2 * Math.PI * net.mixerLoHz()[m] - omegaSim;
+            double theta = deltaOmega * tSeconds;
             double c = Math.cos(theta), s = Math.sin(theta);
             // V_shifted = V_in · e^{-jθ} = (Re·cos + Im·sin) + j·(Im·cos − Re·sin)
             double shiftRe = vInRe * c + vInIm * s;
