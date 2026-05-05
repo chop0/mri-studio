@@ -6,10 +6,21 @@ import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentPosition;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
+import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.state.Autosaver;
+import ax.xz.mri.state.DocumentEditor;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.ProjectState;
+import ax.xz.mri.state.ProjectStateIO;
+import ax.xz.mri.state.RecordSurgery;
+import ax.xz.mri.state.Scope;
+import ax.xz.mri.state.Transaction;
+import ax.xz.mri.state.UnifiedStateManager;
 import javafx.beans.property.IntegerProperty;
-import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyBooleanProperty;
+import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.SimpleIntegerProperty;
-import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 import javafx.collections.FXCollections;
@@ -22,108 +33,133 @@ import java.util.UUID;
 import java.util.function.UnaryOperator;
 
 /**
- * Mutable editing state for one circuit document.
+ * Per-circuit editor view-model.
  *
- * <p>{@link #current} is the canonical {@link CircuitDocument}; every
- * mutation replaces it with a new immutable record and bumps
- * {@link #revision} so UI listeners refresh. Selection (component or wire)
- * is tracked here too so the canvas and inspector can coordinate without
- * owning separate sources of truth.
+ * <p>Holds <em>session-only</em> state (selection, highlight overlay, status
+ * banner). The underlying {@link CircuitDocument} is read live from the
+ * {@link UnifiedStateManager} via a {@link DocumentEditor}; mutations dispatch
+ * through the manager so they participate in the global undo log and autosave.
  */
 public final class CircuitEditSession {
-    private static final int MAX_UNDO = 100;
 
-    public final ObjectProperty<CircuitDocument> current = new SimpleObjectProperty<>();
+    private final DocumentEditor<CircuitDocument> editor;
+    private final UnifiedStateManager state;
+    private final ProjectNodeId circuitId;
+
+    /** Live view of the circuit document — mirrors {@code state.current().circuit(id)}. */
+    private final ReadOnlyObjectWrapper<CircuitDocument> current = new ReadOnlyObjectWrapper<>();
+    /** Bumped on every {@code current} change; canvas redraws listen on this. */
     public final IntegerProperty revision = new SimpleIntegerProperty(0);
+
     public final ObservableSet<ComponentId> selectedComponents = FXCollections.observableSet(new LinkedHashSet<>());
     public final ObservableSet<String> selectedWires = FXCollections.observableSet(new LinkedHashSet<>());
-    /**
-     * Components belonging to a "look at this path" highlight overlay
-     * (distinct from selection). The schematic canvas paints these with an
-     * amber halo so the user can spot the route without losing whatever they
-     * had selected. Set by, for example, the clip inspector's
-     * "Show in schematic" affordance.
-     */
     public final ObservableSet<ComponentId> highlightedComponents = FXCollections.observableSet(new LinkedHashSet<>());
-    /** Wire ids belonging to the same highlight overlay as {@link #highlightedComponents}. */
     public final ObservableSet<String> highlightedWires = FXCollections.observableSet(new LinkedHashSet<>());
     public final StringProperty statusMessage = new SimpleStringProperty("");
 
-    private final java.util.Deque<CircuitDocument> undoStack = new java.util.ArrayDeque<>();
-    private final java.util.Deque<CircuitDocument> redoStack = new java.util.ArrayDeque<>();
+    private Clipboard clipboard = new Clipboard(List.of(), List.of(), List.of());
 
-    public CircuitEditSession(CircuitDocument document) {
-        current.set(document);
+    /**
+     * Active drag/batch transaction. While non-null, every {@link #apply}
+     * routes through it instead of dispatching immediately, so a whole
+     * drag (or paste, or rotate) lands as a single undo entry.
+     */
+    private Transaction activeTx;
+
+    /** Production constructor — wired into the project's state manager. */
+    public CircuitEditSession(UnifiedStateManager state, ProjectNodeId circuitId) {
+        this.state = state;
+        this.circuitId = circuitId;
+        this.editor = new DocumentEditor<>(state,
+            Scope.indexed(Scope.root(), "circuits", circuitId),
+            "schematic-editor",
+            CircuitDocument.class);
+        current.set(editor.value());
+        editor.valueProperty().addListener((obs, o, n) -> {
+            current.set(n);
+            revision.set(revision.get() + 1);
+            // Selection may reference deleted ids — keep it consistent.
+            if (n != null) {
+                var liveComponents = new java.util.HashSet<ComponentId>();
+                for (var c : n.components()) liveComponents.add(c.id());
+                selectedComponents.removeIf(id -> !liveComponents.contains(id));
+                var liveWires = new java.util.HashSet<String>();
+                for (var w : n.wires()) liveWires.add(w.id());
+                selectedWires.removeIf(id -> !liveWires.contains(id));
+            }
+        });
     }
 
+    /**
+     * Test helper — builds a standalone state manager seeded with {@code doc}
+     * and exposes a session over it. Used by editor tests that exercise the
+     * helper methods (deleteSelection / addComponent / paste / …) without
+     * spinning up a full project session.
+     */
+    public static CircuitEditSession standalone(CircuitDocument doc) {
+        var surgery = new RecordSurgery();
+        var io = new ProjectStateIO();
+        var saver = new Autosaver(io::write, null);
+        var manager = new UnifiedStateManager(
+            ProjectState.empty().withCircuit(doc), surgery, saver, null);
+        return new CircuitEditSession(manager, doc.id());
+    }
+
+    /** The state manager this session writes through. */
+    public UnifiedStateManager state() { return state; }
+
+    /** Current circuit document (snapshot of the live state). */
     public CircuitDocument doc() { return current.get(); }
 
-    public boolean canUndo() { return !undoStack.isEmpty(); }
-    public boolean canRedo() { return !redoStack.isEmpty(); }
+    /** Live read-only view of the document. UI listeners bind to this. */
+    public ReadOnlyObjectProperty<CircuitDocument> current() { return current.getReadOnlyProperty(); }
+
+    public ReadOnlyBooleanProperty canUndoProperty() { return editor.canUndoProperty(); }
+    public ReadOnlyBooleanProperty canRedoProperty() { return editor.canRedoProperty(); }
+
+    public boolean canUndo() { return editor.canUndoProperty().get(); }
+    public boolean canRedo() { return editor.canRedoProperty().get(); }
 
     public void apply(UnaryOperator<CircuitDocument> delta) {
-        var snapshot = doc();
-        var next = delta.apply(snapshot);
-        if (next != null && !next.equals(snapshot)) {
-            pushUndo(snapshot);
-            current.set(next);
-            revision.set(revision.get() + 1);
-        }
+        if (activeTx != null) activeTx.apply(delta);
+        else editor.apply(delta, "Edit circuit");
     }
 
     /**
-     * Replace the whole document in-place as a user edit. Pushes an undo
-     * snapshot so the change is reversible, same as a single
-     * {@link #apply(UnaryOperator)}. Used by batch operations like
-     * {@link #deleteSelection()} that rebuild the document in one step.
+     * Replace the whole document atomically as one user edit. Used by batch
+     * operations (delete, paste, duplicate) that rebuild the doc in one step.
      */
     public void replaceDocument(CircuitDocument next) {
-        var snapshot = doc();
-        if (!next.equals(snapshot)) {
-            pushUndo(snapshot);
-            current.set(next);
-            revision.set(revision.get() + 1);
-        }
+        apply(prev -> next);
     }
 
     /**
-     * External load — blow away undo history and install the document as the
-     * new baseline. Use this on project open, never for user edits.
+     * Begin a coalescing transaction. While the transaction is open, all
+     * {@link #apply} calls accumulate into a single undo entry. Call
+     * {@link #endTransaction()} on drag-end / batch-commit to flush.
+     *
+     * <p>Editors should use try/finally to ensure {@link #endTransaction()}
+     * runs even if the drag handler throws.
      */
-    public void loadDocument(CircuitDocument next) {
-        undoStack.clear();
-        redoStack.clear();
-        current.set(next);
-        selectedComponents.clear();
-        selectedWires.clear();
-        revision.set(revision.get() + 1);
+    public void beginTransaction(String label) {
+        if (activeTx != null) {
+            throw new IllegalStateException("Circuit transaction already active");
+        }
+        activeTx = editor.beginTransaction(label);
     }
 
-    public void undo() {
-        if (undoStack.isEmpty()) return;
-        var snapshot = undoStack.pop();
-        redoStack.push(doc());
-        current.set(snapshot);
-        selectedComponents.clear();
-        selectedWires.clear();
-        revision.set(revision.get() + 1);
+    /** Commit any active transaction. No-op if none is open. */
+    public void endTransaction() {
+        if (activeTx == null) return;
+        var tx = activeTx;
+        activeTx = null;
+        tx.commit();
     }
 
-    public void redo() {
-        if (redoStack.isEmpty()) return;
-        var snapshot = redoStack.pop();
-        undoStack.push(doc());
-        current.set(snapshot);
-        selectedComponents.clear();
-        selectedWires.clear();
-        revision.set(revision.get() + 1);
-    }
+    public void undo() { editor.undo(); }
+    public void redo() { editor.redo(); }
 
-    private void pushUndo(CircuitDocument previous) {
-        undoStack.push(previous);
-        while (undoStack.size() > MAX_UNDO) undoStack.removeLast();
-        redoStack.clear();
-    }
+    /* ── Selection ───────────────────────────────────────────────────────── */
 
     public void selectOnly(ComponentId id) {
         selectedWires.clear();
@@ -142,11 +178,6 @@ public final class CircuitEditSession {
         selectedWires.clear();
     }
 
-    /**
-     * Replace the highlight set with the given components and wires. Clears
-     * existing highlights first. Pass empty collections (or call
-     * {@link #clearHighlight()}) to remove the overlay.
-     */
     public void setHighlight(java.util.Collection<ComponentId> components,
                              java.util.Collection<String> wires) {
         highlightedComponents.clear();
@@ -155,77 +186,79 @@ public final class CircuitEditSession {
         if (wires != null) highlightedWires.addAll(wires);
     }
 
-    /** Drop the path-highlight overlay. */
     public void clearHighlight() {
         highlightedComponents.clear();
         highlightedWires.clear();
     }
 
+    /* ── Component / wire helpers ───────────────────────────────────────── */
+
     public void deleteSelection() {
-        var doc = doc();
-        var toRemove = new ArrayList<>(selectedComponents);
-        var wiresToRemove = new ArrayList<>(selectedWires);
-        for (var id : toRemove) doc = doc.removeComponent(id);
-        for (var id : wiresToRemove) doc = doc.removeWire(id);
-        replaceDocument(doc);
+        if (selectedComponents.isEmpty() && selectedWires.isEmpty()) return;
+        var toRemoveComponents = new ArrayList<>(selectedComponents);
+        var toRemoveWires = new ArrayList<>(selectedWires);
+        editor.apply(d -> {
+            var next = d;
+            for (var id : toRemoveComponents) next = next.removeComponent(id);
+            for (var id : toRemoveWires) next = next.removeWire(id);
+            return next;
+        }, "Delete selection");
     }
 
     public void addComponent(CircuitComponent component, ComponentPosition position) {
-        var existing = new java.util.HashSet<String>();
-        for (var c : doc().components()) existing.add(c.name());
-        var withUniqueName = existing.contains(component.name())
-            ? component.withName(uniqueName(existing, component.name()))
+        var existingNames = new java.util.HashSet<String>();
+        for (var c : doc().components()) existingNames.add(c.name());
+        var withUniqueName = existingNames.contains(component.name())
+            ? component.withName(uniqueName(existingNames, component.name()))
             : component;
         var finalPosition = (position == null || !position.id().equals(withUniqueName.id()))
             ? (position == null ? null
                 : new ComponentPosition(withUniqueName.id(), position.x(), position.y(), position.rotationQuarters()))
             : position;
-        apply(doc -> doc.addComponent(withUniqueName, finalPosition));
+        editor.apply(d -> d.addComponent(withUniqueName, finalPosition), "Add component");
         selectOnly(withUniqueName.id());
     }
 
     public void replaceComponent(CircuitComponent updated) {
-        apply(doc -> doc.replaceComponent(updated));
+        editor.apply(d -> d.replaceComponent(updated), "Edit " + updated.name());
     }
 
     public void moveComponent(ComponentId id, double newX, double newY) {
-        apply(doc -> {
-            var existing = doc.layout().positionOf(id).orElse(null);
+        editor.apply(d -> {
+            var existing = d.layout().positionOf(id).orElse(null);
             int rot = existing == null ? 0 : existing.rotationQuarters();
             boolean mirrored = existing != null && existing.mirrored();
-            return doc.withLayout(doc.layout().with(new ComponentPosition(id, newX, newY, rot, mirrored)));
-        });
+            return d.withLayout(d.layout().with(new ComponentPosition(id, newX, newY, rot, mirrored)));
+        }, "Move component");
     }
 
-    /** Rotate every selected component 90 degrees clockwise. */
     public void rotateSelection() {
         if (selectedComponents.isEmpty()) return;
-        apply(doc -> {
-            var layout = doc.layout();
+        editor.apply(d -> {
+            var layout = d.layout();
             for (var id : selectedComponents) {
                 var pos = layout.positionOf(id).orElse(null);
                 if (pos != null) layout = layout.with(pos.withRotationQuarters(pos.rotationQuarters() + 1));
             }
-            return doc.withLayout(layout);
-        });
+            return d.withLayout(layout);
+        }, "Rotate selection");
     }
 
-    /** Flip every selected component horizontally. */
     public void mirrorSelection() {
         if (selectedComponents.isEmpty()) return;
-        apply(doc -> {
-            var layout = doc.layout();
+        editor.apply(d -> {
+            var layout = d.layout();
             for (var id : selectedComponents) {
                 var pos = layout.positionOf(id).orElse(null);
                 if (pos != null) layout = layout.with(pos.withMirrored(!pos.mirrored()));
             }
-            return doc.withLayout(layout);
-        });
+            return d.withLayout(layout);
+        }, "Mirror selection");
     }
 
     public void addWire(ComponentTerminal from, ComponentTerminal to) {
         var wire = new Wire("wire-" + UUID.randomUUID(), from, to);
-        apply(doc -> doc.addWire(wire));
+        editor.apply(d -> d.addWire(wire), "Add wire");
     }
 
     public boolean isWireBetween(ComponentTerminal a, ComponentTerminal b) {
@@ -253,66 +286,58 @@ public final class CircuitEditSession {
         return out;
     }
 
-    /**
-     * Duplicate the selected components (not wires) and offset them by
-     * {@code (dx, dy)} in layout coordinates. Wires between selected
-     * components are preserved with fresh ids; names are rewritten to remain
-     * unique. The clones become the new selection.
-     */
     public void duplicateSelection(double dx, double dy) {
         if (selectedComponents.isEmpty()) return;
-        var doc = doc();
+        var idsToDuplicate = new java.util.HashSet<>(selectedComponents);
         var oldToNew = new java.util.HashMap<ComponentId, ComponentId>();
-        var additions = new ArrayList<CircuitComponent>();
-        var positions = new ArrayList<ComponentPosition>();
-        var existingNames = new java.util.HashSet<String>();
-        for (var c : doc.components()) existingNames.add(c.name());
-
-        for (var id : selectedComponents) {
-            var original = doc.component(id).orElse(null);
-            if (original == null) continue;
-            var cloneId = new ComponentId(original.id().value() + "-copy-" + UUID.randomUUID());
-            String cloneName = uniqueName(existingNames, original.name());
-            existingNames.add(cloneName);
-            var clone = original.withName(cloneName);
-            clone = withId(clone, cloneId);
-            oldToNew.put(original.id(), cloneId);
-            additions.add(clone);
-            var pos = doc.layout().positionOf(original.id()).orElse(null);
-            if (pos != null) {
-                positions.add(new ComponentPosition(cloneId, pos.x() + dx, pos.y() + dy, pos.rotationQuarters()));
+        var newSelection = new java.util.LinkedHashSet<ComponentId>();
+        editor.apply(d -> {
+            var existingNames = new java.util.HashSet<String>();
+            for (var c : d.components()) existingNames.add(c.name());
+            var additions = new ArrayList<CircuitComponent>();
+            var positions = new ArrayList<ComponentPosition>();
+            oldToNew.clear();
+            for (var id : idsToDuplicate) {
+                var original = d.component(id).orElse(null);
+                if (original == null) continue;
+                var cloneId = new ComponentId(original.id().value() + "-copy-" + UUID.randomUUID());
+                String cloneName = uniqueName(existingNames, original.name());
+                existingNames.add(cloneName);
+                var clone = original.withName(cloneName).withId(cloneId);
+                oldToNew.put(original.id(), cloneId);
+                additions.add(clone);
+                var pos = d.layout().positionOf(original.id()).orElse(null);
+                if (pos != null) {
+                    positions.add(new ComponentPosition(cloneId, pos.x() + dx, pos.y() + dy, pos.rotationQuarters()));
+                }
             }
-        }
-
-        for (var addition : additions) doc = doc.addComponent(addition, null);
-        var layout = doc.layout();
-        for (var p : positions) layout = layout.with(p);
-        doc = doc.withLayout(layout);
-
-        for (var w : doc().wires()) {
-            var fromClone = oldToNew.get(w.from().componentId());
-            var toClone = oldToNew.get(w.to().componentId());
-            if (fromClone != null && toClone != null) {
-                doc = doc.addWire(new Wire("wire-" + UUID.randomUUID(),
-                    new ComponentTerminal(fromClone, w.from().port()),
-                    new ComponentTerminal(toClone, w.to().port())));
+            var next = d;
+            for (var addition : additions) next = next.addComponent(addition, null);
+            var layout = next.layout();
+            for (var p : positions) layout = layout.with(p);
+            next = next.withLayout(layout);
+            for (var w : d.wires()) {
+                var fromClone = oldToNew.get(w.from().componentId());
+                var toClone = oldToNew.get(w.to().componentId());
+                if (fromClone != null && toClone != null) {
+                    next = next.addWire(new Wire("wire-" + UUID.randomUUID(),
+                        new ComponentTerminal(fromClone, w.from().port()),
+                        new ComponentTerminal(toClone, w.to().port())));
+                }
             }
-        }
-
-        replaceDocument(doc);
+            newSelection.addAll(oldToNew.values());
+            return next;
+        }, "Duplicate selection");
         selectedComponents.clear();
-        selectedComponents.addAll(oldToNew.values());
+        selectedComponents.addAll(newSelection);
     }
 
-    // ─── Clipboard: cut / copy / paste ────────────────────────────────────
+    /* ── Clipboard ──────────────────────────────────────────────────────── */
 
     /**
-     * In-memory snapshot of a selection the user cut or copied. Stashes the
-     * component data, its layout position, and any wires that connect two
-     * clipboard components (so pasting a sub-circuit keeps its internal
-     * wiring intact). Cross-boundary wires — ones that go from a clipboard
-     * component to something not in the selection — are dropped, because
-     * there's no target to hook them up to on the paste side.
+     * In-memory snapshot of a selection the user cut or copied. Cross-boundary
+     * wires (from a clipboard component to one not in the selection) are
+     * dropped — there's no target on the paste side.
      */
     public record Clipboard(
         List<CircuitComponent> components,
@@ -322,28 +347,24 @@ public final class CircuitEditSession {
         public boolean isEmpty() { return components.isEmpty(); }
     }
 
-    private Clipboard clipboard = new Clipboard(List.of(), List.of(), List.of());
-
     public boolean clipboardIsEmpty() { return clipboard.isEmpty(); }
 
-    /** Current clipboard snapshot — read-only view for the canvas's paste-as-placement flow. */
     public Clipboard clipboardContents() { return clipboard; }
 
-    /** Snapshot the current selection into the clipboard. */
     public void copySelection() {
         if (selectedComponents.isEmpty()) return;
-        var doc = doc();
+        var d = doc();
         var ids = new java.util.HashSet<>(selectedComponents);
         var components = new ArrayList<CircuitComponent>();
         var positions = new ArrayList<ComponentPosition>();
         for (var id : selectedComponents) {
-            var c = doc.component(id).orElse(null);
+            var c = d.component(id).orElse(null);
             if (c == null) continue;
             components.add(c);
-            doc.layout().positionOf(id).ifPresent(positions::add);
+            d.layout().positionOf(id).ifPresent(positions::add);
         }
         var internalWires = new ArrayList<Wire>();
-        for (var w : doc.wires()) {
+        for (var w : d.wires()) {
             if (ids.contains(w.from().componentId()) && ids.contains(w.to().componentId())) {
                 internalWires.add(w);
             }
@@ -351,21 +372,12 @@ public final class CircuitEditSession {
         clipboard = new Clipboard(List.copyOf(components), List.copyOf(positions), List.copyOf(internalWires));
     }
 
-    /** Copy the selection to the clipboard, then delete it. */
     public void cutSelection() {
         if (selectedComponents.isEmpty()) return;
         copySelection();
         deleteSelection();
     }
 
-    /**
-     * Paste the clipboard at {@code (targetX, targetY)}, using the
-     * clipboard's top-leftmost component as the anchor. Shortcut wrapper
-     * around {@link #insertCluster} for callers that don't need rotation
-     * or mirror. Fresh ids are assigned and names are de-duplicated
-     * against the current document. The pasted components become the new
-     * selection.
-     */
     public void paste(double targetX, double targetY) {
         if (clipboard.isEmpty()) return;
         double anchorX = Double.POSITIVE_INFINITY;
@@ -384,72 +396,60 @@ public final class CircuitEditSession {
             targetX, targetY, 0, false);
     }
 
-    /**
-     * Insert a cluster of components at {@code (anchorX, anchorY)}, with each
-     * component offset by its entry in {@code relativePositions} (rotated /
-     * mirrored by the cluster's pending {@code rotationQuarters} /
-     * {@code mirrored}). Wires in {@code internalWires} are recreated with
-     * fresh ids so internal sub-circuit wiring survives the paste.
-     *
-     * <p>The pasted components become the new selection so the user can
-     * immediately drag, rotate, or delete them as a group.
-     */
     public void insertCluster(List<CircuitComponent> components,
                               List<ComponentPosition> relativePositions,
                               List<Wire> internalWires,
                               double anchorX, double anchorY,
                               int rotationQuarters, boolean mirrored) {
         if (components.isEmpty()) return;
-
-        var existingNames = new java.util.HashSet<String>();
-        var existingIds = new java.util.HashSet<ComponentId>();
-        for (var c : doc().components()) {
-            existingNames.add(c.name());
-            existingIds.add(c.id());
-        }
         var oldToNew = new java.util.HashMap<ComponentId, ComponentId>();
-
-        var doc = doc();
-        for (var original : components) {
-            // Palette placement hands us fresh UUID-suffixed ids that can't
-            // collide; paste hands us ids that are already in the doc. Only
-            // regenerate on collision so single-component palette flow keeps
-            // its original id.
-            ComponentId newId = existingIds.contains(original.id())
-                ? new ComponentId(original.id().value() + "-paste-" + UUID.randomUUID())
-                : original.id();
-            existingIds.add(newId);
-            String newName = existingNames.contains(original.name())
-                ? uniqueName(existingNames, original.name())
-                : original.name();
-            existingNames.add(newName);
-            var clone = original.withName(newName).withId(newId);
-            oldToNew.put(original.id(), newId);
-            doc = doc.addComponent(clone, null);
-        }
-        var layout = doc.layout();
-        for (var p : relativePositions) {
-            var newId = oldToNew.get(p.id());
-            if (newId == null) continue;
-            double[] off = rotateOffset(p.x(), p.y(), rotationQuarters, mirrored);
-            int finalRot = (p.rotationQuarters() + rotationQuarters) & 3;
-            boolean finalMirror = p.mirrored() ^ mirrored;
-            layout = layout.with(new ComponentPosition(newId,
-                anchorX + off[0], anchorY + off[1], finalRot, finalMirror));
-        }
-        doc = doc.withLayout(layout);
-        for (var w : internalWires) {
-            var newFrom = oldToNew.get(w.from().componentId());
-            var newTo = oldToNew.get(w.to().componentId());
-            if (newFrom == null || newTo == null) continue;
-            doc = doc.addWire(new Wire("wire-" + UUID.randomUUID(),
-                new ComponentTerminal(newFrom, w.from().port()),
-                new ComponentTerminal(newTo, w.to().port())));
-        }
-
-        replaceDocument(doc);
+        var newSelection = new java.util.LinkedHashSet<ComponentId>();
+        editor.apply(d -> {
+            var existingNames = new java.util.HashSet<String>();
+            var existingIds = new java.util.HashSet<ComponentId>();
+            for (var c : d.components()) {
+                existingNames.add(c.name());
+                existingIds.add(c.id());
+            }
+            oldToNew.clear();
+            var next = d;
+            for (var original : components) {
+                ComponentId newId = existingIds.contains(original.id())
+                    ? new ComponentId(original.id().value() + "-paste-" + UUID.randomUUID())
+                    : original.id();
+                existingIds.add(newId);
+                String newName = existingNames.contains(original.name())
+                    ? uniqueName(existingNames, original.name())
+                    : original.name();
+                existingNames.add(newName);
+                var clone = original.withName(newName).withId(newId);
+                oldToNew.put(original.id(), newId);
+                next = next.addComponent(clone, null);
+            }
+            var layout = next.layout();
+            for (var p : relativePositions) {
+                var newId = oldToNew.get(p.id());
+                if (newId == null) continue;
+                double[] off = rotateOffset(p.x(), p.y(), rotationQuarters, mirrored);
+                int finalRot = (p.rotationQuarters() + rotationQuarters) & 3;
+                boolean finalMirror = p.mirrored() ^ mirrored;
+                layout = layout.with(new ComponentPosition(newId,
+                    anchorX + off[0], anchorY + off[1], finalRot, finalMirror));
+            }
+            next = next.withLayout(layout);
+            for (var w : internalWires) {
+                var newFrom = oldToNew.get(w.from().componentId());
+                var newTo = oldToNew.get(w.to().componentId());
+                if (newFrom == null || newTo == null) continue;
+                next = next.addWire(new Wire("wire-" + UUID.randomUUID(),
+                    new ComponentTerminal(newFrom, w.from().port()),
+                    new ComponentTerminal(newTo, w.to().port())));
+            }
+            newSelection.addAll(oldToNew.values());
+            return next;
+        }, "Paste");
         selectedComponents.clear();
-        selectedComponents.addAll(oldToNew.values());
+        selectedComponents.addAll(newSelection);
     }
 
     private static double[] rotateOffset(double x, double y, int quarters, boolean mirror) {
@@ -462,10 +462,6 @@ public final class CircuitEditSession {
         }
         if (mirror) rx = -rx;
         return new double[]{rx, ry};
-    }
-
-    private static CircuitComponent withId(CircuitComponent source, ComponentId newId) {
-        return source.withId(newId);
     }
 
     private static String uniqueName(java.util.Set<String> existing, String base) {

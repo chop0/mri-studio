@@ -4,7 +4,7 @@ import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.field.FieldMap;
 import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.Segment;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.service.circuit.CircuitCompiler;
 
 import java.util.List;
@@ -22,7 +22,7 @@ import java.util.List;
 public final class SimulationOutputFactory {
     private SimulationOutputFactory() {}
 
-    public static SimulationOutput build(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
+    public static SimulationOutput build(SimulationConfig config, List<Segment> segments, ProjectState repository) {
         return new SimulationOutput(buildFieldMap(config, segments, repository));
     }
 
@@ -30,7 +30,7 @@ public final class SimulationOutputFactory {
         return build(config, segments, null);
     }
 
-    private static FieldMap buildFieldMap(SimulationConfig config, List<Segment> segments, ProjectRepository repository) {
+    private static FieldMap buildFieldMap(SimulationConfig config, List<Segment> segments, ProjectState repository) {
         var field = new FieldMap();
         int nR = Math.max(2, config.nR());
         int nZ = Math.max(2, config.nZ());
@@ -73,7 +73,7 @@ public final class SimulationOutputFactory {
         return field;
     }
 
-    private static CircuitDocument resolveCircuit(SimulationConfig config, ProjectRepository repository) {
+    private static CircuitDocument resolveCircuit(SimulationConfig config, ProjectState repository) {
         if (repository == null || config.circuitId() == null) return null;
         return repository.node(config.circuitId()) instanceof CircuitDocument c ? c : null;
     }

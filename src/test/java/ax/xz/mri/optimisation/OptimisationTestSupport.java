@@ -11,8 +11,8 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CircuitCompiler;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.support.TestSimulationOutputFactory;
 
 import java.util.List;
@@ -46,13 +46,13 @@ public final class OptimisationTestSupport {
      * {@code rxWeight · Mx}. Probe is wired to the RF coil directly; no mux.
      */
     public static ProblemGeometry singlePointGeometry(double rxWeight, double outWeight) {
-        var repo = ProjectRepository.untitled();
-        var rfEfId = new ProjectNodeId("ef-rf");
-        repo.addEigenfield(new EigenfieldDocument(rfEfId, "ef-rf", "",
-            "return Vec3.of(1, 0, 0);", "T"));
-        var zeroEfId = new ProjectNodeId("ef-zero");
-        repo.addEigenfield(new EigenfieldDocument(zeroEfId, "ef-zero", "",
-            "return Vec3.ZERO;", "T"));
+        var repo = ProjectState.empty();
+		var rfEfDoc = new EigenfieldDocument(new ProjectNodeId("ef-rf"), "ef-rf", "",
+			"return Vec3.of(1, 0, 0);", "T");
+		repo = repo.withEigenfield(rfEfDoc); var rfEfId = rfEfDoc.id();
+		var zeroEfDoc = new EigenfieldDocument(new ProjectNodeId("ef-zero"),
+							"ef-zero", "", "return Vec3.ZERO;", "T");
+		repo = repo.withEigenfield(zeroEfDoc); var zeroEfId = zeroEfDoc.id();
 
         // RF drive is two REAL envelopes (I and Q) piped through a
         // Modulator at loHz=0 — the sources appear as "RF I" / "RF Q" in

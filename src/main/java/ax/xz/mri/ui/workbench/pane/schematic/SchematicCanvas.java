@@ -81,7 +81,7 @@ public final class SchematicCanvas extends Canvas {
         this.session = session;
         setFocusTraversable(true);
 
-        session.current.addListener((obs, oldVal, newVal) -> redraw());
+        session.current().addListener((obs, oldVal, newVal) -> redraw());
         session.revision.addListener((obs, oldVal, newVal) -> redraw());
         InvalidationListener selectionListener = o -> redraw();
         session.selectedComponents.addListener(selectionListener);
@@ -486,6 +486,8 @@ public final class SchematicCanvas extends Canvas {
             dragStartCompY = pos.y();
             if (!e.isShiftDown()) session.selectOnly(draggingComponent);
             else session.selectedComponents.add(draggingComponent);
+            // Coalesce every mouse-move into a single undo entry.
+            session.beginTransaction("Move component");
         } else if (hit.kind() == Hit.Kind.WIRE) {
             if (!e.isShiftDown()) session.selectWireOnly(hit.wireId());
             else session.selectedWires.add(hit.wireId());
@@ -519,7 +521,10 @@ public final class SchematicCanvas extends Canvas {
     }
 
     private void onMouseReleased(javafx.scene.input.MouseEvent e) {
-        draggingComponent = null;
+        if (draggingComponent != null) {
+            draggingComponent = null;
+            session.endTransaction();
+        }
         if (panningInProgress) {
             panningInProgress = false;
             refreshCursor();

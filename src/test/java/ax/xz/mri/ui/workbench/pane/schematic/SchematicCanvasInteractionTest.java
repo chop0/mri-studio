@@ -35,7 +35,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void primaryModeDefaultsToSelectAndPropagatesToCursor() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             assertEquals(SchematicCanvas.PrimaryMode.SELECT, canvas.primaryMode());
             canvas.setPrimaryMode(SchematicCanvas.PrimaryMode.PAN);
@@ -48,7 +48,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void zoomAndFitDoNotThrowOnEmptyOrPopulatedCircuit() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             canvas.resize(600, 400);
             canvas.zoomBy(1.2);
@@ -61,7 +61,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void escClearsSelectionAndExitsWireMode() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             session.selectedComponents.add(new ComponentId("src"));
             canvas.setTool(SchematicCanvas.ToolState.wiring(
@@ -76,7 +76,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void deleteShortcutRemovesSelectedComponents() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             session.selectedComponents.add(new ComponentId("coil"));
             boolean consumed = canvas.handleKey(keyEvent(KeyCode.DELETE, false, false));
@@ -89,7 +89,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void ctrlCThenCtrlVArmsClipboardPlacement() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             session.selectedComponents.add(new ComponentId("src"));
             int before = session.doc().components().size();
@@ -110,7 +110,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void ctrlXPutsSelectionOntoClipboardAndDeletesIt() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             session.selectedComponents.add(new ComponentId("src"));
             canvas.handleKey(keyEvent(KeyCode.X, true, false));
@@ -125,7 +125,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void ctrlRInPlacingModeRotatesPhantomInsteadOfSelection() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var canvas = new SchematicCanvas(session);
             // Select something already in the doc; its rotation should NOT
             // change just because we pressed Ctrl+R while arming a new
@@ -149,7 +149,7 @@ class SchematicCanvasInteractionTest {
     @Test
     void paneKeyFilterRoutesModeHotkeys() {
         FxTestSupport.runOnFxThread(() -> {
-            var session = new CircuitEditSession(lowCircuit());
+            var session = CircuitEditSession.standalone(lowCircuit());
             var pane = new SchematicPane(session, () -> null, id -> {});
             var stage = new Stage();
             var scene = new Scene(new BorderPane(pane), 400, 300);

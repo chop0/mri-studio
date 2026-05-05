@@ -31,8 +31,6 @@ public final class EigenfieldEditorProvider implements DocumentEditorProvider {
         session.activeEditSession.set(null);
     }
 
-    @Override public boolean isDirty() { return editorPane.isDirty(); }
-    @Override public void save() { editorPane.save(); }
     @Override public void dispose() { editorPane.dispose(); }
 
     public EigenfieldDocument document() { return document; }

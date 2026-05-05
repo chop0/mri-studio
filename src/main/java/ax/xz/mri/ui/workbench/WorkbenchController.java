@@ -249,18 +249,8 @@ public class WorkbenchController {
         updateShellStatus();
     }
 
-    /** Close a workspace tab with dirty check. */
+    /** Close a workspace tab. Autosave keeps every edit on disk; no save prompt. */
     public void closeTab(WorkspaceTab tab) {
-        if (tab.editor().isDirty()) {
-            var alert = new Alert(Alert.AlertType.CONFIRMATION);
-            alert.setTitle("Unsaved Changes");
-            alert.setHeaderText("Save changes to " + tab.rawName() + "?");
-            alert.getButtonTypes().setAll(ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
-            var result = alert.showAndWait().orElse(ButtonType.CANCEL);
-            if (result == ButtonType.YES) tab.editor().save();
-            else if (result == ButtonType.CANCEL) return;
-        }
-
         tab.editor().dispose();
         if (tab.dockable() != null) documentLeaf.removeDockable(tab.dockable());
         openTabs.remove(tab);
@@ -549,25 +539,36 @@ public class WorkbenchController {
         catch (Exception ex) { showError("Failed to open project", ex.getMessage()); }
     }
 
-    public boolean confirmCloseAllEditors() {
-        for (var tab : java.util.List.copyOf(openTabs)) {
-            if (tab.editor().isDirty()) {
-                var alert = new Alert(Alert.AlertType.CONFIRMATION);
-                alert.setTitle("Unsaved Changes");
-                alert.setHeaderText("Save changes to " + tab.rawName() + "?");
-                alert.getButtonTypes().setAll(ButtonType.YES, ButtonType.NO, ButtonType.CANCEL);
-                var result = alert.showAndWait().orElse(ButtonType.CANCEL);
-                if (result == ButtonType.YES) tab.editor().save();
-                else if (result == ButtonType.CANCEL) return false;
-            }
-        }
-        return true;
+    /** Always returns true — autosave guarantees every edit is on disk. */
+    public boolean confirmCloseAllEditors() { return true; }
+
+    /**
+     * Cmd+Z dispatched against the currently focused editor's scope. When
+     * no document tab is open the undo log is filtered to STRUCTURAL
+     * mutations only, so explorer-level Ctrl+Z reverts add/remove/rename
+     * but not in-document content edits buried deeper in history.
+     */
+    public void undoContextual() {
+        session.state.undoIn(focusedScopeFilter());
     }
 
-    public void saveContextual() {
+    public void redoContextual() {
+        session.state.redoIn(focusedScopeFilter());
+    }
+
+    private java.util.function.Predicate<ax.xz.mri.state.Mutation> focusedScopeFilter() {
         var tab = activeTab.get();
-        if (tab != null && tab.editor().isDirty()) { tab.editor().save(); return; }
-        saveProject();
+        if (tab == null) return session.state.structural();
+        return session.state.any();
+    }
+
+    /**
+     * Cmd+S forces an immediate flush of any pending autosave debounce. The
+     * mutation log is already authoritative; this just hurries the disk write.
+     */
+    public void saveContextual() {
+        session.state.flush();
+        updateShellStatus();
     }
 
     public void saveProject() {
@@ -623,13 +624,13 @@ public class WorkbenchController {
 
         Runnable refresh = () -> {
             var tab = activeTab.get();
-            var repo = session.project.repository.get();
+            var repo = session.state.current();
             if (tab != null) contextLabel.setText(tab.displayName());
             else contextLabel.setText(repo.manifest().name());
         };
         refresh.run();
         activeTab.addListener((obs, o, n) -> refresh.run());
-        session.project.repository.addListener((obs, o, n) -> refresh.run());
+        session.state.currentProperty().addListener((obs, o, n) -> refresh.run());
 
         var simStatus = new javafx.scene.control.ProgressIndicator(-1);
         simStatus.setPrefSize(14, 14); simStatus.setMaxSize(14, 14);
@@ -729,7 +730,7 @@ public class WorkbenchController {
         commandRegistry.register(new PaneAction(CommandId.CLEAR_USER_POINTS, "Clear User Points", session.points::clearUserPoints));
         commandRegistry.register(new PaneAction(CommandId.DELETE_SEQUENCE, "Delete Sequence", () -> {
             var n = session.project.inspector.inspectedNodeId.get();
-            if (n != null && session.project.repository.get().node(n) instanceof SequenceDocument)
+            if (n != null && session.state.current().node(n) instanceof SequenceDocument)
                 session.project.deleteSequence(n);
         }));
         commandRegistry.register(new PaneAction(CommandId.NEW_SIM_CONFIG, "New Sim Config", this::newSimConfigWizard));
@@ -872,12 +873,6 @@ public class WorkbenchController {
             for (var t : java.util.List.copyOf(openTabs)) closeTab(t);
         });
         menu.getItems().addAll(closeItem, closeOthers, closeAll);
-        if (tab.editor().isDirty()) {
-            var saveItem = new MenuItem("Save");
-            saveItem.setOnAction(e -> tab.editor().save());
-            menu.getItems().add(0, saveItem);
-            menu.getItems().add(1, new SeparatorMenuItem());
-        }
         return menu;
     }
 

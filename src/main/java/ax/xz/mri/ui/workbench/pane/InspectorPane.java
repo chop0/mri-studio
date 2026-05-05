@@ -108,7 +108,7 @@ public final class InspectorPane extends WorkbenchPane {
             return;
         }
 
-        var repo = paneContext.session().project.repository.get();
+        var repo = paneContext.session().state.current();
         ProjectNodeId nodeId = paneContext.session().project.inspector.inspectedNodeId.get();
         ProjectNode node = nodeId == null ? null : repo.node(nodeId);
         if (node == null) {
@@ -184,8 +184,8 @@ public final class InspectorPane extends WorkbenchPane {
         simTitle.getStyleClass().add("clip-inspector-section");
         box.getChildren().add(simTitle);
 
-        var repo = paneContext.session().project.repository.get();
-        var configs = repo.simConfigIds().stream()
+        var repo = paneContext.session().state.current();
+        var configs = repo.simulationIds().stream()
             .map(id -> (SimulationConfigDocument) repo.node(id))
             .filter(Objects::nonNull)
             .toList();
@@ -260,8 +260,8 @@ public final class InspectorPane extends WorkbenchPane {
         title.getStyleClass().add("clip-inspector-section");
         box.getChildren().add(title);
 
-        var repo = paneContext.session().project.repository.get();
-        var availableConfigs = repo.hardwareConfigIds().stream()
+        var repo = paneContext.session().state.current();
+        var availableConfigs = repo.hardwareIds().stream()
             .map(repo::hardwareConfig)
             .filter(Objects::nonNull)
             .toList();
@@ -391,12 +391,12 @@ public final class InspectorPane extends WorkbenchPane {
     private void handleSchematicHighlightRequest(ax.xz.mri.ui.preview.SchematicHighlightRequest request) {
         if (request == null) return;
         var controller = paneContext.controller();
-        var repo = paneContext.session().project.repository.get();
+        var repo = paneContext.session().state.current();
         if (repo == null) return;
 
         // Find a sim config whose circuitId matches.
         SimulationConfigDocument owningConfig = null;
-        for (var id : repo.simConfigIds()) {
+        for (var id : repo.simulationIds()) {
             if (repo.node(id) instanceof SimulationConfigDocument cfg
                     && cfg.config() != null
                     && request.circuitId().equals(cfg.config().circuitId())) {
@@ -419,8 +419,10 @@ public final class InspectorPane extends WorkbenchPane {
 
     private void populateSequence(SequenceDocument sequence) {
         content.getChildren().add(infoLine("Kind", "Sequence"));
-        content.getChildren().add(infoLine("Segments", Integer.toString(sequence.segments().size())));
-        content.getChildren().add(infoLine("Pulse Segments", Integer.toString(sequence.pulse().size())));
+        // Segment + pulse-step counts are derived from the baked output.
+        var baked = paneContext.session().bakery.bake(sequence, paneContext.session().state.current());
+        content.getChildren().add(infoLine("Segments", Integer.toString(baked.segments().size())));
+        content.getChildren().add(infoLine("Pulse Segments", Integer.toString(baked.pulseSegments().size())));
         content.getChildren().add(actionRow(
             button("Rename", () -> renameSequence(sequence.id())),
             button("Delete", () -> {
@@ -438,7 +440,7 @@ public final class InspectorPane extends WorkbenchPane {
             content.getChildren().add(infoLine("B\u2080 ref", String.format("%.4f T", cfg.referenceB0Tesla())));
             content.getChildren().add(infoLine("T\u2081", String.format("%.0f ms", cfg.t1Ms())));
             content.getChildren().add(infoLine("T\u2082", String.format("%.0f ms", cfg.t2Ms())));
-            var repo = paneContext.session().project.repository.get();
+            var repo = paneContext.session().state.current();
             var circuit = repo.circuit(cfg.circuitId());
             if (circuit != null) {
                 content.getChildren().add(infoLine("Circuit", circuit.name()));
@@ -491,7 +493,7 @@ public final class InspectorPane extends WorkbenchPane {
     }
 
     private void renameHardwareConfig(ProjectNodeId configId) {
-        var repository = paneContext.session().project.repository.get();
+        var repository = paneContext.session().state.current();
         if (!(repository.node(configId) instanceof HardwareConfigDocument hw)) return;
         var dialog = new TextInputDialog(hw.name());
         dialog.setTitle("Rename Hardware Config");
@@ -510,8 +512,8 @@ public final class InspectorPane extends WorkbenchPane {
         content.getChildren().add(infoLine("Coils", String.valueOf(circuit.coils().size())));
         content.getChildren().add(infoLine("Probes", String.valueOf(circuit.probes().size())));
         content.getChildren().add(new Separator());
-        var repo = paneContext.session().project.repository.get();
-        var owningConfig = repo.simConfigIds().stream()
+        var repo = paneContext.session().state.current();
+        var owningConfig = repo.simulationIds().stream()
             .map(id -> (SimulationConfigDocument) repo.node(id))
             .filter(Objects::nonNull)
             .filter(cfg -> cfg.config() != null && circuit.id().equals(cfg.config().circuitId()))
@@ -567,7 +569,7 @@ public final class InspectorPane extends WorkbenchPane {
     }
 
     private void renameSequence(ProjectNodeId sequenceId) {
-        var repository = paneContext.session().project.repository.get();
+        var repository = paneContext.session().state.current();
         var node = repository.node(sequenceId);
         if (!(node instanceof SequenceDocument sequence)) return;
         var dialog = new TextInputDialog(sequence.name());

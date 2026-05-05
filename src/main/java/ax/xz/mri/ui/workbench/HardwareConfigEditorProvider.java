@@ -32,8 +32,6 @@ public final class HardwareConfigEditorProvider implements DocumentEditorProvide
         // Preserve last analysis data — editing a hardware config doesn't replace the run result.
     }
 
-    @Override public boolean isDirty() { return editorPane.isDirty(); }
-    @Override public void save() { editorPane.save(); }
     @Override public void dispose() {}
 
     public HardwareConfigDocument configDoc() { return configDoc; }

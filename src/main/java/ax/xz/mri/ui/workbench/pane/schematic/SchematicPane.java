@@ -3,7 +3,7 @@ package ax.xz.mri.ui.workbench.pane.schematic;
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import javafx.geometry.Insets;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
@@ -34,7 +34,7 @@ import java.util.function.Supplier;
 public final class SchematicPane extends BorderPane {
     private final CircuitEditSession session;
     private final SchematicCanvas canvas;
-    private final Supplier<ProjectRepository> repositorySupplier;
+    private final Supplier<ProjectState> repositorySupplier;
     private final Consumer<ProjectNodeId> onJumpToEigenfield;
 
     private double lastSceneMouseX = Double.NaN;
@@ -43,7 +43,7 @@ public final class SchematicPane extends BorderPane {
     private javafx.event.EventHandler<javafx.scene.input.MouseEvent> sceneMouseFilter;
 
     public SchematicPane(CircuitEditSession session,
-                         Supplier<ProjectRepository> repositorySupplier,
+                         Supplier<ProjectState> repositorySupplier,
                          Consumer<ProjectNodeId> onJumpToEigenfield) {
         this.session = session;
         this.repositorySupplier = repositorySupplier;
@@ -129,10 +129,6 @@ public final class SchematicPane extends BorderPane {
     public SchematicCanvas canvas() { return canvas; }
 
     public CircuitEditSession session() { return session; }
-
-    public void replaceDocument(CircuitDocument document) {
-        session.loadDocument(document);
-    }
 
     /**
      * Set the path-highlight overlay to the given components and wires, then
@@ -220,7 +216,7 @@ public final class SchematicPane extends BorderPane {
         label.textProperty().bind(session.statusMessage);
         var hint = new Label();
         session.revision.addListener((obs, o, n) -> refreshHint(hint));
-        session.current.addListener((obs, o, n) -> refreshHint(hint));
+        session.current().addListener((obs, o, n) -> refreshHint(hint));
         refreshHint(hint);
         var spacer = new javafx.scene.layout.Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);

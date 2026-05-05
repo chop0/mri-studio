@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.workbench.pane.schematic;
 
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.ui.workbench.pane.schematic.presenter.ComponentPresenters;
 import ax.xz.mri.ui.workbench.pane.schematic.presenter.InspectorEnv;
 import ax.xz.mri.ui.workbench.pane.schematic.presenter.InspectorFields;
@@ -25,7 +25,7 @@ public final class ComponentInspector extends VBox {
     private final InspectorEnv env;
 
     public ComponentInspector(CircuitEditSession session,
-                              Supplier<ProjectRepository> repositorySupplier,
+                              Supplier<ProjectState> repositorySupplier,
                               Consumer<ProjectNodeId> onJumpToEigenfield) {
         this.session = session;
         this.env = new InspectorEnv(session, repositorySupplier, onJumpToEigenfield);

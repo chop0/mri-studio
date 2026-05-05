@@ -1,5 +1,6 @@
 package ax.xz.mri.project;
 
+import ax.xz.mri.state.AtomicWriter;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -15,8 +16,7 @@ public final class ProjectSerialiser {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public void writeManifest(Path path, ProjectManifest manifest) throws IOException {
-        if (path.getParent() != null) Files.createDirectories(path.getParent());
-        Files.writeString(path, """
+        AtomicWriter.writeString(path, """
             schema = 1
             name = "%s"
             layout_file = "%s"
@@ -38,8 +38,8 @@ public final class ProjectSerialiser {
     }
 
     public <T> void writeJson(Path path, T document) throws IOException {
-        if (path.getParent() != null) Files.createDirectories(path.getParent());
-        mapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), document);
+        var bytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(document);
+        AtomicWriter.writeBytes(path, bytes);
     }
 
     public <T> T readJson(Path path, Class<T> type) throws IOException {

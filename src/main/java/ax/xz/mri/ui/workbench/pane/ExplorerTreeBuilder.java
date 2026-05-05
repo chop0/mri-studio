@@ -3,7 +3,7 @@ package ax.xz.mri.ui.workbench.pane;
 import ax.xz.mri.project.ProjectNode;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.ProjectNodeKind;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.ui.workbench.ProjectDisplayNames;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import javafx.scene.control.TreeItem;
@@ -12,7 +12,7 @@ import javafx.scene.control.TreeItem;
 public final class ExplorerTreeBuilder {
     private ExplorerTreeBuilder() {}
 
-    public static TreeItem<ExplorerEntry> build(ProjectRepository repository) {
+    public static TreeItem<ExplorerEntry> build(ProjectState repository) {
         var root = branch(repository.manifest().name(), null, StudioIconKind.PROJECT);
 
         var sequences = branch("Sequences", null, StudioIconKind.GROUP_SEQUENCES);
@@ -22,13 +22,13 @@ public final class ExplorerTreeBuilder {
         if (!sequences.getChildren().isEmpty()) root.getChildren().add(sequences);
 
         var simConfigs = branch("Simulation Configs", null, StudioIconKind.SIMULATION);
-        for (var configId : repository.simConfigIds()) {
+        for (var configId : repository.simulationIds()) {
             simConfigs.getChildren().add(leaf(repository.node(configId), StudioIconKind.SIMULATION));
         }
         if (!simConfigs.getChildren().isEmpty()) root.getChildren().add(simConfigs);
 
         var hardwareConfigs = branch("Hardware Configs", null, StudioIconKind.SIMULATION);
-        for (var configId : repository.hardwareConfigIds()) {
+        for (var configId : repository.hardwareIds()) {
             hardwareConfigs.getChildren().add(leaf(repository.node(configId), StudioIconKind.SIMULATION));
         }
         if (!hardwareConfigs.getChildren().isEmpty()) root.getChildren().add(hardwareConfigs);

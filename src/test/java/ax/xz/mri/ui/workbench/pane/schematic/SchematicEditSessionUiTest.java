@@ -20,7 +20,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void deleteSelectionRemovesComponentsAndIncidentWires() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         var coilId = new ComponentId("coil");
         session.selectedComponents.add(coilId);
         session.deleteSelection();
@@ -32,7 +32,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void moveComponentUpdatesLayout() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         var coilId = new ComponentId("coil");
         session.moveComponent(coilId, 500, 800);
         var pos = session.doc().layout().positionOf(coilId).orElseThrow();
@@ -42,7 +42,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void rotateSelectionBumpsRotationQuarters() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         session.selectedComponents.add(new ComponentId("coil"));
         session.rotateSelection();
         var pos = session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow();
@@ -56,7 +56,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void mirrorSelectionTogglesFlag() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         session.selectedComponents.add(new ComponentId("coil"));
         session.mirrorSelection();
         assertTrue(session.doc().layout().positionOf(new ComponentId("coil")).orElseThrow().mirrored());
@@ -66,7 +66,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void addComponentAutoRenamesToAvoidCollision() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         var duplicate = new CircuitComponent.Coil(new ComponentId("coil-2"), "Coil", null, 0, 1);
         session.addComponent(duplicate, new ComponentPosition(duplicate.id(), 400, 400, 0));
         var names = session.doc().components().stream().map(CircuitComponent::name).toList();
@@ -77,7 +77,7 @@ class SchematicEditSessionUiTest {
     @Test
     void addWireBumpsRevisionAndRejectsDuplicates() {
         var blank = CircuitDocument.empty(new ProjectNodeId("blank"), "Blank");
-        var session = new CircuitEditSession(blank);
+        var session = CircuitEditSession.standalone(blank);
         var coil1 = new CircuitComponent.Coil(new ComponentId("c1"), "C1", null, 0, 1);
         var coil2 = new CircuitComponent.Coil(new ComponentId("c2"), "C2", null, 0, 1);
         session.addComponent(coil1, new ComponentPosition(coil1.id(), 100, 100, 0));
@@ -92,7 +92,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void duplicateSelectionClonesComponentsWithFreshIdsAndWires() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         var srcId = new ComponentId("src");
         var coilId = new ComponentId("coil");
         session.selectedComponents.addAll(List.of(srcId, coilId));
@@ -108,7 +108,7 @@ class SchematicEditSessionUiTest {
 
     @Test
     void replaceComponentPreservesSelection() {
-        var session = new CircuitEditSession(simpleCircuit());
+        var session = CircuitEditSession.standalone(simpleCircuit());
         var srcId = new ComponentId("src");
         session.selectedComponents.add(srcId);
         var src = (CircuitComponent.VoltageSource) session.componentAt(srcId);

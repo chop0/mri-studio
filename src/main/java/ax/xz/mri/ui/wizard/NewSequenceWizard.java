@@ -15,6 +15,7 @@ import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 
 import java.util.Optional;
+import java.util.Objects;
 
 /**
  * New Sequence wizard.
@@ -32,10 +33,10 @@ public final class NewSequenceWizard {
     private NewSequenceWizard() {}
 
     public static Optional<SequenceDocument> show(Stage owner, ProjectSessionViewModel project) {
-        var repo = project.repository.get();
-        var configs = repo.simConfigIds().stream()
+        var repo = project.project();
+        var configs = repo.simulationIds().stream()
             .map(id -> (SimulationConfigDocument) repo.node(id))
-            .filter(java.util.Objects::nonNull)
+            .filter(Objects::nonNull)
             .toList();
 
         if (configs.isEmpty()) {

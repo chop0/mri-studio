@@ -14,7 +14,6 @@ import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CircuitCompiler;
 import ax.xz.mri.service.circuit.CompiledCircuit;
 
@@ -147,10 +146,14 @@ public final class TestSimulationOutputFactory {
      * Each source drives its own coil directly — no switches, no mux.
      */
     public static CompiledCircuit buildTestCircuit(double[] rMm, double[] zMm) {
-        var repo = ProjectRepository.untitled();
-        var rfEfId = addEigenfield(repo, "ef-rf", "return Vec3.of(1, 0, 0);");
-        var gxEfId = addEigenfield(repo, "ef-gx", "return Vec3.of(0, 0, x);");
-        var gzEfId = addEigenfield(repo, "ef-gz", "return Vec3.of(0, 0, z);");
+        var rfEf = makeEigenfield("ef-rf", "return Vec3.of(1, 0, 0);");
+        var gxEf = makeEigenfield("ef-gx", "return Vec3.of(0, 0, x);");
+        var gzEf = makeEigenfield("ef-gz", "return Vec3.of(0, 0, z);");
+        var repo = ax.xz.mri.state.ProjectState.empty()
+            .withEigenfield(rfEf).withEigenfield(gxEf).withEigenfield(gzEf);
+        var rfEfId = rfEf.id();
+        var gxEfId = gxEf.id();
+        var gzEfId = gzEf.id();
 
         // RF drive is two REAL envelopes fed into a Modulator (loHz=0 —
         // keep the carrier out of the test so optimiser math stays simple;
@@ -186,9 +189,7 @@ public final class TestSimulationOutputFactory {
         return CircuitCompiler.compile(doc, repo, rMm, zMm);
     }
 
-    private static ProjectNodeId addEigenfield(ProjectRepository repo, String id, String script) {
-        var nodeId = new ProjectNodeId(id);
-        repo.addEigenfield(new EigenfieldDocument(nodeId, id, "", script, "T"));
-        return nodeId;
+    private static EigenfieldDocument makeEigenfield(String id, String script) {
+        return new EigenfieldDocument(new ProjectNodeId(id), id, "", script, "T");
     }
 }

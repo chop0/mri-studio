@@ -14,7 +14,6 @@ import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -34,9 +33,11 @@ class ProbeSignalIntegrationTest {
 
     @Test
     void gatedProbeIsSilentWhenSwitchOpen() {
-        var repo = ProjectRepository.untitled();
-        var rxEf = addEigenfield(repo, "rx", "return Vec3.of(1, 0, 0);");
-        var b0Ef = addEigenfield(repo, "b0", "return Vec3.of(0, 0, 1);");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var rxEfDoc = new EigenfieldDocument(new ProjectNodeId("rx"), "rx", "", "return Vec3.of(1, 0, 0)", "T");
+		repo = repo.withEigenfield(rxEfDoc); var rxEf = rxEfDoc.id();
+		var b0EfDoc = new EigenfieldDocument(new ProjectNodeId("b0"), "b0", "", "return Vec3.of(0, 0, 1);", "T");
+		repo = repo.withEigenfield(b0EfDoc); var b0Ef = b0EfDoc.id();
 
         var b0Src = voltageSource("src-b0", "B0", AmplitudeKind.STATIC, 0, B0);
         var gate = voltageSource("src-gate", "RX Gate", AmplitudeKind.GATE, 0, 1);
@@ -56,7 +57,7 @@ class ProbeSignalIntegrationTest {
         var circuitId = new ProjectNodeId("c");
         var circuit = new CircuitDocument(circuitId, "T",
             List.of(b0Src, gate, b0Coil, rxCoil, sw, probe), wires, CircuitLayout.empty());
-        repo.addCircuit(circuit);
+        repo = repo.withCircuit(circuit);
 
         var config = new SimulationConfig(1000, 1000, GAMMA, 5, 20, 10, 3, 3, B0, DT, circuitId);
         var steps = new ArrayList<PulseStep>();
@@ -95,11 +96,5 @@ class ProbeSignalIntegrationTest {
 
     private static Wire wire(String id, ComponentId a, String ap, ComponentId b, String bp) {
         return new Wire(id, new ComponentTerminal(a, ap), new ComponentTerminal(b, bp));
-    }
-
-    private static ProjectNodeId addEigenfield(ProjectRepository repo, String name, String script) {
-        var id = new ProjectNodeId("ef-" + name);
-        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T"));
-        return id;
     }
 }

@@ -14,8 +14,9 @@ import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
+import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -45,8 +46,8 @@ public final class CircuitStarterLibrary {
         @Override public String id() { return "empty"; }
         @Override public String name() { return "Empty"; }
         @Override public String description() { return "Blank schematic - build from scratch."; }
-        @Override public CircuitDocument build(ProjectNodeId id, String name, ProjectRepository repository) {
-            return CircuitDocument.empty(id, name);
+        @Override public Result build(ProjectNodeId id, String name, ProjectState state) {
+            return Result.of(CircuitDocument.empty(id, name));
         }
     }
 
@@ -67,15 +68,16 @@ public final class CircuitStarterLibrary {
         }
 
         @Override
-        public CircuitDocument build(ProjectNodeId id, String name, ProjectRepository repository) {
+        public Result build(ProjectNodeId id, String name, ProjectState state) {
             double b0Tesla = 0.0154;
             double gamma = 267.522e6;
             double larmorHz = gamma * b0Tesla / (2 * Math.PI);
 
-            var b0Eigen = ensureEigenfield(repository, "B0 Helmholtz", "helmholtz-b0");
-            var gxEigen = ensureEigenfield(repository, "Gradient X", "gradient-x");
-            var gzEigen = ensureEigenfield(repository, "Gradient Z", "gradient-z");
-            var rfEigen = ensureEigenfield(repository, "RF Transverse", "uniform-b-perp");
+            var newEigenfields = new ArrayList<EigenfieldDocument>();
+            var b0Eigen = ensureEigenfield(state, "B0 Helmholtz", "helmholtz-b0", newEigenfields);
+            var gxEigen = ensureEigenfield(state, "Gradient X", "gradient-x", newEigenfields);
+            var gzEigen = ensureEigenfield(state, "Gradient Z", "gradient-z", newEigenfields);
+            var rfEigen = ensureEigenfield(state, "RF Transverse", "uniform-b-perp", newEigenfields);
 
             var b0Src = new VoltageSource(new ComponentId("src-b0"), "B0",
                 AmplitudeKind.STATIC, 0, 0, b0Tesla, 0);
@@ -162,15 +164,30 @@ public final class CircuitStarterLibrary {
                 List.of(b0Coil, rfCoil, gxCoil, gzCoil),
                 rfModulator, trMux, rfActive, rxMixer, probe);
 
-            return new CircuitDocument(id, name, components, wires, layout);
+            return new Result(
+                new CircuitDocument(id, name, components, wires, layout),
+                newEigenfields);
         }
     }
 
-    private static ax.xz.mri.project.EigenfieldDocument ensureEigenfield(
-        ProjectRepository repo, String name, String starterId
+    /**
+     * Look up an eigenfield by (name, script) match, or fabricate a fresh
+     * record. Newly-fabricated records are appended to {@code freshSink} so
+     * the caller can dispatch structural mutations to add them.
+     */
+    private static EigenfieldDocument ensureEigenfield(
+        ProjectState repo, String name, String starterId, List<EigenfieldDocument> freshSink
     ) {
         var s = EigenfieldStarterLibrary.byId(starterId).orElseThrow();
-        return repo.findOrCreateEigenfield(name, s.description(), s.source(), s.units());
+        for (var id : repo.eigenfieldIds()) {
+            var ef = repo.eigenfield(id);
+            if (ef != null && ef.name().equals(name) && ef.script().equals(s.source())) return ef;
+        }
+        var fresh = new EigenfieldDocument(
+            new ProjectNodeId("ef-" + java.util.UUID.randomUUID()),
+            name, s.description(), s.source(), s.units());
+        freshSink.add(fresh);
+        return fresh;
     }
 
     private static Wire wire(String id, ComponentId a, String pa, ComponentId b, String pb) {

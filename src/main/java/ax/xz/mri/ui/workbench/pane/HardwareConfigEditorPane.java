@@ -9,6 +9,8 @@ import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.StudioIconKind;
 import ax.xz.mri.ui.workbench.StudioIcons;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.Scope;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -33,43 +35,29 @@ import javafx.scene.layout.VBox;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Objects;
+import java.time.Instant;
 
 /**
  * Full-page tabbed editor for a {@link HardwareConfigDocument}.
  *
  * <p>Mirrors the architectural shell of {@link SimulationConfigEditorPane} —
- * title strip with a renameable name + an UNSAVED pill + at-a-glance metrics,
- * a tabbed body, and a footer with undo/redo/revert/save. The
- * <em>Configuration</em> tab embeds the plugin's own
- * {@link HardwareConfigEditor}, so each plugin can present its own dense UI
- * inside the same chrome.
+ * title strip with a renameable name + at-a-glance metrics, a tabbed body,
+ * and a footer status line. The <em>Configuration</em> tab embeds the
+ * plugin's own {@link HardwareConfigEditor}, so each plugin can present
+ * its own dense UI inside the same chrome.
  *
  * <h3>State management</h3>
- * <p>The pane keeps an in-memory {@code currentConfig} that the plugin's
- * editor mutates via {@link HardwareConfigEditor#setOnEdited(Runnable)}. The
- * undo/redo stacks store typed snapshots; revert resets to the last save.
- * Save round-trips through {@link HardwareConfigDocument#withConfig} into
- * the project repository.
+ * <p>Every plugin-side edit dispatches a Mutation through the unified state
+ * manager scoped to this hardware config; autosave + undo/redo are global.
  */
 public final class HardwareConfigEditorPane extends WorkbenchPane {
-    private static final int MAX_UNDO = 100;
 
     private final HardwareConfigDocument document;
     private final HardwarePlugin plugin;
-    private HardwareConfig savedConfig;
-    private HardwareConfig currentConfig;
-
-    private final Deque<HardwareConfig> undoStack = new ArrayDeque<>();
-    private final Deque<HardwareConfig> redoStack = new ArrayDeque<>();
 
     private final SimpleStringProperty nameProperty = new SimpleStringProperty();
     private final Label titleLabel = new Label();
-    private final Label dirtyPill = new Label("UNSAVED");
     private final Label footerStatus = new Label();
-    private final Button undoButton = new Button();
-    private final Button redoButton = new Button();
-    private final Button saveButton = new Button("Save");
-    private final Button revertButton = new Button("Revert");
 
     private final TabPane tabs = new TabPane();
     private final Tab overviewTab = new Tab("Overview");
@@ -81,8 +69,6 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
     public HardwareConfigEditorPane(PaneContext paneContext, HardwareConfigDocument document) {
         super(paneContext);
         this.document = document;
-        this.savedConfig = document.config();
-        this.currentConfig = document.config();
         this.plugin = HardwarePluginRegistry.byId(document.envelope() != null
                 ? document.envelope().pluginId()
                 : (document.config() != null ? document.config().pluginId() : null))
@@ -93,54 +79,17 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
         buildShell();
         overviewTab.setContent(scrollWrap(buildOverviewTab()));
         configTab.setContent(buildConfigTab());
-
-        refreshDirty();
     }
 
     public HardwareConfigDocument document() { return document; }
 
     public void setOnTitleChanged(Runnable listener) { this.onTitleChanged = listener; }
 
-    public boolean isDirty() {
-        return !Objects.equals(currentConfig, savedConfig);
-    }
+    public void undo() { paneContext.session().state.undoIn(
+        paneContext.session().state.withinScope(Scope.indexed(Scope.root(), "hardware", document.id()))); }
 
-    public void save() {
-        if (!isDirty()) return;
-        var repo = paneContext.session().project.repository.get();
-        var updated = document.withConfig(currentConfig);
-        repo.updateHardwareConfig(updated);
-        savedConfig = currentConfig;
-        paneContext.session().project.explorer.refresh();
-        paneContext.session().project.saveProjectQuietly();
-        refreshDirty();
-        if (onTitleChanged != null) onTitleChanged.run();
-    }
-
-    public void revert() {
-        if (Objects.equals(savedConfig, currentConfig)) return;
-        currentConfig = savedConfig;
-        if (pluginEditor != null) pluginEditor.setConfig(savedConfig);
-        refreshDirty();
-    }
-
-    public void undo() {
-        if (undoStack.isEmpty()) return;
-        var snapshot = undoStack.pop();
-        redoStack.push(currentConfig);
-        currentConfig = snapshot;
-        if (pluginEditor != null) pluginEditor.setConfig(currentConfig);
-        refreshDirty();
-    }
-
-    public void redo() {
-        if (redoStack.isEmpty()) return;
-        var snapshot = redoStack.pop();
-        undoStack.push(currentConfig);
-        currentConfig = snapshot;
-        if (pluginEditor != null) pluginEditor.setConfig(currentConfig);
-        refreshDirty();
-    }
+    public void redo() { paneContext.session().state.redoIn(
+        paneContext.session().state.withinScope(Scope.indexed(Scope.root(), "hardware", document.id()))); }
 
     // ── Chrome ──────────────────────────────────────────────────────────────
 
@@ -164,7 +113,6 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
 
         var typeLabel = new Label("Hardware configuration");
         typeLabel.getStyleClass().add("cfg-title-meta");
-        dirtyPill.getStyleClass().add("cfg-title-dirty-pill");
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -183,7 +131,7 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
             stats.getChildren().add(stat("PLUGIN", "missing"));
         }
 
-        var strip = new HBox(10, titleLabel, typeLabel, dirtyPill, spacer, stats);
+        var strip = new HBox(10, titleLabel, typeLabel, spacer, stats);
         strip.getStyleClass().add("cfg-title-strip");
         strip.setAlignment(Pos.CENTER_LEFT);
         return strip;
@@ -207,40 +155,19 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
     }
 
     private Node buildFooter() {
-        undoButton.setGraphic(StudioIcons.create(StudioIconKind.UNDO));
-        undoButton.getStyleClass().add("button");
-        undoButton.setTooltip(new Tooltip("Undo (Cmd+Z)"));
-        undoButton.setOnAction(e -> undo());
-
-        redoButton.setGraphic(StudioIcons.create(StudioIconKind.REDO));
-        redoButton.getStyleClass().add("button");
-        redoButton.setTooltip(new Tooltip("Redo (Cmd+Shift+Z)"));
-        redoButton.setOnAction(e -> redo());
-
-        revertButton.getStyleClass().add("button");
-        revertButton.setOnAction(e -> revert());
-
-        saveButton.setGraphic(StudioIcons.create(StudioIconKind.SAVE));
-        saveButton.getStyleClass().addAll("button", "primary");
-        saveButton.setTooltip(new Tooltip("Save (Cmd+S)"));
-        saveButton.setOnAction(e -> save());
-
         footerStatus.getStyleClass().add("cfg-footer-status");
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        var bar = new HBox(8, undoButton, redoButton, footerStatus, spacer, revertButton, saveButton);
+        var bar = new HBox(8, footerStatus, spacer);
         bar.setAlignment(Pos.CENTER_LEFT);
         bar.getStyleClass().add("cfg-footer");
         return bar;
     }
 
     private void onShortcut(javafx.scene.input.KeyEvent e) {
-        if (new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN).match(e)) {
-            save();
-            e.consume();
-        } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(e)) {
+        if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(e)) {
             redo(); e.consume();
         } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN).match(e)) {
             undo(); e.consume();
@@ -290,7 +217,8 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
     }
 
     private Node buildConfigTab() {
-        if (plugin == null || currentConfig == null) {
+        var initial = document.config();
+        if (plugin == null || initial == null) {
             var box = new VBox(10);
             box.getStyleClass().add("cfg-tab-inner");
             var warn = new Label("Plugin missing - config cannot be edited until the plugin is loaded.");
@@ -299,7 +227,7 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
             box.getChildren().add(warn);
             return scrollWrap(box);
         }
-        pluginEditor = plugin.configEditor(currentConfig);
+        pluginEditor = plugin.configEditor(initial);
         if (pluginEditor == null) {
             var box = new VBox(10);
             box.getStyleClass().add("cfg-tab-inner");
@@ -308,14 +236,29 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
             box.getChildren().add(hint);
             return scrollWrap(box);
         }
+        // Every plugin-side edit dispatches a Mutation through the unified
+        // state manager — autosave + undo/redo are global and don't need
+        // local Deques.
         pluginEditor.setOnEdited(() -> {
             var snap = pluginEditor.snapshot();
-            if (Objects.equals(snap, currentConfig)) return;
-            undoStack.push(currentConfig);
-            while (undoStack.size() > MAX_UNDO) undoStack.removeLast();
-            redoStack.clear();
-            currentConfig = snap;
-            refreshDirty();
+            var stateMgr = paneContext.session().state;
+            var existing = stateMgr.current().hardwareConfig(document.id());
+            if (existing == null) return;
+            if (Objects.equals(existing.config(), snap)) return;
+            var updated = existing.withConfig(snap);
+            var scope = Scope.indexed(Scope.root(), "hardware", document.id());
+            stateMgr.dispatch(new Mutation(scope, existing, updated,
+                "Edit hardware config", Instant.now(), "hardware-editor",
+                Mutation.Category.CONTENT));
+        });
+        // External state changes (undo, programmatic update) re-hydrate the editor.
+        paneContext.session().state.currentProperty().addListener((obs, o, n) -> {
+            if (n == null || pluginEditor == null) return;
+            var doc = n.hardwareConfig(document.id());
+            if (doc != null && doc.config() != null
+                    && !Objects.equals(doc.config(), pluginEditor.snapshot())) {
+                pluginEditor.setConfig(doc.config());
+            }
         });
         return scrollWrap(pluginEditor.view());
     }
@@ -337,17 +280,6 @@ public final class HardwareConfigEditorPane extends WorkbenchPane {
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scroll.getStyleClass().add("cfg-tab-scroll");
         return scroll;
-    }
-
-    private void refreshDirty() {
-        boolean dirty = isDirty();
-        dirtyPill.setVisible(dirty);
-        dirtyPill.setManaged(dirty);
-        saveButton.setDisable(!dirty);
-        revertButton.setDisable(!dirty);
-        undoButton.setDisable(undoStack.isEmpty());
-        redoButton.setDisable(redoStack.isEmpty());
-        footerStatus.setText(dirty ? "Unsaved changes" : "Up to date");
     }
 
     private void beginRename() {

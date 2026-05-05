@@ -2,7 +2,7 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,13 +12,13 @@ class ExplorerTreeBuilderTest {
 
     @Test
     void treeShowsEigenfieldsGroup() {
-        var repository = ProjectRepository.untitled();
-        repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", "return Vec3.of(0, 0, 1);", "T"));
-        repository.addEigenfield(new EigenfieldDocument(
-            new ProjectNodeId("ef-2"), "RF Loop", "RF coil", "return Vec3.of(1, 0, 0);", "T"));
+        var state = ProjectState.empty()
+            .withEigenfield(new EigenfieldDocument(
+                new ProjectNodeId("ef-1"), "B0 Helmholtz", "Main field", "return Vec3.of(0, 0, 1);", "T"))
+            .withEigenfield(new EigenfieldDocument(
+                new ProjectNodeId("ef-2"), "RF Loop", "RF coil", "return Vec3.of(1, 0, 0);", "T"));
 
-        var root = ExplorerTreeBuilder.build(repository);
+        var root = ExplorerTreeBuilder.build(state);
 
         var eigenfieldsGroup = root.getChildren().stream()
             .filter(item -> item.getValue().label().equals("Eigenfields"))
@@ -34,8 +34,8 @@ class ExplorerTreeBuilderTest {
 
     @Test
     void treeHidesEigenfieldsGroupWhenEmpty() {
-        var repository = ProjectRepository.untitled();
-        var root = ExplorerTreeBuilder.build(repository);
+        var state = ProjectState.empty();
+        var root = ExplorerTreeBuilder.build(state);
 
         var eigenfieldsGroup = root.getChildren().stream()
             .filter(item -> item.getValue().label().equals("Eigenfields"))

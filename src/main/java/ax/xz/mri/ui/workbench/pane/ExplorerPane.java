@@ -80,7 +80,7 @@ public final class ExplorerPane extends WorkbenchPane {
 
         suppressSelectionEvents = true;
         try {
-            tree.setRoot(ExplorerTreeBuilder.build(paneContext.session().project.repository.get()));
+            tree.setRoot(ExplorerTreeBuilder.build(paneContext.session().state.current()));
             tree.getRoot().setExpanded(true);
             // Restore expanded state.
             restoreExpandedState(tree.getRoot(), expandedIds);
@@ -142,7 +142,7 @@ public final class ExplorerPane extends WorkbenchPane {
         open.setOnAction(event -> paneContext.session().project.openNode(entry.nodeId()));
         menu.getItems().add(open);
 
-        var repo = paneContext.session().project.repository.get();
+        var repo = paneContext.session().state.current();
         var node = repo.node(entry.nodeId());
 
         if (node != null && node.kind() == ProjectNodeKind.SEQUENCE) {
@@ -189,7 +189,7 @@ public final class ExplorerPane extends WorkbenchPane {
     }
 
     private void renameSequence(ProjectNodeId sequenceId) {
-        var repository = paneContext.session().project.repository.get();
+        var repository = paneContext.session().state.current();
         var node = repository.node(sequenceId);
         if (!(node instanceof SequenceDocument sequence)) return;
         var dialog = new TextInputDialog(sequence.name());
@@ -201,7 +201,7 @@ public final class ExplorerPane extends WorkbenchPane {
     }
 
     private void renameSimConfig(ProjectNodeId configId) {
-        var repository = paneContext.session().project.repository.get();
+        var repository = paneContext.session().state.current();
         var node = repository.node(configId);
         if (node == null) return;
         var dialog = new TextInputDialog(node.name());
@@ -213,7 +213,7 @@ public final class ExplorerPane extends WorkbenchPane {
     }
 
     private void renameEigenfield(ProjectNodeId eigenfieldId) {
-        var repository = paneContext.session().project.repository.get();
+        var repository = paneContext.session().state.current();
         var node = repository.node(eigenfieldId);
         if (node == null) return;
         var dialog = new TextInputDialog(node.name());

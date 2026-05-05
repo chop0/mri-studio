@@ -75,6 +75,19 @@ public class StudioShell extends BorderPane {
             }}
         );
 
+        // Edit menu — universal undo/redo dispatched against the focused
+        // editor's scope (or the global mutation log if no editor is focused).
+        var editMenu = new Menu("Edit");
+        var undoItem = new MenuItem("Undo");
+        undoItem.setAccelerator(KeyCombination.keyCombination("Shortcut+Z"));
+        undoItem.setOnAction(event -> controller.undoContextual());
+        undoItem.disableProperty().bind(session.state.canUndoProperty().not());
+        var redoItem = new MenuItem("Redo");
+        redoItem.setAccelerator(KeyCombination.keyCombination("Shortcut+Shift+Z"));
+        redoItem.setOnAction(event -> controller.redoContextual());
+        redoItem.disableProperty().bind(session.state.canRedoProperty().not());
+        editMenu.getItems().addAll(undoItem, redoItem);
+
         var viewMenu = new Menu("View");
         var snapItem = new javafx.scene.control.CheckMenuItem("Snap to Grid");
         snapItem.setSelected(true);
@@ -117,7 +130,7 @@ public class StudioShell extends BorderPane {
             menuItem("Clear User Points", CommandId.CLEAR_USER_POINTS, null)
         );
 
-        return new MenuBar(fileMenu, viewMenu, windowMenu, analysisMenu);
+        return new MenuBar(fileMenu, editMenu, viewMenu, windowMenu, analysisMenu);
     }
 
     private Menu buildNewMenu() {

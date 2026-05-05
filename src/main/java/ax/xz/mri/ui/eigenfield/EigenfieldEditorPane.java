@@ -3,6 +3,9 @@ package ax.xz.mri.ui.eigenfield;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
 import ax.xz.mri.model.simulation.dsl.ScriptCompileException;
 import ax.xz.mri.project.EigenfieldDocument;
+import ax.xz.mri.state.DocumentEditor;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.Scope;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import javafx.animation.KeyFrame;
@@ -32,8 +35,6 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.util.Duration;
 
-import java.util.ArrayDeque;
-
 /**
  * Document editor for an {@link EigenfieldDocument}. Left: DSL source. Right:
  * live 3D vector field preview.
@@ -44,11 +45,11 @@ import java.util.ArrayDeque;
  * smooth; compile errors appear in the status strip with line/column.
  */
 public final class EigenfieldEditorPane extends WorkbenchPane {
-    private static final int MAX_UNDO = 100;
     private static final Duration COMPILE_DEBOUNCE = Duration.millis(200);
 
+    private final DocumentEditor<EigenfieldDocument> editor;
+    /** Cached snapshot of {@code editor.value()} — always equals it. */
     private EigenfieldDocument document;
-    private EigenfieldDocument savedDocument;
 
     private final TextArea scriptEditor = new TextArea();
     private final TextField nameField = new TextField();
@@ -59,17 +60,32 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
 
     private final EigenfieldPreviewCanvas preview = new EigenfieldPreviewCanvas();
 
-    private final ArrayDeque<EigenfieldDocument> undoStack = new ArrayDeque<>();
-    private final ArrayDeque<EigenfieldDocument> redoStack = new ArrayDeque<>();
-
     private final Timeline compileDebounce = new Timeline();
     private boolean suppressScriptListener;
     private Runnable onTitleChanged;
 
     public EigenfieldEditorPane(PaneContext paneContext, EigenfieldDocument document) {
         super(paneContext);
-        this.document = document;
-        this.savedDocument = document;
+        var stateMgr = paneContext.session().state;
+        var scope = Scope.indexed(Scope.root(), "eigenfields", document.id());
+        // Ensure the doc lives in state — first-open from the explorer dispatches it.
+        if (stateMgr.current().eigenfield(document.id()) == null) {
+            stateMgr.dispatch(Mutation.structural(scope, null, document, "Create eigenfield"));
+        }
+        this.editor = new DocumentEditor<>(stateMgr, scope, "eigenfield-editor", EigenfieldDocument.class);
+        this.document = editor.value();
+        editor.valueProperty().addListener((obs, o, n) -> {
+            if (n == null) return;
+            this.document = n;
+            if (suppressScriptListener) return;
+            // Re-hydrate UI from new state (covers undo / external edits).
+            hydrateFromDocument();
+            if (o == null || !java.util.Objects.equals(o.script(), n.script())) {
+                compileScript();
+            }
+            setPaneTitle("Eigenfield: " + n.name());
+            notifyTitleChanged();
+        });
         setPaneTitle("Eigenfield: " + document.name());
 
         var meta = buildMetaStrip();
@@ -87,10 +103,7 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
 
         body.setFocusTraversable(true);
         body.setOnKeyPressed(event -> {
-            if (new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN).match(event)) {
-                save();
-                event.consume();
-            } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(event)) {
+            if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(event)) {
                 redo();
                 event.consume();
             } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN).match(event)) {
@@ -252,45 +265,29 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         if (suppressScriptListener) return;
         String next = scriptEditor.getText();
         if (next.equals(document.script())) return;
-        pushUndo();
-        document = document.withScript(next);
-        persistToRepository();
-        notifyTitleChanged();
-
+        editor.apply(d -> d.withScript(next), "Edit script");
         compileDebounce.stop();
         compileDebounce.getKeyFrames().setAll(new KeyFrame(COMPILE_DEBOUNCE, e -> compileScript()));
         compileDebounce.playFromStart();
     }
 
-    private void applyName(String newName) {
-        if (newName == null) newName = "";
-        newName = newName.strip();
+    private void applyName(String rawName) {
+        var newName = rawName == null ? "" : rawName.strip();
         if (newName.isBlank() || newName.equals(document.name())) return;
-        pushUndo();
-        document = document.withName(newName);
-        setPaneTitle("Eigenfield: " + document.name());
-        persistToRepository();
+        editor.apply(d -> d.withName(newName), "Edit name");
         paneContext.session().project.explorer.refresh();
-        notifyTitleChanged();
     }
 
-    private void applyDescription(String newDescription) {
-        if (newDescription == null) newDescription = "";
+    private void applyDescription(String rawDescription) {
+        var newDescription = rawDescription == null ? "" : rawDescription;
         if (newDescription.equals(document.description())) return;
-        pushUndo();
-        document = document.withDescription(newDescription);
-        persistToRepository();
-        notifyTitleChanged();
+        editor.apply(d -> d.withDescription(newDescription), "Edit description");
     }
 
-    private void applyUnits(String newUnits) {
-        if (newUnits == null) newUnits = "";
-        newUnits = newUnits.strip();
+    private void applyUnits(String rawUnits) {
+        var newUnits = rawUnits == null ? "" : rawUnits.strip();
         if (newUnits.equals(document.units())) return;
-        pushUndo();
-        document = document.withUnits(newUnits);
-        persistToRepository();
-        notifyTitleChanged();
+        editor.apply(d -> d.withUnits(newUnits), "Edit units");
     }
 
     private void compileScript() {
@@ -323,58 +320,17 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         setPaneStatus(text);
     }
 
-    // --- Undo / redo / save ---
+    // --- Undo / redo (scoped to this eigenfield via DocumentEditor) ---
 
-    private void pushUndo() {
-        if (undoStack.size() >= MAX_UNDO) undoStack.removeLast();
-        undoStack.push(document);
-        redoStack.clear();
-    }
+    private void undo() { editor.undo(); }
+    private void redo() { editor.redo(); }
 
-    private void undo() {
-        if (undoStack.isEmpty()) return;
-        redoStack.push(document);
-        document = undoStack.pop();
-        hydrateFromDocument();
-        persistToRepository();
-        compileScript();
-        notifyTitleChanged();
-    }
-
-    private void redo() {
-        if (redoStack.isEmpty()) return;
-        undoStack.push(document);
-        document = redoStack.pop();
-        hydrateFromDocument();
-        persistToRepository();
-        compileScript();
-        notifyTitleChanged();
-    }
-
-    public boolean isDirty() { return !document.equals(savedDocument); }
-
-    public String tabTitle() {
-        return document.name() + (isDirty() ? " *" : "");
-    }
+    public String tabTitle() { return document.name(); }
 
     public void setOnTitleChanged(Runnable callback) { this.onTitleChanged = callback; }
 
     private void notifyTitleChanged() {
         if (onTitleChanged != null) onTitleChanged.run();
-    }
-
-    public void save() {
-        persistToRepository();
-        paneContext.controller().saveProject();
-        savedDocument = document;
-        paneContext.session().project.explorer.refresh();
-        notifyTitleChanged();
-    }
-
-    private void persistToRepository() {
-        var repo = paneContext.session().project.repository.get();
-        repo.addEigenfield(document);
-        paneContext.session().project.saveProjectQuietly();
     }
 
     @Override

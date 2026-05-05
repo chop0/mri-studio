@@ -16,7 +16,14 @@ import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.Autosaver;
+import ax.xz.mri.state.DocumentEditor;
+import ax.xz.mri.state.ProjectState;
+import ax.xz.mri.state.ProjectStateIO;
+import ax.xz.mri.state.RecordSurgery;
+import ax.xz.mri.state.Scope;
+import ax.xz.mri.state.Transaction;
+import ax.xz.mri.state.UnifiedStateManager;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.util.MathUtil;
 import javafx.beans.property.BooleanProperty;
@@ -32,9 +39,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.collections.ObservableSet;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -64,7 +69,6 @@ import java.util.function.Supplier;
  * properties directly.
  */
 public final class SequenceEditSession {
-    private static final int MAX_UNDO = 100;
     private static final double DEFAULT_DT = 10.0;
     private static final double DEFAULT_DURATION = 3000.0;
     private static final double SNAP_THRESHOLD_FRACTION = 0.005;
@@ -133,20 +137,38 @@ public final class SequenceEditSession {
     private ProjectNodeId originalSimConfigId;
 
     /** Repository supplier — used to resolve eigenfield metadata (display units). */
-    private Supplier<ProjectRepository> repositorySupplier = () -> null;
+    private Supplier<ProjectState> repositorySupplier = () -> null;
 
     // ── Snapping ─────────────────────────────────────────────────────────────
     public final BooleanProperty snapEnabled = new SimpleBooleanProperty(true);
     public final DoubleProperty snapGridSize = new SimpleDoubleProperty(0);
 
-    // ── Undo/Redo ────────────────────────────────────────────────────────────
-    private final BooleanProperty canUndo = new SimpleBooleanProperty(false);
-    private final BooleanProperty canRedo = new SimpleBooleanProperty(false);
-    private final Deque<EditSnapshot> undoStack = new ArrayDeque<>();
-    private final Deque<EditSnapshot> redoStack = new ArrayDeque<>();
+    // ── Undo/Redo (delegated to UnifiedStateManager once a doc is open) ─────
+    private UnifiedStateManager stateManager;
+    private DocumentEditor<SequenceDocument> editor;
+    /** Active drag/batch transaction. While non-null, intermediate mutations
+     *  accumulate into a single undo entry. */
+    private Transaction activeTx;
+    /** Re-entrancy guard — when re-hydrating observables from external state
+     *  changes (undo, other editors), we don't want to dispatch a fresh
+     *  Mutation for every {@code clips.setAll(...)}. */
+    private boolean rehydrating;
+    private final BooleanProperty canUndoFallback = new SimpleBooleanProperty(false);
+    private final BooleanProperty canRedoFallback = new SimpleBooleanProperty(false);
 
-    public ReadOnlyBooleanProperty canUndoProperty() { return canUndo; }
-    public ReadOnlyBooleanProperty canRedoProperty() { return canRedo; }
+    public ReadOnlyBooleanProperty canUndoProperty() {
+        return editor != null ? editor.canUndoProperty() : canUndoFallback;
+    }
+    public ReadOnlyBooleanProperty canRedoProperty() {
+        return editor != null ? editor.canRedoProperty() : canRedoFallback;
+    }
+
+    /** Swap in the project's unified state manager. Production wires the
+     *  pane's manager once before opening the doc; the bootstrap manager
+     *  installed in the constructor is dropped at the next {@link #open}. */
+    public void setStateManager(UnifiedStateManager state) {
+        this.stateManager = state;
+    }
 
     public ViewportViewModel viewport() { return viewport; }
 
@@ -157,6 +179,29 @@ public final class SequenceEditSession {
     }
 
     public SequenceEditSession() {
+        // Bootstrap a self-contained state manager + synthetic document so
+        // undo works the moment the session is constructed, even before
+        // {@link #open} is called (test fixtures rely on this; production
+        // calls {@link #setStateManager} + {@link #open} to swap in the
+        // project's manager).
+        var bootstrapDoc = new SequenceDocument(
+            new ProjectNodeId("seq-bootstrap"), "Bootstrap",
+            new ClipSequence(DEFAULT_DT, DEFAULT_DURATION,
+                java.util.List.of(), java.util.List.of()),
+            null, null);
+        originalDocument.set(bootstrapDoc);
+        var io = new ProjectStateIO();
+        var saver = new Autosaver(io::write, null);
+        var bootstrapManager = new UnifiedStateManager(
+            ProjectState.empty().withSequence(bootstrapDoc),
+            new RecordSurgery(), saver, null);
+        this.stateManager = bootstrapManager;
+        this.editor = new DocumentEditor<>(bootstrapManager,
+            Scope.indexed(Scope.root(), "sequences", bootstrapDoc.id()),
+            "sequence-editor",
+            SequenceDocument.class);
+        editor.valueProperty().addListener((obs, o, n) -> rehydrate(n));
+
         // When the active config changes we do NOT stomp the user's track
         // arrangement — tracks are state. We only prune collapse-state entries
         // that became invalid (track deleted elsewhere).
@@ -217,53 +262,86 @@ public final class SequenceEditSession {
     // Document loading / saving
     // ══════════════════════════════════════════════════════════════════════════
 
-    /** Load a sequence document for editing. Clears undo history. */
+    /** Load a sequence document for editing. Wires the editor to the global
+     *  undo log scoped to this sequence's id. */
     public void open(SequenceDocument document) {
         originalDocument.set(document);
 
         var circuit = activeCircuit();
         var clipSeq = document.clipSequence();
         var loadedTracks = clipSeq.tracks().isEmpty() ? ClipBaker.defaultTracksFor(circuit) : clipSeq.tracks();
-        tracks.setAll(loadedTracks);
-        clips.setAll(clipSeq.clips());
-        dt.set(clipSeq.dt());
-        totalDuration.set(clipSeq.totalDuration());
+        rehydrating = true;
+        try {
+            tracks.setAll(loadedTracks);
+            clips.setAll(clipSeq.clips());
+            dt.set(clipSeq.dt());
+            totalDuration.set(clipSeq.totalDuration());
 
-        selectedClipIds.clear();
-        primarySelectedClipId.set(null);
-        viewport.setMaxTimePreservePosition(totalDuration.get());
-        viewport.fitViewportToData();
-        undoStack.clear();
-        redoStack.clear();
-        canUndo.set(false);
-        canRedo.set(false);
+            selectedClipIds.clear();
+            primarySelectedClipId.set(null);
+            viewport.setMaxTimePreservePosition(totalDuration.get());
+            viewport.fitViewportToData();
+
+            // Re-wire the editor to the (possibly project-scoped) state
+            // manager, opening at this document's id.
+            this.editor = new DocumentEditor<>(stateManager,
+                Scope.indexed(Scope.root(), "sequences", document.id()),
+                "sequence-editor",
+                SequenceDocument.class);
+            editor.valueProperty().addListener((obs, o, n) -> rehydrate(n));
+        } finally {
+            rehydrating = false;
+        }
         bumpRevision();
     }
 
-    /** Build an immutable document from the current editing state, baking clips to steps. */
-    public SequenceDocument toDocument() {
+    /** Re-hydrate observables from the live state — fires on undo/redo and
+     *  on external dispatches that affect this sequence. */
+    private void rehydrate(SequenceDocument doc) {
+        if (doc == null) return;
+        rehydrating = true;
+        try {
+            var clipSeq = doc.clipSequence();
+            var live = currentDoc();
+            // Avoid spurious rehydrate when the change originated here.
+            if (Objects.equals(live, doc)) return;
+            tracks.setAll(clipSeq.tracks());
+            clips.setAll(clipSeq.clips());
+            dt.set(clipSeq.dt());
+            totalDuration.set(clipSeq.totalDuration());
+            activeSimConfigId.set(doc.activeSimConfigId());
+            activeHardwareConfigId.set(doc.preferredHardwareConfigId());
+            // Selection may reference deleted clips — prune.
+            var liveClipIds = new java.util.HashSet<String>();
+            for (var c : clips) liveClipIds.add(c.id());
+            selectedClipIds.removeIf(id -> !liveClipIds.contains(id));
+            if (primarySelectedClipId.get() != null
+                    && !liveClipIds.contains(primarySelectedClipId.get())) {
+                primarySelectedClipId.set(null);
+            }
+            bumpRevision();
+        } finally {
+            rehydrating = false;
+        }
+    }
+
+    /** Build an immutable document from the current editing state. The
+     *  per-step baked output is recomputed by
+     *  {@link ax.xz.mri.model.sequence.SequenceBakery} on demand and not
+     *  persisted on the document. */
+    public SequenceDocument toDocument() { return currentDoc(); }
+
+    /** Same as {@link #toDocument()} — used internally by {@link #mutate}. */
+    private SequenceDocument currentDoc() {
         var orig = originalDocument.get();
+        if (orig == null) return null;
         var clipSeq = new ClipSequence(dt.get(), totalDuration.get(),
             List.copyOf(tracks), List.copyOf(clips));
-        var baked = ClipBaker.bake(clipSeq, activeCircuit());
         return new SequenceDocument(
             orig.id(), orig.name(),
-            baked.segments(), baked.pulseSegments(),
             clipSeq, activeSimConfigId.get(),
             activeHardwareConfigId.get()
         );
-    }
-
-    public boolean isDirty() {
-        var orig = originalDocument.get();
-        if (orig == null) return false;
-        if (!Objects.equals(activeSimConfigId.get(), originalSimConfigId)) return true;
-        if (!Objects.equals(activeHardwareConfigId.get(), orig.preferredHardwareConfigId())) return true;
-        var origClipSeq = orig.clipSequence();
-        return !clips.equals(origClipSeq.clips())
-            || !tracks.equals(origClipSeq.tracks())
-            || dt.get() != origClipSeq.dt()
-            || totalDuration.get() != origClipSeq.totalDuration();
     }
 
     /**
@@ -288,7 +366,7 @@ public final class SequenceEditSession {
     }
 
     /** Provide a repository supplier so we can resolve eigenfield metadata on demand. */
-    public void setRepositorySupplier(Supplier<ProjectRepository> supplier) {
+    public void setRepositorySupplier(Supplier<ProjectState> supplier) {
         this.repositorySupplier = supplier != null ? supplier : () -> null;
     }
 
@@ -852,81 +930,56 @@ public final class SequenceEditSession {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Undo / Redo
+    // Undo / Redo (scoped to this sequence's id via the global state manager)
     // ══════════════════════════════════════════════════════════════════════════
 
-    public void undo() {
-        if (undoStack.isEmpty()) return;
-        redoStack.push(captureSnapshot());
-        applySnapshot(undoStack.pop());
-        updateUndoRedoFlags();
+    public void undo() { if (editor != null) editor.undo(); }
+    public void redo() { if (editor != null) editor.redo(); }
+
+    /**
+     * Begin a coalescing transaction. Drag handlers call this on mouse-down;
+     * every intermediate {@link #mutate} call accumulates into a single undo
+     * entry. Pair with {@link #endTransaction()} on mouse-up.
+     */
+    public void beginTransaction(String label) {
+        if (editor == null) return;
+        if (activeTx != null) throw new IllegalStateException("Sequence transaction already active");
+        activeTx = editor.beginTransaction(label);
     }
 
-    public void redo() {
-        if (redoStack.isEmpty()) return;
-        undoStack.push(captureSnapshot());
-        applySnapshot(redoStack.pop());
-        updateUndoRedoFlags();
-    }
-
-    private void pushUndo() {
-        undoStack.push(captureSnapshot());
-        while (undoStack.size() > MAX_UNDO) undoStack.removeLast();
-        redoStack.clear();
-        updateUndoRedoFlags();
-    }
-
-    private EditSnapshot captureSnapshot() {
-        return new EditSnapshot(
-            List.copyOf(clips),
-            List.copyOf(tracks),
-            dt.get(),
-            totalDuration.get(),
-            Set.copyOf(selectedClipIds),
-            primarySelectedClipId.get(),
-            activeSimConfigId.get()
-        );
-    }
-
-    private void applySnapshot(EditSnapshot s) {
-        clips.setAll(s.clips);
-        tracks.setAll(s.tracks);
-        dt.set(s.dt);
-        totalDuration.set(s.totalDuration);
-        selectedClipIds.clear();
-        selectedClipIds.addAll(s.selectedClipIds);
-        primarySelectedClipId.set(s.primarySelectedClipId);
-        activeSimConfigId.set(s.activeSimConfigId);
-        bumpRevision();
-    }
-
-    private void updateUndoRedoFlags() {
-        canUndo.set(!undoStack.isEmpty());
-        canRedo.set(!redoStack.isEmpty());
+    /** Commit any active transaction. No-op if none is open. */
+    public void endTransaction() {
+        if (activeTx == null) return;
+        var tx = activeTx;
+        activeTx = null;
+        tx.commit();
     }
 
     private void bumpRevision() { revision.set(revision.get() + 1); }
 
-    /** Run an undoable mutation: snapshot for undo, apply the change, bump the revision. */
+    /**
+     * Run an undoable mutation. Captures the document snapshot before and
+     * after the change runs against the live observables, dispatches the
+     * delta through the unified state manager (or the active transaction if
+     * one is open). When no editor is wired (test-only path), the mutation
+     * still runs against observables but is not undoable.
+     */
     private void mutate(Runnable change) {
-        pushUndo();
+        if (rehydrating) {
+            change.run();
+            bumpRevision();
+            return;
+        }
+        var beforeDoc = currentDoc();
         change.run();
         bumpRevision();
-    }
-
-    private record EditSnapshot(
-        List<SignalClip> clips,
-        List<Track> tracks,
-        double dt,
-        double totalDuration,
-        Set<String> selectedClipIds,
-        String primarySelectedClipId,
-        ProjectNodeId activeSimConfigId
-    ) {
-        EditSnapshot {
-            clips = List.copyOf(clips);
-            tracks = List.copyOf(tracks);
-            selectedClipIds = Set.copyOf(selectedClipIds);
+        if (editor == null) return;
+        var afterDoc = currentDoc();
+        if (afterDoc == null || Objects.equals(beforeDoc, afterDoc)) return;
+        if (activeTx != null) {
+            activeTx.apply((SequenceDocument prev) -> afterDoc);
+        } else {
+            editor.apply(prev -> afterDoc, "Edit sequence");
         }
     }
 

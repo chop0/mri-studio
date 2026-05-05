@@ -1,10 +1,11 @@
 package ax.xz.mri.ui.wizard.starters;
 
+import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.circuit.starter.CircuitStarter;
 import ax.xz.mri.model.circuit.starter.CircuitStarterLibrary;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.ui.wizard.WizardStep;
 
 import java.util.UUID;
@@ -58,15 +59,14 @@ public enum SimConfigTemplate {
     public abstract WizardStep configStep();
 
     /**
-     * Seed a fresh circuit into the repository via this template's starter,
-     * and return its id so a {@link SimulationConfig} can point at it.
+     * Build a fresh circuit document using this template's starter. The
+     * caller is responsible for dispatching structural mutations for the
+     * resulting circuit and any newly-minted eigenfields.
      */
-    public ProjectNodeId createCircuit(ProjectRepository repository, String name) {
+    public CircuitStarter.Result buildCircuit(ProjectState state, String name) {
         var starter = circuitStarter();
         var id = new ProjectNodeId("circuit-" + UUID.randomUUID());
-        var doc = starter.build(id, name, repository);
-        repository.addCircuit(doc);
-        return id;
+        return starter.build(id, name, state);
     }
 
     @Override

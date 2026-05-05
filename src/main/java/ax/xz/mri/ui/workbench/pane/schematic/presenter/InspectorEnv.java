@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.workbench.pane.schematic.presenter;
 
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.ui.workbench.pane.schematic.CircuitEditSession;
 
 import java.util.function.Consumer;
@@ -15,6 +15,6 @@ import java.util.function.Supplier;
  */
 public record InspectorEnv(
     CircuitEditSession session,
-    Supplier<ProjectRepository> repository,
+    Supplier<ProjectState> repository,
     Consumer<ProjectNodeId> onJumpToEigenfield
 ) {}

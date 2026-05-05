@@ -1,5 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
+import ax.xz.mri.model.sequence.SequenceBakery;
 import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
 import ax.xz.mri.model.simulation.SimulationOutputFactory;
 import ax.xz.mri.model.simulation.SimulationConfig;
@@ -33,6 +34,7 @@ public final class SequenceSimulationSession {
 
     public final SequenceEditSession editSession;
     private final StudioSession studioSession;
+    private final SequenceBakery bakery;
     private Timer debounceTimer;
     private boolean disposed;
 
@@ -42,6 +44,7 @@ public final class SequenceSimulationSession {
         this.editSession = editSession;
         this.studioSession = studioSession;
         this.projectSession = studioSession.project;
+        this.bakery = studioSession.bakery;
 
         editSession.revision.addListener((obs, o, n) -> {
             stale.set(true);
@@ -90,11 +93,13 @@ public final class SequenceSimulationSession {
 
         simulating.set(true);
         try {
-            // Bake the clip sequence
+            // Bake the clip sequence on demand — segments + pulse are derived,
+            // not persisted on the document.
             var doc = editSession.toDocument();
-            var segments = doc.segments();
-            var pulse = doc.pulse();
-            var data = SimulationOutputFactory.build(config, segments, projectSession.repository.get());
+            var baked = bakery.bake(doc, projectSession.project());
+            var segments = baked.segments();
+            var pulse = baked.pulseSegments();
+            var data = SimulationOutputFactory.build(config, segments, projectSession.project());
 
             // Push through the single unified path — this is the ONLY place data reaches the panes
             studioSession.loadSimulationResult(data, pulse);

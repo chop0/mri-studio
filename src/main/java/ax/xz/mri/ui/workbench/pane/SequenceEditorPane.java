@@ -16,6 +16,8 @@ import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineCanvas;
 import ax.xz.mri.ui.workbench.pane.timeline.TimelineOverviewBar;
 import ax.xz.mri.util.SiFormat;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.Scope;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.StringBinding;
 import javafx.collections.ObservableSet;
@@ -45,6 +47,7 @@ import javafx.util.StringConverter;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.time.Instant;
 
 /**
  * Root pane for the clip-based sequence editor ("DAW").
@@ -87,7 +90,8 @@ public final class SequenceEditorPane extends WorkbenchPane {
             trackCanvas.setActiveCreationKind(toolPalette.activeClipKind())
         );
 
-        editSession.setRepositorySupplier(() -> paneContext.session().project.repository.get());
+        editSession.setRepositorySupplier(() -> paneContext.session().state.current());
+        editSession.setStateManager(paneContext.session().state);
         editSession.revision.addListener((obs, o, n) -> notifyTitleChanged());
 
         var root = new BorderPane();
@@ -470,9 +474,7 @@ public final class SequenceEditorPane extends WorkbenchPane {
 
     public void setOnTitleChanged(Runnable callback) { this.onTitleChanged = callback; }
 
-    public String tabTitle() {
-        return sequenceName + (editSession.isDirty() ? " *" : "");
-    }
+    public String tabTitle() { return sequenceName; }
 
     public void open(SequenceDocument document) {
         editSession.open(document);
@@ -485,22 +487,22 @@ public final class SequenceEditorPane extends WorkbenchPane {
         if (onTitleChanged != null) onTitleChanged.run();
     }
 
-    public boolean isDirty() { return editSession.isDirty(); }
-
-    public void savePublic() { saveSequence(); }
-
     private void saveSequence() {
         var updated = editSession.toDocument();
         var currentConfigId = updated.activeSimConfigId();
-        var repo = paneContext.session().project.repository.get();
-        repo.removeSequence(updated.id());
-        repo.addSequence(updated);
+        var state = paneContext.session().state;
+        var existing = state.current().sequence(updated.id());
+        var scope = Scope.indexed(Scope.root(), "sequences", updated.id());
+        state.dispatch(new Mutation(scope, existing, updated,
+            "Save sequence", Instant.now(), "sequence-editor",
+            existing == null
+                ? Mutation.Category.STRUCTURAL
+                : Mutation.Category.CONTENT));
         editSession.open(updated);
         if (currentConfigId != null) editSession.setOriginalSimConfigId(currentConfigId);
         paneContext.session().activeEditSession.set(editSession);
         paneContext.session().project.explorer.refresh();
         notifyTitleChanged();
-        paneContext.controller().saveProject();
     }
 
     @Override

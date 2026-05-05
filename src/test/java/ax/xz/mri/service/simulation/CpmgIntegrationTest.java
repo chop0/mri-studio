@@ -11,7 +11,6 @@ import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
 import org.junit.jupiter.api.Test;
@@ -99,9 +98,9 @@ class CpmgIntegrationTest {
      * top of unity, so an isochromat at a known offset experiences predictable
      * off-resonance.
      */
-    private static void installZAxisOffResonance(
-            ProjectRepository repo, SimulationConfig config, String suffix, double dBzPerMetre) {
-        var circuit = repo.circuit(config.circuitId());
+    private static ax.xz.mri.state.ProjectState installZAxisOffResonance(
+            ax.xz.mri.state.ProjectState state, SimulationConfig config, String suffix, double dBzPerMetre) {
+        var circuit = state.circuit(config.circuitId());
         var b0Source = circuit.voltageSources().stream()
             .filter(s -> s.kind() == AmplitudeKind.STATIC)
             .findFirst().orElseThrow();
@@ -111,24 +110,22 @@ class CpmgIntegrationTest {
         var eigen = new EigenfieldDocument(
             new ProjectNodeId("ef-test-" + suffix), "B0 linear " + suffix, "test off-resonance",
             script, "T");
-        repo.addEigenfield(eigen);
 
-        // Find the B0 coil (first coil wired to a STATIC source in the low-field template: coil-b0)
         var b0Coil = circuit.coils().stream()
             .filter(c -> c.name().equals("B0 Coil"))
             .findFirst().orElseThrow();
         var updated = circuit.replaceComponent(b0Coil.withEigenfieldId(eigen.id()));
-        repo.updateCircuit(updated);
+        return state.withEigenfield(eigen).withCircuit(updated);
     }
 
     @Test
     void lowFieldTemplateExposesCanonicalChannelLayout() {
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-check",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
+        var repo = session.project();
         CircuitDocument circuit = repo.circuit(config.circuitId());
 
         var b0 = circuit.voltageSources().stream().filter(s -> s.name().equals("B0")).findFirst().orElseThrow();
@@ -166,12 +163,12 @@ class CpmgIntegrationTest {
     @Test
     void ninetyXPulseMovesMagnetisationIntoTransversePlane() {
         BlochSimulator.clearCachesForTests();
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-90",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
+        var repo = session.project();
 
         var train = buildCpmg(0);
         var data = SimulationOutputFactory.build(config, train.segments(), repo);
@@ -200,13 +197,13 @@ class CpmgIntegrationTest {
     @Test
     void oneHundredEightyYPulseInvertsMxWhileKeepingMy() {
         BlochSimulator.clearCachesForTests();
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-180Y",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
-        installZAxisOffResonance(repo, config, "y-flip", 50e-6);
+        var repo = session.project();
+        repo = installZAxisOffResonance(repo, config, "y-flip", 50e-6);
 
         var train = buildCpmg(1);
         var data = SimulationOutputFactory.build(config, train.segments(), repo);
@@ -234,13 +231,13 @@ class CpmgIntegrationTest {
     @Test
     void cpmgEchoRefocusesDephasedEnsemble() {
         BlochSimulator.clearCachesForTests();
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-echo",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
-        installZAxisOffResonance(repo, config, "echo", 2e-3);
+        var repo = session.project();
+        repo = installZAxisOffResonance(repo, config, "echo", 2e-3);
 
         var train = buildCpmg(1);
         var data = SimulationOutputFactory.build(config, train.segments(), repo);
@@ -297,13 +294,13 @@ class CpmgIntegrationTest {
     @Test
     void multiEchoCpmgPreservesSignalAcrossManyEchoes() {
         BlochSimulator.clearCachesForTests();
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-multi",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
-        installZAxisOffResonance(repo, config, "multi", 200e-6);
+        var repo = session.project();
+        repo = installZAxisOffResonance(repo, config, "multi", 200e-6);
 
         int nEchoes = 4;
         var train = buildCpmg(nEchoes);
@@ -338,12 +335,12 @@ class CpmgIntegrationTest {
     @Test
     void longCpmgDoesNotCrashOrConsumeUnboundedMemory() {
         BlochSimulator.clearCachesForTests();
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-long",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
+        var repo = session.project();
 
         int nEchoes = 40;
         var train = buildCpmg(nEchoes);

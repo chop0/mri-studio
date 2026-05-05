@@ -66,12 +66,12 @@ class GeometryShadingConsistencyTest {
 
     @Test
     void shadingCellStateMatchesDirectSimulation() {
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("consistency",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
+        var repo = session.project();
 
         var train = buildSimpleCpmg(2);
         var data = SimulationOutputFactory.build(config, train.segments(), repo);
@@ -113,12 +113,12 @@ class GeometryShadingConsistencyTest {
 
     @Test
     void shadingSampleIsCloseToAnyOffAxisIsochromatPosition() {
-        var session = new ProjectSessionViewModel();
+        var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("density",
             SimConfigTemplate.LOW_FIELD_MRI,
             PhysicsParams.DEFAULTS);
         var config = doc.config();
-        var repo = session.repository.get();
+        var repo = session.project();
         var train = buildSimpleCpmg(0);
         var data = SimulationOutputFactory.build(config, train.segments(), repo);
 

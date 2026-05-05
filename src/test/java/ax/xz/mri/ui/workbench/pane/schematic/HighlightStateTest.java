@@ -17,7 +17,7 @@ class HighlightStateTest {
 
     @Test
     void setHighlightStoresComponentsAndWires() {
-        var session = new CircuitEditSession(empty());
+        var session = CircuitEditSession.standalone(empty());
         session.setHighlight(
             List.of(new ComponentId("a"), new ComponentId("b")),
             List.of("w1", "w2"));
@@ -29,7 +29,7 @@ class HighlightStateTest {
 
     @Test
     void setHighlightReplacesPreviousOverlay() {
-        var session = new CircuitEditSession(empty());
+        var session = CircuitEditSession.standalone(empty());
         session.setHighlight(List.of(new ComponentId("a")), List.of("w1"));
         session.setHighlight(List.of(new ComponentId("b")), List.of("w2"));
         assertFalse(session.highlightedComponents.contains(new ComponentId("a")),
@@ -42,7 +42,7 @@ class HighlightStateTest {
 
     @Test
     void clearHighlightDropsBothSets() {
-        var session = new CircuitEditSession(empty());
+        var session = CircuitEditSession.standalone(empty());
         session.setHighlight(List.of(new ComponentId("a")), List.of("w1"));
         session.clearHighlight();
         assertTrue(session.highlightedComponents.isEmpty());
@@ -51,7 +51,7 @@ class HighlightStateTest {
 
     @Test
     void highlightIsIndependentOfSelection() {
-        var session = new CircuitEditSession(empty());
+        var session = CircuitEditSession.standalone(empty());
         var id = new ComponentId("a");
         session.selectOnly(id);
         session.setHighlight(List.of(new ComponentId("b")), List.of());
@@ -64,7 +64,7 @@ class HighlightStateTest {
 
     @Test
     void setHighlightAcceptsNullCollections() {
-        var session = new CircuitEditSession(empty());
+        var session = CircuitEditSession.standalone(empty());
         session.setHighlight(null, null);
         assertTrue(session.highlightedComponents.isEmpty());
         assertTrue(session.highlightedWires.isEmpty());

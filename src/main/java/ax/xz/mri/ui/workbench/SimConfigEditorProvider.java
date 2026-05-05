@@ -34,8 +34,6 @@ public final class SimConfigEditorProvider implements DocumentEditorProvider {
 		// user should still see the last sequence's analysis while editing.
 	}
 
-	@Override public boolean isDirty() { return editorPane.isDirty(); }
-	@Override public void save() { editorPane.save(); }
 	@Override public void dispose() {}
 
 	public SimulationConfigDocument configDoc() { return configDoc; }

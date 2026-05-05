@@ -5,7 +5,7 @@ import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.starter.CircuitStarterLibrary;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
@@ -21,11 +21,11 @@ class AutoLayoutTest {
         var starter = CircuitStarterLibrary.byId("low-field-mri").orElseThrow();
         var id1 = new ProjectNodeId("c-1");
         var id2 = new ProjectNodeId("c-2");
-        var repo1 = ProjectRepository.untitled();
-        var repo2 = ProjectRepository.untitled();
+        var repo1 = ProjectState.empty();
+        var repo2 = ProjectState.empty();
 
-        var a = starter.build(id1, "A", repo1);
-        var b = starter.build(id2, "B", repo2);
+        var a = starter.build(id1, "A", repo1).circuit();
+        var b = starter.build(id2, "B", repo2).circuit();
 
         // Same layout structure (identical positions up to id substitution).
         assertEquals(a.components().size(), b.components().size());
@@ -35,8 +35,8 @@ class AutoLayoutTest {
     @Test
     void lowFieldMriStarterHasNoOverlappingPositions() {
         var starter = CircuitStarterLibrary.byId("low-field-mri").orElseThrow();
-        var repo = ProjectRepository.untitled();
-        var doc = starter.build(new ProjectNodeId("c-1"), "C", repo);
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var doc = starter.build(new ProjectNodeId("c-1"), "C", repo).circuit();
 
         var seen = new HashSet<String>();
         for (var c : doc.components()) {

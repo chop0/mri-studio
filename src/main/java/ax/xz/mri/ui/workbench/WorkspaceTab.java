@@ -22,9 +22,7 @@ public final class WorkspaceTab {
 
 	public String id() { return id; }
 
-	public String displayName() {
-		return editor.isDirty() ? displayName + " *" : displayName;
-	}
+	public String displayName() { return displayName; }
 
 	public String rawName() { return displayName; }
 	public DocumentEditorProvider editor() { return editor; }

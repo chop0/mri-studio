@@ -3,6 +3,12 @@ package ax.xz.mri.ui.viewmodel;
 import ax.xz.mri.model.scenario.RunResult;
 import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
+import ax.xz.mri.model.sequence.SequenceBakery;
+import ax.xz.mri.state.Autosaver;
+import ax.xz.mri.state.ProjectState;
+import ax.xz.mri.state.ProjectStateIO;
+import ax.xz.mri.state.RecordSurgery;
+import ax.xz.mri.state.UnifiedStateManager;
 import ax.xz.mri.ui.model.IsochromatCollectionModel;
 import ax.xz.mri.ui.model.IsochromatSelectionModel;
 import javafx.beans.property.ObjectProperty;
@@ -13,7 +19,18 @@ import java.util.List;
 /** Composition root for the new workbench-facing UI view models and services. */
 public class StudioSession {
     public final DocumentSessionViewModel document = new DocumentSessionViewModel();
-    public final ProjectSessionViewModel project = new ProjectSessionViewModel();
+    /**
+     * The unified state manager — single mutation point for all persistent
+     * project state. Owns the in-memory {@link ProjectState} record, the undo
+     * log, and the debounced autosave executor. Editors call
+     * {@code state.dispatch(...)} or use a {@code DocumentEditor<T>} to mutate
+     * project state.
+     */
+    public final UnifiedStateManager state;
+    public final ProjectSessionViewModel project;
+    public final ProjectStateIO projectIO = new ProjectStateIO();
+    /** Memoised baker for {@code (clipSequence, circuit) → segments + pulse}. */
+    public final SequenceBakery bakery = new SequenceBakery();
     public final ViewportViewModel viewport = new ViewportViewModel();
     public final SphereViewModel sphere = new SphereViewModel();
     public final GeometryViewModel geometry = new GeometryViewModel();
@@ -40,6 +57,17 @@ public class StudioSession {
     public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
     public StudioSession() {
+        var surgery = new RecordSurgery();
+        var autosaver = new Autosaver(projectIO::write,
+            ex -> messages.logWarning("Project", "Auto-save failed: " + ex.getMessage()));
+        this.state = new UnifiedStateManager(ProjectState.empty(), surgery, autosaver,
+            fixes -> {
+                if (fixes.isEmpty()) return;
+                messages.logWarning("Project",
+                    "Cleared " + fixes.size() + " dangling reference(s) — " + fixes.get(0));
+            });
+        this.project = new ProjectSessionViewModel(state, projectIO);
+
         derived.setErrorSink(ex -> messages.logError("DerivedComputation", ex.getMessage(), ex));
         points.setErrorSink(ex -> messages.logError("Isochromats", ex.getMessage(), ex));
         reference.setErrorSink(ex -> messages.logError("ReferenceFrame", ex.getMessage(), ex));

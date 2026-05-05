@@ -12,6 +12,8 @@ import ax.xz.mri.ui.workbench.pane.config.NumberField;
 import ax.xz.mri.ui.workbench.pane.config.RelaxationPreview;
 import ax.xz.mri.ui.workbench.pane.schematic.CircuitEditSession;
 import ax.xz.mri.ui.workbench.pane.schematic.SchematicPane;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.Scope;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.geometry.Pos;
@@ -40,6 +42,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
+import java.time.Instant;
 
 /**
  * Tabbed editor for a {@link SimulationConfigDocument}.
@@ -59,24 +62,13 @@ import java.util.function.Function;
  * {@link CircuitDocument} immediately.
  */
 public final class SimulationConfigEditorPane extends WorkbenchPane {
-    private static final int MAX_UNDO = 100;
 
     private final SimulationConfigDocument document;
     private final ConfigStore store;
-    private SimulationConfig savedConfig;
-    private ax.xz.mri.model.circuit.CircuitDocument savedCircuit;
-
-    private final Deque<SimulationConfig> undoStack = new ArrayDeque<>();
-    private final Deque<SimulationConfig> redoStack = new ArrayDeque<>();
 
     private final SimpleStringProperty nameProperty = new SimpleStringProperty();
     private final Label titleLabel = new Label();
-    private final Label dirtyPill = new Label("UNSAVED");
     private final Label footerStatus = new Label();
-    private final Button undoButton = new Button("\u21B6");
-    private final Button redoButton = new Button("\u21B7");
-    private final Button saveButton = new Button("Save");
-    private final Button revertButton = new Button("Revert");
 
     private final TabPane tabs = new TabPane();
     private final Tab overviewTab = new Tab("Overview");
@@ -92,7 +84,6 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     public SimulationConfigEditorPane(PaneContext paneContext, SimulationConfigDocument document) {
         super(paneContext);
         this.document = document;
-        this.savedConfig = document.config();
         this.nameProperty.set(document.name());
         setPaneTitle("Config: " + document.name());
         this.store = new ConfigStore(document.config());
@@ -112,68 +103,11 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
     public void setOnTitleChanged(Runnable listener) { this.onTitleChanged = listener; }
 
-    public boolean isDirty() {
-        if (!Objects.equals(store.getConfig(), savedConfig)) return true;
-        if (circuitSession != null) {
-            var live = circuitSession.doc();
-            if (live != null && !live.id().value().equals("circuit-placeholder")
-                    && !Objects.equals(live, savedCircuit)) return true;
-        }
-        return false;
-    }
+    public void undo() { paneContext.session().state.undoIn(
+        paneContext.session().state.withinScope(Scope.indexed(Scope.root(), "simulations", document.id()))); }
 
-    public void save() {
-        var repo = paneContext.session().project.repository.get();
-        var next = store.getConfig();
-        boolean configChanged = !Objects.equals(next, savedConfig);
-        boolean circuitChanged = circuitSession != null
-            && circuitSession.doc() != null
-            && !circuitSession.doc().id().value().equals("circuit-placeholder")
-            && !Objects.equals(circuitSession.doc(), savedCircuit);
-        if (!configChanged && !circuitChanged) return;
-
-        if (configChanged) {
-            var simConfig = document.withConfig(next);
-            repo.addSimConfig(simConfig);
-            savedConfig = next;
-        }
-        if (circuitChanged) {
-            var liveCircuit = circuitSession.doc();
-            if (repo.circuit(liveCircuit.id()) != null) {
-                repo.updateCircuit(liveCircuit);
-            } else {
-                repo.addCircuit(liveCircuit);
-            }
-            savedCircuit = liveCircuit;
-        }
-        paneContext.session().project.explorer.refresh();
-        paneContext.session().project.saveProjectQuietly();
-        refreshDirty();
-        if (onTitleChanged != null) onTitleChanged.run();
-    }
-
-    public void revert() {
-        store.setConfig(savedConfig);
-        if (circuitSession != null && savedCircuit != null
-                && !Objects.equals(circuitSession.doc(), savedCircuit)) {
-            circuitSession.loadDocument(savedCircuit);
-        }
-        refreshDirty();
-    }
-
-    public void undo() {
-        if (undoStack.isEmpty()) return;
-        var snapshot = undoStack.pop();
-        redoStack.push(store.getConfig());
-        store.setConfig(snapshot);
-    }
-
-    public void redo() {
-        if (redoStack.isEmpty()) return;
-        var snapshot = redoStack.pop();
-        undoStack.push(store.getConfig());
-        store.setConfig(snapshot);
-    }
+    public void redo() { paneContext.session().state.redoIn(
+        paneContext.session().state.withinScope(Scope.indexed(Scope.root(), "simulations", document.id()))); }
 
     // ───────── Chrome ─────────
 
@@ -186,7 +120,6 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         root.setFocusTraversable(true);
         root.setOnKeyPressed(this::onShortcut);
         setPaneContent(root);
-        refreshDirty();
     }
 
     private Node buildTitleStrip() {
@@ -198,7 +131,6 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
         var typeLabel = new Label("Simulation configuration");
         typeLabel.getStyleClass().add("cfg-title-meta");
-        dirtyPill.getStyleClass().add("cfg-title-dirty-pill");
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -211,7 +143,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
             stat("GRID",     Bindings.createStringBinding(() -> store.nZ.get() + "\u00D7" + store.nR.get(), store.nZ, store.nR))
         );
 
-        var strip = new HBox(10, titleLabel, typeLabel, dirtyPill, spacer, stats);
+        var strip = new HBox(10, titleLabel, typeLabel, spacer, stats);
         strip.getStyleClass().add("cfg-title-strip");
         strip.setAlignment(Pos.CENTER_LEFT);
         return strip;
@@ -237,32 +169,18 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private Node buildFooter() {
-        undoButton.getStyleClass().add("icon-button");
-        undoButton.setOnAction(e -> undo());
-        redoButton.getStyleClass().add("icon-button");
-        redoButton.setOnAction(e -> redo());
-        var undoGroup = new HBox(undoButton, redoButton);
-        undoGroup.getStyleClass().add("cfg-footer-group");
-
         footerStatus.getStyleClass().add("cfg-footer-status");
 
         var spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        revertButton.getStyleClass().addAll("button", "ghost");
-        revertButton.setOnAction(e -> revert());
-        saveButton.getStyleClass().addAll("button", "primary");
-        saveButton.setOnAction(e -> save());
-
-        var footer = new HBox(10, undoGroup, footerStatus, spacer, revertButton, saveButton);
+        var footer = new HBox(10, footerStatus, spacer);
         footer.getStyleClass().add("cfg-footer");
         return footer;
     }
 
     private void onShortcut(javafx.scene.input.KeyEvent event) {
-        if (new KeyCodeCombination(KeyCode.S, KeyCombination.SHORTCUT_DOWN).match(event)) {
-            save(); event.consume();
-        } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(event)) {
+        if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN, KeyCombination.SHIFT_DOWN).match(event)) {
             redo(); event.consume();
         } else if (new KeyCodeCombination(KeyCode.Z, KeyCombination.SHORTCUT_DOWN).match(event)) {
             undo(); event.consume();
@@ -312,7 +230,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
                 () -> {
                     var id = store.circuitId.get();
                     if (id == null) return "(none)";
-                    var repo = paneContext.session().project.repository.get();
+                    var repo = paneContext.session().state.current();
                     var doc = repo.circuit(id);
                     return doc == null ? "(missing)" : doc.name();
                 },
@@ -388,30 +306,28 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private Node buildSchematicTab() {
-        var repo = paneContext.session().project.repository.get();
+        var stateMgr = paneContext.session().state;
         var id = store.circuitId.get();
-        CircuitDocument doc = id == null ? null : repo.circuit(id);
-        if (doc == null) {
-            // Config points at a missing circuit — construct an empty placeholder so the pane still renders.
-            doc = CircuitDocument.empty(new ProjectNodeId("circuit-placeholder"), "(no circuit)");
+        // Ensure the simconfig has a real circuit. If unbound, mint a fresh
+        // empty one and link the simconfig to it — the schematic editor
+        // always operates on a real {@link CircuitDocument} in state.
+        if (id == null || stateMgr.current().circuit(id) == null) {
+            var freshId = new ProjectNodeId("circuit-" + java.util.UUID.randomUUID());
+            var fresh = CircuitDocument.empty(freshId, document.name() + " circuit");
+            stateMgr.dispatch(new Mutation(
+                Scope.indexed(Scope.root(), "circuits", freshId),
+                null, fresh,
+                "Create circuit", Instant.now(), "simconfig-editor",
+                Mutation.Category.STRUCTURAL));
+            // Re-link the simconfig — relying on RefIntegrity isn't right here:
+            // we WANT the FK set, not cleared.
+            store.circuitId.set(freshId);
+            id = freshId;
         }
-        circuitSession = new CircuitEditSession(doc);
-        savedCircuit = doc;
-        // Schematic edits auto-commit in memory so downstream consumers
-        // (SimulationOutputFactory → SignalTraceComputer etc.) see the latest
-        // circuit immediately. The dirty pill still tracks whether the
-        // committed state has been written to disk — see save().
-        circuitSession.current.addListener((obs, oldDoc, newDoc) -> {
-            refreshDirty();
-            if (newDoc == null || newDoc.id().value().equals("circuit-placeholder")) return;
-            var liveRepo = paneContext.session().project.repository.get();
-            if (liveRepo.circuit(newDoc.id()) != null) liveRepo.updateCircuit(newDoc);
-            else liveRepo.addCircuit(newDoc);
-            paneContext.session().project.explorer.markContentChanged();
-        });
+        circuitSession = new CircuitEditSession(stateMgr, id);
 
         schematicPane = new SchematicPane(circuitSession,
-            () -> paneContext.session().project.repository.get(),
+            stateMgr::current,
             eigenfieldId -> paneContext.session().project.openNode(eigenfieldId));
         return schematicPane;
     }
@@ -431,24 +347,21 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
     // ───────── Helpers ─────────
 
+    /**
+     * Every config edit dispatches a structured Mutation through the unified
+     * state manager. Autosave handles the disk write; undo/redo come from the
+     * global mutation log (scoped to this simulation's id).
+     */
     private void onConfigChanged(SimulationConfig oldC, SimulationConfig newC) {
-        if (oldC != null && !Objects.equals(oldC, newC)) {
-            undoStack.push(oldC);
-            while (undoStack.size() > MAX_UNDO) undoStack.pollLast();
-            redoStack.clear();
-        }
-        refreshDirty();
-    }
-
-    private void refreshDirty() {
-        boolean dirty = isDirty();
-        dirtyPill.setVisible(dirty);
-        dirtyPill.setManaged(dirty);
-        saveButton.setDisable(!dirty);
-        revertButton.setDisable(!dirty);
-        undoButton.setDisable(undoStack.isEmpty());
-        redoButton.setDisable(redoStack.isEmpty());
-        footerStatus.setText(dirty ? "Unsaved changes" : "Saved");
+        if (oldC == null || Objects.equals(oldC, newC)) return;
+        var stateMgr = paneContext.session().state;
+        var existing = stateMgr.current().simulation(document.id());
+        if (existing == null) return;
+        var updated = new SimulationConfigDocument(existing.id(), existing.name(), newC);
+        var scope = Scope.indexed(Scope.root(), "simulations", document.id());
+        stateMgr.dispatch(new Mutation(scope, existing, updated,
+            "Edit simulation config", Instant.now(), "simconfig-editor",
+            Mutation.Category.CONTENT));
     }
 
     private void beginRename() {

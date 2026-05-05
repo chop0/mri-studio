@@ -6,40 +6,53 @@ import ax.xz.mri.ui.wizard.starters.SequenceStarter;
 import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.hardware.HardwareConfig;
-import ax.xz.mri.hardware.HardwareException;
 import ax.xz.mri.hardware.HardwarePlugin;
 import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.ProjectManifest;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
-import ax.xz.mri.project.ProjectSerialiser;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
+import ax.xz.mri.state.Autosaver;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.ProjectState;
+import ax.xz.mri.state.ProjectStateIO;
+import ax.xz.mri.state.RecordSurgery;
+import ax.xz.mri.state.Scope;
+import ax.xz.mri.state.UnifiedStateManager;
 import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.time.Instant;
+import java.util.Objects;
 
-/** Project-first selection state and load/save orchestration. */
+/**
+ * Project-first selection state and load/save orchestration.
+ *
+ * <p>The authoritative project state is held by {@link UnifiedStateManager}.
+ * This view-model exposes UI-side selection / inspection state and routes
+ * structural mutations (add / rename / delete documents) through
+ * {@link UnifiedStateManager#dispatch(Mutation)} so they participate in
+ * undo/redo and autosave like every other edit.
+ */
 public final class ProjectSessionViewModel {
-    public final ObjectProperty<ProjectRepository> repository = new SimpleObjectProperty<>(ProjectRepository.untitled());
+
     public final ObjectProperty<Path> projectRoot = new SimpleObjectProperty<>();
     public final ExplorerTreeViewModel explorer = new ExplorerTreeViewModel();
     public final WorkspaceSelectionViewModel workspace = new WorkspaceSelectionViewModel();
     public final InspectorViewModel inspector = new InspectorViewModel();
 
-    private final ProjectSerialiser serialiser = new ProjectSerialiser();
+    private final UnifiedStateManager state;
+    private final ProjectStateIO projectIO;
 
     private Consumer<SimulationConfigDocument> onSimConfigOpened;
     private Consumer<HardwareConfigDocument> onHardwareConfigOpened;
@@ -47,6 +60,32 @@ public final class ProjectSessionViewModel {
     private Consumer<EigenfieldDocument> onEigenfieldOpened;
     private BiConsumer<ProjectNodeId, ProjectNodeId> onNodeSelected;
     private Consumer<Throwable> errorSink = ex -> { };
+
+    public ProjectSessionViewModel(UnifiedStateManager state, ProjectStateIO projectIO) {
+        this.state = state;
+        this.projectIO = projectIO;
+        // Refresh the explorer whenever state changes — the explorer reads
+        // through state.current() so the structure follows.
+        state.currentProperty().addListener((obs, o, n) -> explorer.refresh());
+    }
+
+    /** Test helper: build a standalone session with a fresh state manager. */
+    public static ProjectSessionViewModel standalone() {
+        var surgery = new RecordSurgery();
+        var io = new ProjectStateIO();
+        var saver = new Autosaver(io::write, null);
+        var manager = new UnifiedStateManager(ProjectState.empty(), surgery, saver, null);
+        return new ProjectSessionViewModel(manager, io);
+    }
+
+    /** The unified state manager backing this project session. */
+    public UnifiedStateManager state() { return state; }
+
+    /** Read-only view of the current project state. */
+    public ReadOnlyObjectProperty<ProjectState> currentState() { return state.currentProperty(); }
+
+    /** Convenience: the current state value. */
+    public ProjectState project() { return state.current(); }
 
     /** Attach a diagnostics sink (typically MessagesViewModel::logWarning-bridging). */
     public void setErrorSink(Consumer<Throwable> sink) {
@@ -66,154 +105,40 @@ public final class ProjectSessionViewModel {
         this.onEigenfieldOpened = callback;
     }
 
-    public ProjectSessionViewModel() {
-        repository.addListener((obs, oldValue, newValue) -> explorer.refresh());
-    }
+    /* ── Lifecycle: open / save ────────────────────────────────────────── */
 
     public void saveProject(Path root) throws IOException {
-        Files.createDirectories(root);
+        var current = state.current();
+        if ("Untitled Project".equals(current.manifest().name())) {
+            current = current.withManifest(new ProjectManifest(
+                root.getFileName().toString(),
+                current.manifest().layoutFile(),
+                current.manifest().uiStateFile()));
+            state.replaceState(current);
+        }
         projectRoot.set(root.toAbsolutePath().normalize());
-
-        var repo = repository.get();
-        if ("Untitled Project".equals(repo.manifest().name())) {
-            repo.setManifest(new ProjectManifest(root.getFileName().toString(), repo.manifest().layoutFile(), repo.manifest().uiStateFile()));
-        }
-
-        serialiser.writeManifest(root.resolve("mri-project.toml"), repo.manifest());
-
-        var currentSequenceSlugs = new HashSet<String>();
-        for (var sequenceId : repo.sequenceIds()) {
-            var sequence = (SequenceDocument) repo.node(sequenceId);
-            String seqSlug = slug(sequence.name());
-            currentSequenceSlugs.add(seqSlug);
-            serialiser.writeJson(root.resolve("sequences").resolve(seqSlug).resolve("sequence.json"), sequence);
-        }
-        cleanupDeletedDirs(root.resolve("sequences"), currentSequenceSlugs);
-
-        var currentSimSlugs = new HashSet<String>();
-        for (var configId : repo.simConfigIds()) {
-            var config = (SimulationConfigDocument) repo.node(configId);
-            String simSlug = slug(config.name());
-            currentSimSlugs.add(simSlug);
-            serialiser.writeJson(root.resolve("simulations").resolve(simSlug).resolve("config.json"), config);
-        }
-        cleanupDeletedDirs(root.resolve("simulations"), currentSimSlugs);
-
-        var currentEigenfieldSlugs = new HashSet<String>();
-        for (var eigenfieldId : repo.eigenfieldIds()) {
-            var eigenfield = (EigenfieldDocument) repo.node(eigenfieldId);
-            String efSlug = slug(eigenfield.name());
-            currentEigenfieldSlugs.add(efSlug);
-            serialiser.writeJson(root.resolve("eigenfields").resolve(efSlug).resolve("eigenfield.json"), eigenfield);
-        }
-        cleanupDeletedDirs(root.resolve("eigenfields"), currentEigenfieldSlugs);
-
-        var currentCircuitSlugs = new HashSet<String>();
-        for (var circuitId : repo.circuitIds()) {
-            var circuit = (CircuitDocument) repo.node(circuitId);
-            String cSlug = slug(circuit.name());
-            currentCircuitSlugs.add(cSlug);
-            serialiser.writeJson(root.resolve("circuits").resolve(cSlug).resolve("circuit.json"), circuit);
-        }
-        cleanupDeletedDirs(root.resolve("circuits"), currentCircuitSlugs);
-
-        var currentHardwareSlugs = new HashSet<String>();
-        for (var configId : repo.hardwareConfigIds()) {
-            var config = (HardwareConfigDocument) repo.node(configId);
-            String hSlug = slug(config.name());
-            currentHardwareSlugs.add(hSlug);
-            // Persist the envelope explicitly so the plugin's typed config can survive without
-            // global Jackson subtype registration (see HardwareConfigEnvelope).
-            var envelope = config.serialise(serialiser.mapper());
-            var stored = HardwareConfigDocument.fromJson(config.id(), config.name(), envelope);
-            serialiser.writeJson(root.resolve("hardware").resolve(hSlug).resolve("hardware.json"), stored);
-        }
-        cleanupDeletedDirs(root.resolve("hardware"), currentHardwareSlugs);
-
+        state.autosaver().setProjectRoot(projectRoot.get());
+        projectIO.write(current, root);
         explorer.refresh();
-    }
-
-    private static void cleanupDeletedDirs(Path parentDir, java.util.Set<String> activeSlugs) throws IOException {
-        if (!Files.isDirectory(parentDir)) return;
-        try (var dirs = Files.list(parentDir)) {
-            for (var dir : dirs.filter(Files::isDirectory).toList()) {
-                if (!activeSlugs.contains(dir.getFileName().toString())) {
-                    try (var walk = Files.walk(dir)) {
-                        walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                            // Best-effort orphan cleanup; another writer may already be deleting these.
-                            try { Files.delete(p); } catch (IOException ignored) {}
-                        });
-                    }
-                }
-            }
-        }
     }
 
     public void openProject(Path root) throws IOException {
-        var manifest = serialiser.readManifest(root.resolve("mri-project.toml"));
-        var loadedRepository = new ProjectRepository(manifest);
-
-        var eigenfieldsDir = root.resolve("eigenfields");
-        if (Files.isDirectory(eigenfieldsDir)) {
-            try (var files = Files.walk(eigenfieldsDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("eigenfield.json")).toList()) {
-                    loadedRepository.addEigenfield(serialiser.readJson(path, EigenfieldDocument.class));
-                }
-            }
-        }
-
-        // Circuits must load before sim-configs so that config.circuitId resolves to a present node.
-        var circuitsDir = root.resolve("circuits");
-        if (Files.isDirectory(circuitsDir)) {
-            try (var files = Files.walk(circuitsDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("circuit.json")).toList()) {
-                    loadedRepository.addCircuit(serialiser.readJson(path, CircuitDocument.class));
-                }
-            }
-        }
-
-        var simulationsDir = root.resolve("simulations");
-        if (Files.isDirectory(simulationsDir)) {
-            try (var files = Files.walk(simulationsDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("config.json")).toList()) {
-                    loadedRepository.addSimConfig(serialiser.readJson(path, SimulationConfigDocument.class));
-                }
-            }
-        }
-
-        var hardwareDir = root.resolve("hardware");
-        if (Files.isDirectory(hardwareDir)) {
-            try (var files = Files.walk(hardwareDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("hardware.json")).toList()) {
-                    var stored = serialiser.readJson(path, HardwareConfigDocument.class);
-                    try {
-                        loadedRepository.addHardwareConfig(stored.resolve(serialiser.mapper()));
-                    } catch (HardwareException ex) {
-                        // Plugin missing or config malformed — skip with a warning.
-                        System.err.println("Failed to load hardware config " + path + ": " + ex.getMessage());
-                    }
-                }
-            }
-        }
-
-        var sequencesDir = root.resolve("sequences");
-        if (Files.isDirectory(sequencesDir)) {
-            try (var files = Files.walk(sequencesDir)) {
-                for (var path : files.filter(candidate -> candidate.getFileName().toString().equals("sequence.json")).toList()) {
-                    loadedRepository.addSequence(serialiser.readJson(path, SequenceDocument.class));
-                }
-            }
-        }
-
-        repository.set(loadedRepository);
+        var loaded = projectIO.read(root);
+        state.replaceState(loaded);
+        // Restore the persisted undo log so Ctrl+Z survives restart.
+        var persistedLog = new ax.xz.mri.state.UndoLogPersistence().read(root);
+        if (!persistedLog.isEmpty()) state.installUndoLog(persistedLog);
         projectRoot.set(root.toAbsolutePath().normalize());
+        state.autosaver().setProjectRoot(projectRoot.get());
         workspace.activeNodeId.set(null);
         inspector.inspectedNodeId.set(null);
         explorer.refresh();
-        if (!loadedRepository.sequenceIds().isEmpty()) {
-            openNode(loadedRepository.sequenceIds().getFirst());
+        if (!loaded.sequenceIds().isEmpty()) {
+            openNode(loaded.sequenceIds().getFirst());
         }
     }
+
+    /* ── Selection / opening ───────────────────────────────────────────── */
 
     public void selectNode(ProjectNodeId nodeId) {
         explorer.selectedNodeId.set(nodeId);
@@ -222,8 +147,7 @@ public final class ProjectSessionViewModel {
 
     public void openNode(ProjectNodeId nodeId) {
         if (nodeId == null) return;
-        var repo = repository.get();
-        var node = repo.node(nodeId);
+        var node = state.current().node(nodeId);
         if (node == null) return;
 
         switch (node) {
@@ -245,12 +169,11 @@ public final class ProjectSessionViewModel {
                 if (onEigenfieldOpened != null) onEigenfieldOpened.accept(eigen);
             }
             case CircuitDocument ignored -> {
-                // Circuits don't open standalone — surface their owning sim-config's editor
-                // and let the user navigate to the Schematic tab.
+                // Circuits don't open standalone — surface their owning sim-config.
                 inspector.inspectedNodeId.set(nodeId);
-                var owningConfig = repo.simConfigIds().stream()
-                    .map(id -> (SimulationConfigDocument) repo.node(id))
-                    .filter(java.util.Objects::nonNull)
+                var owningConfig = state.current().simulationIds().stream()
+                    .map(state.current()::simulation)
+                    .filter(Objects::nonNull)
                     .filter(cfg -> cfg.config() != null && nodeId.equals(cfg.config().circuitId()))
                     .findFirst().orElse(null);
                 if (owningConfig != null && onSimConfigOpened != null) {
@@ -264,99 +187,99 @@ public final class ProjectSessionViewModel {
         }
     }
 
+    /* ── Structural mutations ─────────────────────────────────────────── */
+
     public void renameSequence(ProjectNodeId sequenceId, String newName) {
-        repository.get().renameSequence(sequenceId, newName);
-        explorer.refresh();
+        var current = state.current().sequence(sequenceId);
+        if (current == null) return;
+        var renamed = new SequenceDocument(
+            current.id(), newName,
+            current.clipSequence(), current.activeSimConfigId(),
+            current.preferredHardwareConfigId());
+        state.dispatch(new Mutation(seqScope(sequenceId), current, renamed,
+            "Rename sequence", Instant.now(), null, Mutation.Category.STRUCTURAL));
         selectNode(sequenceId);
-        saveProjectQuietly();
     }
 
     public void deleteSequence(ProjectNodeId sequenceId) {
-        repository.get().removeSequence(sequenceId);
-        if (sequenceId.equals(workspace.activeNodeId.get())) {
-            workspace.activeNodeId.set(null);
-        }
-        if (sequenceId.equals(inspector.inspectedNodeId.get())) {
-            inspector.inspectedNodeId.set(null);
-        }
-        explorer.refresh();
-        saveProjectQuietly();
+        var current = state.current().sequence(sequenceId);
+        if (current == null) return;
+        state.dispatch(new Mutation(seqScope(sequenceId), current, null,
+            "Delete sequence", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (sequenceId.equals(workspace.activeNodeId.get())) workspace.activeNodeId.set(null);
+        if (sequenceId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
     }
 
     public void deleteSimConfig(ProjectNodeId configId) {
-        repository.get().removeSimConfig(configId);
-        if (configId.equals(inspector.inspectedNodeId.get())) {
-            inspector.inspectedNodeId.set(null);
-        }
-        explorer.refresh();
-        saveProjectQuietly();
+        var current = state.current().simulation(configId);
+        if (current == null) return;
+        state.dispatch(new Mutation(simScope(configId), current, null,
+            "Delete simulation config", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (configId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
     }
 
     public void renameSimConfig(ProjectNodeId configId, String newName) {
-        repository.get().renameSimConfig(configId, newName);
-        explorer.refresh();
+        var current = state.current().simulation(configId);
+        if (current == null) return;
+        var renamed = new SimulationConfigDocument(current.id(), newName, current.config());
+        state.dispatch(new Mutation(simScope(configId), current, renamed,
+            "Rename simulation config", Instant.now(), null, Mutation.Category.STRUCTURAL));
         selectNode(configId);
-        saveProjectQuietly();
     }
 
-    /** Create a fresh hardware config bound to the given plugin id, with that plugin's defaults. */
     public HardwareConfigDocument createHardwareConfig(String name, String pluginId) {
         var plugin = HardwarePluginRegistry.byId(pluginId).orElseThrow(() ->
             new IllegalArgumentException("No hardware plugin registered for id: " + pluginId));
         return createHardwareConfig(name, plugin, plugin.defaultConfig());
     }
 
-    /** Create a hardware config with an explicit (already-edited) {@link HardwareConfig}. */
     public HardwareConfigDocument createHardwareConfig(String name, HardwarePlugin plugin, HardwareConfig config) {
         var doc = HardwareConfigDocument.of(new ProjectNodeId("hwcfg-" + UUID.randomUUID()), name, config);
-        repository.get().addHardwareConfig(doc);
-        explorer.refresh();
-        saveProjectQuietly();
+        state.dispatch(new Mutation(hwScope(doc.id()), null, doc,
+            "Create hardware config", Instant.now(), null, Mutation.Category.STRUCTURAL));
         return doc;
     }
 
     public void updateHardwareConfig(HardwareConfigDocument updated) {
-        repository.get().updateHardwareConfig(updated);
-        saveProjectQuietly();
+        var current = state.current().hardwareConfig(updated.id());
+        state.dispatch(new Mutation(hwScope(updated.id()), current, updated,
+            "Update hardware config", Instant.now(), null, Mutation.Category.CONTENT));
     }
 
     public void deleteHardwareConfig(ProjectNodeId configId) {
-        repository.get().removeHardwareConfig(configId);
-        if (configId.equals(inspector.inspectedNodeId.get())) {
-            inspector.inspectedNodeId.set(null);
-        }
-        explorer.refresh();
-        saveProjectQuietly();
+        var current = state.current().hardwareConfig(configId);
+        if (current == null) return;
+        state.dispatch(new Mutation(hwScope(configId), current, null,
+            "Delete hardware config", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (configId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
     }
 
     public void renameHardwareConfig(ProjectNodeId configId, String newName) {
-        repository.get().renameHardwareConfig(configId, newName);
-        explorer.refresh();
+        var current = state.current().hardwareConfig(configId);
+        if (current == null) return;
+        var renamed = current.withName(newName);
+        state.dispatch(new Mutation(hwScope(configId), current, renamed,
+            "Rename hardware config", Instant.now(), null, Mutation.Category.STRUCTURAL));
         selectNode(configId);
-        saveProjectQuietly();
     }
 
-    /**
-     * Deep-copy a simulation config: its {@link CircuitDocument} is cloned
-     * with fresh component ids (so both configs can be edited independently
-     * without mutating a shared circuit), a new config doc wraps it, and
-     * the duplicate is added to the repo with a disambiguated name. Returns
-     * the new doc so the caller can open it.
-     */
     public SimulationConfigDocument duplicateSimConfig(ProjectNodeId sourceId) {
-        var repo = repository.get();
-        if (!(repo.node(sourceId) instanceof SimulationConfigDocument source)) return null;
+        var st = state.current();
+        var source = st.simulation(sourceId);
+        if (source == null) return null;
 
         var existingNames = new java.util.HashSet<String>();
-        for (var id : repo.simConfigIds()) {
-            if (repo.node(id) instanceof SimulationConfigDocument d) existingNames.add(d.name());
+        for (var id : st.simulationIds()) {
+            var d = st.simulation(id);
+            if (d != null) existingNames.add(d.name());
         }
         var newName = uniqueName(existingNames, source.name() + " (copy)");
 
         var sourceConfig = source.config();
         ProjectNodeId newCircuitId = sourceConfig.circuitId();
+        CircuitDocument clonedCircuit = null;
         if (sourceConfig.circuitId() != null) {
-            var sourceCircuit = repo.circuit(sourceConfig.circuitId());
+            var sourceCircuit = st.circuit(sourceConfig.circuitId());
             if (sourceCircuit != null) {
                 newCircuitId = new ProjectNodeId("circuit-" + UUID.randomUUID());
                 var clonedComponents = new java.util.ArrayList<ax.xz.mri.model.circuit.CircuitComponent>();
@@ -383,68 +306,75 @@ public final class ProjectSessionViewModel {
                     clonedLayout = clonedLayout.with(new ax.xz.mri.model.circuit.ComponentPosition(
                         newId, pos.x(), pos.y(), pos.rotationQuarters(), pos.mirrored()));
                 }
-                var clonedCircuit = new ax.xz.mri.model.circuit.CircuitDocument(
-                    newCircuitId, sourceCircuit.name() + " (copy)",
+                clonedCircuit = new CircuitDocument(newCircuitId, sourceCircuit.name() + " (copy)",
                     clonedComponents, clonedWires, clonedLayout);
-                repo.addCircuit(clonedCircuit);
             }
         }
         var clonedConfig = sourceConfig.withCircuitId(newCircuitId);
         var newDoc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), newName, clonedConfig);
-        repo.addSimConfig(newDoc);
-        explorer.refresh();
+
+        // Two structural mutations — circuit first (so the FK resolves), then sim config.
+        if (clonedCircuit != null) {
+            state.dispatch(new Mutation(circuitScope(clonedCircuit.id()), null, clonedCircuit,
+                "Duplicate circuit", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        }
+        state.dispatch(new Mutation(simScope(newDoc.id()), null, newDoc,
+            "Duplicate simulation config", Instant.now(), null, Mutation.Category.STRUCTURAL));
         selectNode(newDoc.id());
-        saveProjectQuietly();
         return newDoc;
     }
 
-    private static String uniqueName(java.util.Set<String> existing, String base) {
-        if (!existing.contains(base)) return base;
-        int i = 2;
-        while (existing.contains(base + " " + i)) i++;
-        return base + " " + i;
-    }
-
     public void deleteEigenfield(ProjectNodeId eigenfieldId) {
-        repository.get().removeEigenfield(eigenfieldId);
-        if (eigenfieldId.equals(inspector.inspectedNodeId.get())) {
-            inspector.inspectedNodeId.set(null);
-        }
-        explorer.refresh();
-        saveProjectQuietly();
+        var current = state.current().eigenfield(eigenfieldId);
+        if (current == null) return;
+        state.dispatch(new Mutation(efScope(eigenfieldId), current, null,
+            "Delete eigenfield", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (eigenfieldId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
     }
 
     public void renameEigenfield(ProjectNodeId eigenfieldId, String newName) {
-        repository.get().renameEigenfield(eigenfieldId, newName);
-        explorer.refresh();
+        var current = state.current().eigenfield(eigenfieldId);
+        if (current == null) return;
+        var renamed = current.withName(newName);
+        state.dispatch(new Mutation(efScope(eigenfieldId), current, renamed,
+            "Rename eigenfield", Instant.now(), null, Mutation.Category.STRUCTURAL));
         selectNode(eigenfieldId);
-        saveProjectQuietly();
-    }
-
-    public void saveProjectQuietly() {
-        var root = projectRoot.get();
-        if (root == null) return;
-        try { saveProject(root); } catch (IOException ex) { errorSink.accept(ex); }
     }
 
     public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, PhysicsParams params) {
-        var repo = repository.get();
-        var circuitId = template.createCircuit(repo, name + " circuit");
-        var config = SimulationConfig.fromPhysics(params, template.referenceB0Tesla(), circuitId);
+        var built = template.buildCircuit(state.current(), name + " circuit");
+        // Dispatch any eigenfields the starter required first, then the circuit (so FKs resolve).
+        for (var ef : built.newEigenfields()) {
+            state.dispatch(new Mutation(efScope(ef.id()), null, ef,
+                "Create eigenfield", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        }
+        var circuit = built.circuit();
+        if (circuit != null) {
+            state.dispatch(new Mutation(circuitScope(circuit.id()), null, circuit,
+                "Create circuit", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        }
+        var config = SimulationConfig.fromPhysics(params, template.referenceB0Tesla(),
+            circuit != null ? circuit.id() : null);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
-        repo.addSimConfig(doc);
-        explorer.refresh();
-        saveProjectQuietly();
+        state.dispatch(new Mutation(simScope(doc.id()), null, doc,
+            "Create simulation config", Instant.now(), null, Mutation.Category.STRUCTURAL));
         return doc;
     }
 
     public EigenfieldDocument createEigenfield(String name, String description, String script, String units) {
-        var ef = repository.get().findOrCreateEigenfield(name, description, script, units);
-        explorer.refresh();
-        saveProjectQuietly();
-        return ef;
+        // Dedup by (name, script) — match the legacy findOrCreate semantics.
+        var st = state.current();
+        for (var id : st.eigenfieldIds()) {
+            var ef = st.eigenfield(id);
+            if (ef != null && ef.name().equals(name) && ef.script().equals(script)) return ef;
+        }
+        var fresh = new EigenfieldDocument(
+            new ProjectNodeId("ef-" + UUID.randomUUID()), name, description, script, units);
+        state.dispatch(new Mutation(efScope(fresh.id()), null, fresh,
+            "Create eigenfield", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        return fresh;
     }
 
     public SequenceDocument createEmptySequence(String name, ProjectNodeId configId) {
@@ -453,30 +383,38 @@ public final class ProjectSessionViewModel {
 
     public SequenceDocument createSequenceFromStarter(String name, ProjectNodeId configId, SequenceStarter starter) {
         if (starter == null) starter = SequenceStarterLibrary.defaultStarter();
-        var repo = repository.get();
-        var configDoc = (SimulationConfigDocument) repo.node(configId);
+        var st = state.current();
+        var configDoc = st.simulation(configId);
         var config = configDoc != null ? configDoc.config() : null;
-        CircuitDocument circuit = config != null ? repo.circuit(config.circuitId()) : null;
+        CircuitDocument circuit = config != null ? st.circuit(config.circuitId()) : null;
 
         var clipSeq = starter.build(config, circuit);
-        var baked = ClipBaker.bake(clipSeq, circuit);
-
         var doc = new SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,
-            baked.segments(),
-            baked.pulseSegments(),
-            clipSeq,
-            configId
+            clipSeq, configId, null
         );
-        repo.addSequence(doc);
-        explorer.refresh();
-        saveProjectQuietly();
+        state.dispatch(new Mutation(seqScope(doc.id()), null, doc,
+            "Create sequence", Instant.now(), null, Mutation.Category.STRUCTURAL));
         return doc;
     }
 
-    private static String slug(String value) {
-        String collapsed = value == null ? "untitled" : value.trim().toLowerCase().replaceAll("[^a-z0-9]+", "-");
-        collapsed = collapsed.replaceAll("^-+", "").replaceAll("-+$", "");
-        return collapsed.isBlank() ? "untitled" : collapsed;
+    /** Force a flush of any pending autosave (e.g. on app close). */
+    public void flushSave() {
+        state.autosaver().flush();
+    }
+
+    /* ── helpers ──────────────────────────────────────────────────────── */
+
+    private static Scope seqScope(ProjectNodeId id)     { return Scope.indexed(Scope.root(), "sequences", id); }
+    private static Scope simScope(ProjectNodeId id)     { return Scope.indexed(Scope.root(), "simulations", id); }
+    private static Scope efScope(ProjectNodeId id)      { return Scope.indexed(Scope.root(), "eigenfields", id); }
+    private static Scope circuitScope(ProjectNodeId id) { return Scope.indexed(Scope.root(), "circuits", id); }
+    private static Scope hwScope(ProjectNodeId id)      { return Scope.indexed(Scope.root(), "hardware", id); }
+
+    private static String uniqueName(java.util.Set<String> existing, String base) {
+        if (!existing.contains(base)) return base;
+        int i = 2;
+        while (existing.contains(base + " " + i)) i++;
+        return base + " " + i;
     }
 }

@@ -39,9 +39,6 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	private final HBox configStripContainer;
 	private final StudioSession sessionRef;
 
-	/** The config state at last save — used for dirty detection. */
-	private SimulationConfig savedConfig;
-
 	// Cached simulation result — restored on tab switch instead of re-simulating
 	public SimulationOutput cachedSimulationOutput;
 	public List<PulseSegment> cachedPulse;
@@ -58,25 +55,18 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		editorPane.wireSimSession(simSession);
 		editorPane.wireHardwareSession(hardwareSession);
 
-		// Restore last-used hardware config preference if persisted on the document.
-		var hwId = document.preferredHardwareConfigId();
-		if (hwId != null) {
-			var hw = session.project.repository.get().hardwareConfig(hwId);
-			if (hw != null) {
-				editSession.activeHardwareConfig.set(hw);
-				hardwareSession.activeConfig.set(hw);
-			}
-		}
-		// Mirror the active hardware config back onto the edit session so the
-		// track context-menu Route-to-Hardware submenu sees it.
-		hardwareSession.activeConfig.addListener((obs, o, n) -> editSession.activeHardwareConfig.set(n));
+		// Restore the persisted hardware-config binding. The id is the source
+		// of truth — we deliberately don't validate it here; the inspector,
+		// timeline, and run session all resolve through the repo on demand
+		// and degrade gracefully if the id refers to a deleted config.
+		editSession.activeHardwareConfigId.set(document.preferredHardwareConfigId());
 
 		// Wire the edit session's config association to the sim session.
 		// When activeSimConfigId changes (via undo/redo or setActiveSimConfig),
 		// load the corresponding config into the sim session for re-simulation.
 		editSession.activeSimConfigId.addListener((obs, oldId, newId) -> {
 			if (newId != null) {
-				var repo = session.project.repository.get();
+				var repo = session.state.current();
 				var configDoc = repo.node(newId);
 				if (configDoc instanceof ax.xz.mri.project.SimulationConfigDocument sc) {
 					simSession.loadConfig(sc);
@@ -86,11 +76,9 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 
 		// Load associated sim config from the document's persisted config ID
 		var configId = document.activeSimConfigId();
-		if (configId != null && session.project.repository.get().simConfig(configId) != null) {
+		if (configId != null && session.state.current().simulation(configId) != null) {
 			editSession.setOriginalSimConfigId(configId);
 		}
-		savedConfig = simSession.activeConfig.get();
-
 		// Inline config summary strip (reactive — rebuilds when config changes)
 		configStripContainer = new HBox();
 		this.sessionRef = session;
@@ -115,7 +103,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		if (cfg == null) {
 			configStripContainer.getChildren().add(new Label("No simulation config"));
 		} else {
-			var circuit = sessionRef.project.repository.get().circuit(cfg.circuitId());
+			var circuit = sessionRef.state.current().circuit(cfg.circuitId());
 			int sourceCount = circuit == null ? 0 : circuit.voltageSources().size();
 			configStripContainer.getChildren().addAll(
 				new Label("B\u2080: " + String.format("%.4f T", cfg.referenceB0Tesla())),
@@ -152,9 +140,6 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		cachedPulse = session.document.currentPulse.get();
 		return session.captureToolSnapshot();
 	}
-
-	@Override public boolean isDirty() { return editSession.isDirty(); }
-	@Override public void save() { editorPane.savePublic(); }
 
 	@Override
 	public void dispose() {

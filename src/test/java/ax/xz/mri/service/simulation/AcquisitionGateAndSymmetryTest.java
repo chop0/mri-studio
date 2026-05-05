@@ -15,7 +15,7 @@ import ax.xz.mri.model.simulation.FieldSymmetry;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -34,9 +34,9 @@ class AcquisitionGateAndSymmetryTest {
     private static final double DT = 1e-6;
     private static final double B0 = 0.0154;
 
-    private static ProjectNodeId addEigenfield(ProjectRepository repo, String name, String script, FieldSymmetry sym) {
+    private static ProjectNodeId addEigenfield(ProjectState repo, String name, String script, FieldSymmetry sym) {
         var id = new ProjectNodeId("ef-" + name);
-        repo.addEigenfield(new EigenfieldDocument(id, name, "", script, "T", sym));
+        repo = repo.withEigenfield(new EigenfieldDocument(id, name, "", script, "T", sym));
         return id;
     }
 
@@ -59,9 +59,12 @@ class AcquisitionGateAndSymmetryTest {
 
     @Test
     void gateSourceControlsSwitchClosure() {
-        var repo = ProjectRepository.untitled();
-        var b0Id = addEigenfield(repo, "B0", "return Vec3.of(0, 0, 1);", FieldSymmetry.AXISYMMETRIC_Z);
-        var rxId = addEigenfield(repo, "rx", "return Vec3.of(1, 0, 0);", FieldSymmetry.AXISYMMETRIC_Z);
+        var repo = ProjectState.empty();
+		var b0Id = new ProjectNodeId("ef-B0");
+		var rxId = new ProjectNodeId("ef-rx");
+
+		repo = repo.withEigenfield(new EigenfieldDocument(b0Id, "B0", "", "return Vec3.of(0, 0, 1);", "T", FieldSymmetry.AXISYMMETRIC_Z));
+		repo = repo.withEigenfield(new EigenfieldDocument(rxId, "rx", "", "return Vec3.of(1, 0, 0);", "T", FieldSymmetry.AXISYMMETRIC_Z));
 
         var b0Src = new CircuitComponent.VoltageSource(new ComponentId("src-b0"),
             "B0", AmplitudeKind.STATIC, 0, 0, B0, 0);
@@ -81,7 +84,7 @@ class AcquisitionGateAndSymmetryTest {
         var circuitId = new ProjectNodeId("circuit-0");
         var circuit = new CircuitDocument(circuitId, "Test",
             List.of(b0Src, rxGate, b0Coil, rxCoil, sw, probe), wires, CircuitLayout.empty());
-        repo.addCircuit(circuit);
+        repo = repo.withCircuit(circuit);
 
         var cfg = new SimulationConfig(1000, 1000, GAMMA, 5, 20, 10, 3, 3, B0, DT, circuitId);
 

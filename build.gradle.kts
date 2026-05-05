@@ -41,6 +41,9 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
+    // Tests don't run on the JavaFX application thread; allow
+    // UnifiedStateManager dispatches without that guard firing.
+    systemProperty("ax.xz.mri.state.bypass-fx-check", "true")
 }
 
 tasks.register<JavaExec>("runOptimiser") {

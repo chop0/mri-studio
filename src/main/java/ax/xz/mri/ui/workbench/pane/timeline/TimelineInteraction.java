@@ -213,6 +213,13 @@ public final class TimelineInteraction {
             case ClipDragState.MoveTrack mt -> {
                 if (mt.dropIndex() != mt.originIndex()) session.reorderTrack(mt.trackId(), mt.dropIndex());
             }
+            // Coalesced drags (Move / Resize / Amplitude / SplinePoint) commit
+            // their accumulated mutations as a single undo entry.
+            case ClipDragState.Move m -> session.endTransaction();
+            case ClipDragState.ResizeLeft rl -> session.endTransaction();
+            case ClipDragState.ResizeRight rr -> session.endTransaction();
+            case ClipDragState.Amplitude a -> session.endTransaction();
+            case ClipDragState.SplinePoint sp -> session.endTransaction();
             default -> { /* nothing */ }
         }
 
@@ -307,20 +314,24 @@ public final class TimelineInteraction {
         if (e.isAltDown() && hit.zone == HitZone.BODY) {
             drag = new ClipDragState.Amplitude(hit.clipId, e.getY(), hit.trackIndex, clip.amplitude());
             onCursor.accept(Cursor.V_RESIZE);
+            session.beginTransaction("Adjust amplitude");
             return;
         }
         switch (hit.zone) {
             case LEFT_EDGE -> {
                 drag = new ClipDragState.ResizeLeft(hit.clipId);
                 onCursor.accept(Cursor.H_RESIZE);
+                session.beginTransaction("Resize clip");
             }
             case RIGHT_EDGE -> {
                 drag = new ClipDragState.ResizeRight(hit.clipId);
                 onCursor.accept(Cursor.H_RESIZE);
+                session.beginTransaction("Resize clip");
             }
             case SPLINE_POINT -> {
                 drag = new ClipDragState.SplinePoint(hit.clipId, hit.splinePointIndex);
                 onCursor.accept(Cursor.CROSSHAIR);
+                session.beginTransaction("Move spline point");
             }
             case BODY -> {
                 double mx = e.getX();
@@ -332,6 +343,7 @@ public final class TimelineInteraction {
                     hit.trackIndex, multi, anchorTime
                 );
                 onCursor.accept(Cursor.CLOSED_HAND);
+                session.beginTransaction(multi ? "Move clips" : "Move clip");
             }
         }
     }

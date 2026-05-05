@@ -32,7 +32,5 @@ public interface DocumentEditorProvider {
 		session.restoreToolSnapshot(snapshot);
 	}
 
-	boolean isDirty();
-	void save();
 	void dispose();
 }

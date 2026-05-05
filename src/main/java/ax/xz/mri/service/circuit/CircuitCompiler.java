@@ -15,7 +15,7 @@ import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
 import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledCoil;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledProbe;
 import ax.xz.mri.service.circuit.CompiledCircuit.CompiledSource;
@@ -50,7 +50,7 @@ public final class CircuitCompiler {
 
     private CircuitCompiler() {}
 
-    public static CompiledCircuit compile(CircuitDocument circuit, ProjectRepository repository,
+    public static CompiledCircuit compile(CircuitDocument circuit, ProjectState repository,
                                           double[] rMm, double[] zMm) {
         if (circuit == null) throw new IllegalArgumentException("CircuitCompiler.compile: circuit is null");
 
@@ -102,7 +102,7 @@ public final class CircuitCompiler {
 
     private static final class CompilerContext implements CircuitStampContext {
         private final CircuitDocument circuit;
-        private final ProjectRepository repository;
+        private final ProjectState repository;
         private final double[] rMm;
         private final double[] zMm;
         private final Map<ComponentTerminal, Integer> nodeOf;
@@ -131,7 +131,7 @@ public final class CircuitCompiler {
 
         private CircuitComponent owner;
 
-        CompilerContext(CircuitDocument circuit, ProjectRepository repository,
+        CompilerContext(CircuitDocument circuit, ProjectState repository,
                         double[] rMm, double[] zMm,
                         Map<ComponentTerminal, Integer> nodeOf, int nodeCount) {
             this.circuit = circuit;
@@ -428,7 +428,7 @@ public final class CircuitCompiler {
     }
 
     private static double[][][] sampleEigenfield(ProjectNodeId eigenfieldId,
-                                                 ProjectRepository repository,
+                                                 ProjectState repository,
                                                  double[] rMm, double[] zMm,
                                                  double coilSensitivityT_per_A) {
         int nR = rMm.length;

@@ -9,7 +9,6 @@ import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
-import ax.xz.mri.project.ProjectRepository;
 import ax.xz.mri.service.circuit.CircuitCompiler;
 import ax.xz.mri.service.circuit.CompiledCircuit;
 import org.junit.jupiter.api.Test;
@@ -45,8 +44,8 @@ class MnaSolverTest {
     void modulatorCombinesTwoRealSourcesIntoIAndQ() {
         // Two REAL sources wired to mod.in0/in1 at loHz=0 and omegaSim=0
         // should land on the coil as (V_in0 + j·V_in1) directly.
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var rfI = voltageSource("src-i", "I", AmplitudeKind.REAL, 1.0);
         var rfQ = voltageSource("src-q", "Q", AmplitudeKind.REAL, 1.0);
         var mod = new CircuitComponent.Modulator(new ComponentId("mod"), "Mod", 0);
@@ -111,8 +110,8 @@ class MnaSolverTest {
         // coil current = RF voltage / small-R. With RF inactive the inverted
         // mux.b-common branch closes instead; the probe is high-Z so no
         // current flows through the coil.
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var rfSrc = voltageSource("src-rf", "RF", AmplitudeKind.REAL, 1.0);
         // Tiny but non-zero R so the MNA has a finite I↔V relation; with
         // mux.closedR ≈ 1 µΩ the source-to-coil branch is effectively a
@@ -152,8 +151,8 @@ class MnaSolverTest {
         // mixer.out1 → Q-probe. With loHz=0 and IQ format the mixer is a
         // unity buffer: V_in is real-valued 2, so out0 = 2 and out1 = 0.
         // The load on out0 must NOT affect V(in) (buffered property).
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 2.0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 0);
@@ -189,8 +188,8 @@ class MnaSolverTest {
         // Mixer with loHz = 1 MHz applies exp(-j·2π·1e6·t). The shifted
         // complex envelope is cos(θ) + j·(-sin(θ)), so IQ format puts
         // cos(θ) on out0 and -sin(θ) on out1.
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var src = voltageSource("src", "V", AmplitudeKind.REAL, 1.0);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, 1);
         var mixer = new CircuitComponent.Mixer(new ComponentId("mx"), "Mix", 1_000_000);
@@ -221,8 +220,8 @@ class MnaSolverTest {
     // ───────── Helpers ─────────
 
     private static CompiledCircuit compileSingleDriveCircuit(AmplitudeKind kind, double coilR) {
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var src = voltageSource("src", "S", kind, 1.5);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, 0, coilR);
         var wires = List.of(wire("w", src.id(), "out", coil.id(), "in"));
@@ -232,8 +231,8 @@ class MnaSolverTest {
     }
 
     private static CompiledCircuit compileRLCircuit(double v, double r, double l) {
-        var repo = ProjectRepository.untitled();
-        var efId = addEigenfield(repo, "ef");
+        var repo = ax.xz.mri.state.ProjectState.empty();
+        var efIdDoc = new EigenfieldDocument(new ProjectNodeId("ef"), "ef", "", "return Vec3.of(1, 0, 0);", "T"); repo = repo.withEigenfield(efIdDoc); var efId = efIdDoc.id();
         var src = voltageSource("src", "V", AmplitudeKind.REAL, v);
         var coil = new CircuitComponent.Coil(new ComponentId("coil"), "Coil", efId, l, r);
         var wires = List.of(wire("w", src.id(), "out", coil.id(), "in"));
@@ -250,12 +249,5 @@ class MnaSolverTest {
 
     private static Wire wire(String id, ComponentId a, String ap, ComponentId b, String bp) {
         return new Wire(id, new ComponentTerminal(a, ap), new ComponentTerminal(b, bp));
-    }
-
-    private static ProjectNodeId addEigenfield(ProjectRepository repo, String id) {
-        var nodeId = new ProjectNodeId(id);
-        repo.addEigenfield(new EigenfieldDocument(nodeId, id, "",
-            "return Vec3.of(1, 0, 0);", "T"));
-        return nodeId;
     }
 }
