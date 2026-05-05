@@ -42,11 +42,16 @@ public final class FxTestSupport {
         }
     }
 
-    private static void startToolkit() {
+    public static void startToolkit() {
         if (!STARTED.compareAndSet(false, true)) return;
 
         var started = new CountDownLatch(1);
-        Platform.startup(started::countDown);
+        try {
+            Platform.startup(started::countDown);
+        } catch (IllegalStateException alreadyStarted) {
+            // Some other test or a SkillsCheck already booted the toolkit. That's fine.
+            return;
+        }
         try {
             if (!started.await(10, TimeUnit.SECONDS)) {
                 fail("Timed out starting JavaFX toolkit");

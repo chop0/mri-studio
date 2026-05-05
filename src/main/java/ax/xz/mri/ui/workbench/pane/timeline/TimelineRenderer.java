@@ -385,9 +385,6 @@ public final class TimelineRenderer {
         if (rows.isEmpty()) return;
 
         double bandTop = geom.outputBandTop();
-        double pL = geom.plotLeft();
-        double pW = geom.plotWidth();
-        double labelW = geom.labelWidth();
 
         // A single thicker divider line separates the editable area from the
         // read-only band — visually unmistakable that everything below it is
@@ -397,11 +394,32 @@ public final class TimelineRenderer {
         g.strokeLine(0, bandTop - 0.5, geom.width(), bandTop - 0.5);
         g.setLineWidth(1.0);
 
+        // One vertical scale shared across every output row in the band, so
+        // rp.rx, rp.rx.i, and rp.rx.q render to comparable amplitudes — an
+        // 0.8 V raw-RF cosine and a 0.5 V baseband I read at the same scale
+        // and the I/Q rows visibly settle at "what fraction of the raw RF
+        // made it back as DC after demodulation".
+        //
+        // Time axis comes from the shared {@link TimelineGeometry}; rows
+        // zoom and pan with the editable tracks above (no separate per-band
+        // tStart/tSpan computation), so a sample at time t in rp.rx lands
+        // on the same x pixel as a clip starting at t.
+        double maxAbs = 0;
+        for (var row : rows) {
+            for (var p : row.trace().points()) {
+                double m = Math.hypot(p.real(), p.imag());
+                double a = Math.abs(p.real());
+                if (m > maxAbs) maxAbs = m;
+                if (a > maxAbs) maxAbs = a;
+            }
+        }
+        if (maxAbs <= 0) maxAbs = 1;
+
         for (int i = 0; i < rows.size(); i++) {
             var row = rows.get(i);
             double top = geom.outputRowTop(i);
             double h = geom.outputRowHeight();
-            paintOutputRow(g, row, top, h, pL, pW, labelW);
+            paintOutputRow(g, row, top, h, geom, maxAbs);
             // Lane separator between consecutive output rows.
             g.setStroke(LANE_BORDER);
             g.setLineWidth(0.5);
@@ -411,10 +429,13 @@ public final class TimelineRenderer {
 
     private static void paintOutputRow(GraphicsContext g, OutputRow row,
                                        double top, double h,
-                                       double plotLeft, double plotWidth, double labelW) {
+                                       TimelineGeometry geom, double maxAbs) {
         boolean sim = row.context() == RunContext.SIMULATION;
         Color tint = sim ? OUTPUT_TINT_SIM : OUTPUT_TINT_HW;
         Color trace = sim ? OUTPUT_TRACE_SIM : OUTPUT_TRACE_HW;
+        double plotLeft = geom.plotLeft();
+        double plotWidth = geom.plotWidth();
+        double labelW = geom.labelWidth();
 
         // Lane background — alternating sim/hw faint tint.
         g.setFill(tint);
@@ -450,46 +471,36 @@ public final class TimelineRenderer {
         g.strokeLine(plotLeft, mid, plotLeft + plotWidth, mid);
         g.setLineDashes();
 
-        paintTrace(g, row.trace(), top, h, plotLeft, plotWidth, trace);
+        paintTrace(g, row.trace(), top, h, geom, trace, maxAbs);
     }
 
     /**
-     * Render a {@link SignalTrace} into a row's vertical band.
+     * Render a {@link SignalTrace} into a row's vertical band, time-mapped
+     * onto the same {@link TimelineGeometry#timeToX} axis the editable
+     * tracks use. Output rows zoom and pan with the rest of the timeline;
+     * a sample at time {@code t} in {@code rp.rx} lands on the same x
+     * pixel as a clip starting at {@code t}.
      *
      * <p>Two layers stacked so a real-valued signal (DC mixing, Q=0) reads
      * the same as a complex baseband signal:
      * <ul>
      *   <li><b>Magnitude envelope</b> — √(re²+im²) drawn as a faint mirrored
-     *       silhouette above and below the centreline. Useful for at-a-glance
-     *       "where is the signal" identification.</li>
-     *   <li><b>Real part (signed)</b> — drawn as the bold trace centred on
-     *       the row's midline; positive bumps go up, negative go down. For a
-     *       sinc test pulse this shows the actual sinc with its negative
-     *       lobes; pre-fix we plotted only magnitude and the negative lobes
-     *       flipped positive, hiding the shape entirely.</li>
+     *       silhouette above and below the centreline.</li>
+     *   <li><b>Real part (signed)</b> — bold trace centred on the row's
+     *       midline; positive bumps go up, negative go down.</li>
      * </ul>
      *
-     * <p>The full trace is mapped across the row's plot rect — there's no
-     * time-clipping against the editor viewport, because output rows track
-     * the run's full timeline regardless of the user's current zoom.
+     * <p>The Canvas is clipped to the band's plot rect for the duration
+     * of this call so traces extending past the viewport (the run is
+     * longer than what the user is currently zoomed into, or they've
+     * scrolled past the run) don't bleed onto the label column or the
+     * lane separator.
      */
     private static void paintTrace(GraphicsContext g, SignalTrace trace,
                                    double top, double h,
-                                   double plotLeft, double plotWidth, Color stroke) {
+                                   TimelineGeometry geom, Color stroke, double maxAbs) {
         var pts = trace.points();
-        if (pts.isEmpty()) return;
-
-        // Scale to the largest of |re|, |im|, magnitude so positive and
-        // negative excursions both fit. A sinc with main-lobe height M and
-        // negative side lobes of -0.2M is then mapped symmetrically.
-        double maxAbs = 0;
-        for (var p : pts) {
-            double m = Math.hypot(p.real(), p.imag());
-            double a = Math.abs(p.real());
-            if (m > maxAbs) maxAbs = m;
-            if (a > maxAbs) maxAbs = a;
-        }
-        if (maxAbs <= 0) maxAbs = 1;
+        if (pts.isEmpty() || maxAbs <= 0) return;
 
         double padding = 4;
         double laneTop = top + padding;
@@ -497,9 +508,10 @@ public final class TimelineRenderer {
         double mid = (laneTop + laneBottom) / 2;
         double halfH = (laneBottom - laneTop) / 2;
 
-        double tStart = pts.getFirst().tMicros();
-        double tEnd = pts.getLast().tMicros();
-        double tSpan = Math.max(1e-9, tEnd - tStart);
+        g.save();
+        g.beginPath();
+        g.rect(geom.plotLeft(), top, geom.plotWidth(), h);
+        g.clip();
 
         // Faint magnitude envelope, mirrored above and below the midline.
         Color envColor = Color.color(stroke.getRed(), stroke.getGreen(), stroke.getBlue(), 0.18);
@@ -507,16 +519,14 @@ public final class TimelineRenderer {
         g.beginPath();
         for (int i = 0; i < pts.size(); i++) {
             var p = pts.get(i);
-            double mag = Math.hypot(p.real(), p.imag());
-            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
-            double y = mid - (mag / maxAbs) * halfH;
+            double x = geom.timeToX(p.tMicros());
+            double y = mid - (Math.hypot(p.real(), p.imag()) / maxAbs) * halfH;
             if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
         }
         for (int i = pts.size() - 1; i >= 0; i--) {
             var p = pts.get(i);
-            double mag = Math.hypot(p.real(), p.imag());
-            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
-            double y = mid + (mag / maxAbs) * halfH;
+            double x = geom.timeToX(p.tMicros());
+            double y = mid + (Math.hypot(p.real(), p.imag()) / maxAbs) * halfH;
             g.lineTo(x, y);
         }
         g.closePath();
@@ -528,11 +538,13 @@ public final class TimelineRenderer {
         g.beginPath();
         for (int i = 0; i < pts.size(); i++) {
             var p = pts.get(i);
-            double x = plotLeft + (p.tMicros() - tStart) / tSpan * plotWidth;
+            double x = geom.timeToX(p.tMicros());
             double y = mid - (p.real() / maxAbs) * halfH;
             if (i == 0) g.moveTo(x, y); else g.lineTo(x, y);
         }
         g.stroke();
+
+        g.restore();
     }
 
     // ══════════════════════════════════════════════════════════════════════════

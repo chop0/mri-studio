@@ -1,7 +1,10 @@
+import com.google.protobuf.gradle.id
+
 plugins {
     java
     application
     id("org.openjfx.javafxplugin") version "0.1.0"
+    id("com.google.protobuf") version "0.9.4"
 }
 
 group = "ax.xz.mri"
@@ -27,7 +30,24 @@ dependencies {
     implementation("software.coley:bento-fx:0.10.1")
     implementation("org.codehaus.janino:janino:3.1.12")
     implementation("org.codehaus.janino:commons-compiler:3.1.12")
+    implementation("com.google.protobuf:protobuf-java:3.25.5")
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+}
+
+// The .proto schema is owned by the C-server repo dir; both sides codegen
+// from the same file so the wire contract can never drift.
+sourceSets {
+    main {
+        proto {
+            srcDir("../mri-rp-server/proto")
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:3.25.5"
+    }
 }
 
 application {
@@ -41,8 +61,13 @@ tasks.withType<JavaCompile> {
 
 tasks.test {
     useJUnitPlatform()
-    // Tests don't run on the JavaFX application thread; allow
-    // UnifiedStateManager dispatches without that guard firing.
+    // Forward redpitaya.smoke.host (and friends) so the live integration
+    // test can opt-in via the gradle command line.
+    systemProperties(System.getProperties().filterKeys {
+        (it as String).startsWith("redpitaya.")
+    } as Map<String, Any>)
+    // Tests don't run on the JavaFX application thread; allow UnifiedStateManager
+    // dispatches without that guard firing.
     systemProperty("ax.xz.mri.state.bypass-fx-check", "true")
 }
 

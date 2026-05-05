@@ -142,6 +142,37 @@ public final class HardwareRunSession {
                     studioSession.messages.logInfo("Hardware",
                         "Run completed in " + ms + " ms — "
                             + points + " sample(s) on probe " + result.probeTraces().primaryProbeName());
+
+                    // Surface device-side diagnostics so the user can see
+                    // when the TX path is silent (baseband_peak=0 ⇒ tracks
+                    // not routed, or stale routing after the rp.tx[0/1] →
+                    // rp.tx.i/q rename) or aliased (bram_peak ≪
+                    // baseband_peak ⇒ effective_rate dropped below the
+                    // configured carrier's Nyquist for this duration).
+                    var meta = result.deviceMetadata();
+                    String basebandPeak = meta.get("tx_baseband_peak");
+                    String bramPeak = meta.get("tx_bram_peak");
+                    String playUs = meta.get("tx_play_duration_us");
+                    String effRate = meta.get("tx_effective_rate_mhz");
+                    if (basebandPeak != null) {
+                        try {
+                            double bp = Double.parseDouble(basebandPeak);
+                            if (bp == 0) {
+                                studioSession.messages.logWarning("Hardware",
+                                    "TX baseband peak is 0 — no signal sent to the device. "
+                                        + "Check that your tracks are routed to a hardware channel "
+                                        + "(right-click a track → Send to hardware output).");
+                            } else {
+                                studioSession.messages.logInfo("Hardware", String.format(
+                                    "Device: play_duration=%.0f µs, effective_rate=%.2f MS/s, "
+                                        + "baseband_peak=%.3f, bram_peak=%.3f",
+                                    playUs == null ? 0 : Double.parseDouble(playUs),
+                                    effRate == null ? 0 : Double.parseDouble(effRate),
+                                    bp,
+                                    bramPeak == null ? 0 : Double.parseDouble(bramPeak)));
+                            }
+                        } catch (NumberFormatException ignored) { /* old server */ }
+                    }
                 });
             } catch (HardwareException ex) {
                 // The cached device may be in a bad state (closed socket, half

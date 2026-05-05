@@ -1,1 +1,2 @@
 ax.xz.mri.hardware.builtin.MockHardwarePlugin
+ax.xz.mri.hardware.builtin.redpitaya.RedPitayaPlugin
