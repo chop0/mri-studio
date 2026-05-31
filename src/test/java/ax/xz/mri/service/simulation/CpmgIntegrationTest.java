@@ -6,7 +6,8 @@ import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
-import ax.xz.mri.model.simulation.SimulationOutputFactory;
+import ax.xz.mri.model.simulation.SimulationCompiler;
+import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.EigenfieldDocument;
@@ -106,7 +107,14 @@ class CpmgIntegrationTest {
             .findFirst().orElseThrow();
         double b0Amplitude = b0Source.maxAmplitude();
         double normalisedSlope = dBzPerMetre / b0Amplitude;
-        String script = String.format("return Vec3.of(0, 0, 1 + %s * z);", normalisedSlope);
+        String script = String.format("""
+            import module ax.xz.mri;
+            class B0LinearTest implements EigenfieldScript {
+                public Vec3 evaluate(double x, double y, double z) {
+                    return Vec3.of(0, 0, 1 + %s * z);
+                }
+            }
+            """, normalisedSlope);
         var eigen = new EigenfieldDocument(
             new ProjectNodeId("ef-test-" + suffix), "B0 linear " + suffix, "test off-resonance",
             script, "T");
@@ -162,7 +170,6 @@ class CpmgIntegrationTest {
 
     @Test
     void ninetyXPulseMovesMagnetisationIntoTransversePlane() {
-        BlochSimulator.clearCachesForTests();
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-90",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -171,10 +178,10 @@ class CpmgIntegrationTest {
         var repo = session.project();
 
         var train = buildCpmg(0);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         // On-resonance at the isocentre: no dephasing during the 30 µs pulse.
-        var trajectory = BlochSimulator.simulate(data, 0.0, 0.0, train.pulse());
+        var trajectory = simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, 0.0));
         assertNotNull(trajectory);
 
         int afterExcitation = segmentStepBoundaries(train.segments())[1];
@@ -196,7 +203,6 @@ class CpmgIntegrationTest {
 
     @Test
     void oneHundredEightyYPulseInvertsMxWhileKeepingMy() {
-        BlochSimulator.clearCachesForTests();
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-180Y",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -206,10 +212,10 @@ class CpmgIntegrationTest {
         repo = installZAxisOffResonance(repo, config, "y-flip", 50e-6);
 
         var train = buildCpmg(1);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         // 10 mm off isocentre → ~134 µrad/µs off-resonance → 0.13 rad in 1 ms.
-        var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
+        var trajectory = simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, 10.0 * 1e-3));
         assertNotNull(trajectory);
 
         int[] b = segmentStepBoundaries(train.segments());
@@ -230,7 +236,6 @@ class CpmgIntegrationTest {
 
     @Test
     void cpmgEchoRefocusesDephasedEnsemble() {
-        BlochSimulator.clearCachesForTests();
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-echo",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -240,12 +245,12 @@ class CpmgIntegrationTest {
         repo = installZAxisOffResonance(repo, config, "echo", 2e-3);
 
         var train = buildCpmg(1);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         double[] zSamples = {-10, -5, 0, 5, 10};
         var trajectories = new ArrayList<ax.xz.mri.model.simulation.Trajectory>();
         for (double z : zSamples) {
-            var traj = BlochSimulator.simulate(data, 0.0, z, train.pulse());
+            var traj = simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, z * 1e-3));
             assertNotNull(traj);
             trajectories.add(traj);
         }
@@ -293,7 +298,6 @@ class CpmgIntegrationTest {
 
     @Test
     void multiEchoCpmgPreservesSignalAcrossManyEchoes() {
-        BlochSimulator.clearCachesForTests();
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-multi",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -304,8 +308,8 @@ class CpmgIntegrationTest {
 
         int nEchoes = 4;
         var train = buildCpmg(nEchoes);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
-        var trajectory = BlochSimulator.simulate(data, 0.0, 10.0, train.pulse());
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
+        var trajectory = simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, 10.0 * 1e-3));
         assertNotNull(trajectory);
 
         int[] b = segmentStepBoundaries(train.segments());
@@ -334,7 +338,6 @@ class CpmgIntegrationTest {
 
     @Test
     void longCpmgDoesNotCrashOrConsumeUnboundedMemory() {
-        BlochSimulator.clearCachesForTests();
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("CPMG-long",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -344,10 +347,10 @@ class CpmgIntegrationTest {
 
         int nEchoes = 40;
         var train = buildCpmg(nEchoes);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         for (var p : new double[][]{{0, 0}, {5, 5}, {0, 10}, {15, -5}}) {
-            var trajectory = BlochSimulator.simulate(data, p[0], p[1], train.pulse());
+            var trajectory = simulation.singleSpinTrajectory(new Vec3(p[0] * 1e-3, 0.0, p[1] * 1e-3));
             assertNotNull(trajectory, "Simulation returned null for " + p[0] + ", " + p[1]);
             int last = trajectory.pointCount() - 1;
             double mag = Math.sqrt(

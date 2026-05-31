@@ -1,4 +1,5 @@
 package ax.xz.mri.optimisation;
+import ax.xz.mri.model.field.CylindricalGrid;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
@@ -6,30 +7,31 @@ import ax.xz.mri.model.circuit.CircuitLayout;
 import ax.xz.mri.model.circuit.ComponentId;
 import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
-import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.service.circuit.CircuitCompiler;
+import ax.xz.mri.service.simulation.compiled.CompiledSimulation;
 import ax.xz.mri.state.ProjectState;
-import ax.xz.mri.support.TestSimulationOutputFactory;
+import ax.xz.mri.support.EigenfieldScripts;
+import ax.xz.mri.support.TestSimulationFactory;
 
 import java.util.List;
 
 public final class OptimisationTestSupport {
     private OptimisationTestSupport() {}
 
-    public static SimulationOutput sampleDocument() {
-        return TestSimulationOutputFactory.sampleDocument();
+    public static CompiledSimulation sampleDocument() {
+        return TestSimulationFactory.sampleSimulation();
     }
 
     public static List<PulseSegment> pulseA() {
-        return TestSimulationOutputFactory.pulseA();
+        return TestSimulationFactory.pulseA();
     }
 
     public static List<PulseSegment> pulseB() {
-        return TestSimulationOutputFactory.pulseB();
+        return TestSimulationFactory.pulseB();
     }
 
     public static SequenceTemplate finiteTemplateFor(List<PulseSegment> pulse) {
@@ -48,10 +50,10 @@ public final class OptimisationTestSupport {
     public static ProblemGeometry singlePointGeometry(double rxWeight, double outWeight) {
         var repo = ProjectState.empty();
 		var rfEfDoc = new EigenfieldDocument(new ProjectNodeId("ef-rf"), "ef-rf", "",
-			"return Vec3.of(1, 0, 0);", "T");
+			EigenfieldScripts.wrap("return Vec3.of(1, 0, 0);"), "T");
 		repo = repo.withEigenfield(rfEfDoc); var rfEfId = rfEfDoc.id();
 		var zeroEfDoc = new EigenfieldDocument(new ProjectNodeId("ef-zero"),
-							"ef-zero", "", "return Vec3.ZERO;", "T");
+							"ef-zero", "", EigenfieldScripts.wrap("return Vec3.ZERO;"), "T");
 		repo = repo.withEigenfield(zeroEfDoc); var zeroEfId = zeroEfDoc.id();
 
         // RF drive is two REAL envelopes (I and Q) piped through a
@@ -91,7 +93,7 @@ public final class OptimisationTestSupport {
         var doc = new CircuitDocument(new ProjectNodeId("circuit-test"), "test",
             List.of(rfISrc, rfQSrc, gxSrc, gzSrc, rfModulator, rfCoil, gxCoil, gzCoil, probe),
             wires, CircuitLayout.empty());
-        var circuit = CircuitCompiler.compile(doc, repo, new double[]{0}, new double[]{0});
+        var circuit = CircuitCompiler.compile(doc, repo, new CylindricalGrid(new double[]{0,1}, new double[]{0,1}));
 
         int n = 1;
         return new ProblemGeometry(

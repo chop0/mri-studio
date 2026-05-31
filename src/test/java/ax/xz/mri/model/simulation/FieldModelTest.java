@@ -2,6 +2,7 @@ package ax.xz.mri.model.simulation;
 
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.ProjectNodeKind;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -15,7 +16,7 @@ class FieldModelTest {
     private static final double DT = 1e-6;
 
     private static SimulationConfig cfg(ProjectNodeId circuitId) {
-        return new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, DT, circuitId);
+        return new SimulationConfig(1.5, DT, circuitId);
     }
 
     @Test
@@ -28,12 +29,6 @@ class FieldModelTest {
     }
 
     @Test
-    void omegaSimIsGammaTimesReferenceB0() {
-        var config = cfg(CIRCUIT);
-        assertEquals(267.522e6 * 1.5, config.omegaSim(), 1e-3);
-    }
-
-    @Test
     void withReferenceB0TeslaReturnsUpdatedCopy() {
         var config = cfg(CIRCUIT);
         assertEquals(3.0, config.withReferenceB0Tesla(3.0).referenceB0Tesla());
@@ -43,7 +38,7 @@ class FieldModelTest {
     @Test
     void eigenfieldDocumentKindIsEigenfield() {
         var ef = new EigenfieldDocument(EF_B0, "B0", "desc", "return Vec3.of(0,0,1);", "T");
-        assertEquals(ax.xz.mri.project.ProjectNodeKind.EIGENFIELD, ef.kind());
+        assertEquals(ProjectNodeKind.EIGENFIELD, ef.kind());
     }
 
     @Test
@@ -58,11 +53,11 @@ class FieldModelTest {
     @Test
     void zeroOrNegativeDtRejected() {
         assertThrows(IllegalArgumentException.class, () ->
-            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, 0.0, CIRCUIT));
+            new SimulationConfig(1.5, 0.0, CIRCUIT));
         assertThrows(IllegalArgumentException.class, () ->
-            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, -1e-6, CIRCUIT));
+            new SimulationConfig(1.5, -1e-6, CIRCUIT));
         assertThrows(IllegalArgumentException.class, () ->
-            new SimulationConfig(1000, 100, 267.522e6, 5, 20, 30, 50, 5, 1.5, Double.NaN, CIRCUIT));
+            new SimulationConfig(1.5, Double.NaN, CIRCUIT));
     }
 
     @Test
@@ -71,20 +66,19 @@ class FieldModelTest {
         var updated = config.withDtSeconds(5e-7);
         assertEquals(5e-7, updated.dtSeconds(), 0);
         assertEquals(DT, config.dtSeconds(), 0);
-        assertEquals(1000, updated.t1Ms(), 0);
         assertEquals(1.5, updated.referenceB0Tesla(), 0);
     }
 
     @Test
-    void larmorAndNyquistDerivations() {
+    void nyquistDerivation() {
         var config = cfg(CIRCUIT);
-        assertEquals(267.522e6 * 1.5 / (2 * Math.PI), config.larmorHz(), 1e-3);
         assertEquals(500_000, config.nyquistHz(), 1e-6);
     }
 
     @Test
     void jsonRoundtripPreservesDt() throws Exception {
-        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jdk8.Jdk8Module());
         var original = cfg(CIRCUIT).withDtSeconds(2.5e-6);
         String json = mapper.writeValueAsString(original);
         var parsed = mapper.readValue(json, SimulationConfig.class);

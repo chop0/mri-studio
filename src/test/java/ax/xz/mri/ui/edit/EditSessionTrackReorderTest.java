@@ -1,4 +1,4 @@
-package ax.xz.mri.ui.viewmodel;
+package ax.xz.mri.ui.edit;
 
 import ax.xz.mri.model.sequence.SequenceChannel;
 import org.junit.jupiter.api.Test;
@@ -7,12 +7,12 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** Pins the contract for {@link SequenceEditSession#reorderTrack}. */
-class SequenceEditSessionTrackReorderTest {
+/** Pins the contract for {@link EditSession#reorderTrack}. */
+class EditSessionTrackReorderTest {
 
     @Test
     void movesTrackBetweenIndicesAndIsUndoable() {
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         var a = session.addTrack(SequenceChannel.of("a", 0), "A");
         var b = session.addTrack(SequenceChannel.of("b", 0), "B");
         var c = session.addTrack(SequenceChannel.of("c", 0), "C");
@@ -28,7 +28,7 @@ class SequenceEditSessionTrackReorderTest {
 
     @Test
     void clampsOutOfRangeIndex() {
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         var a = session.addTrack(SequenceChannel.of("a", 0), "A");
         var b = session.addTrack(SequenceChannel.of("b", 0), "B");
 
@@ -41,7 +41,7 @@ class SequenceEditSessionTrackReorderTest {
 
     @Test
     void noopOnSameIndex() {
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         var a = session.addTrack(SequenceChannel.of("a", 0), "A");
         var b = session.addTrack(SequenceChannel.of("b", 0), "B");
 
@@ -52,7 +52,7 @@ class SequenceEditSessionTrackReorderTest {
         assertEquals(List.of(a.id(), b.id()), trackIds(session));
     }
 
-    private static List<String> trackIds(SequenceEditSession s) {
+    private static List<String> trackIds(EditSession s) {
         return s.tracks.stream().map(t -> t.id()).toList();
     }
 }

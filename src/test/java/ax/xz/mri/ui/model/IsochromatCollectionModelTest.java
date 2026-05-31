@@ -1,6 +1,7 @@
 package ax.xz.mri.ui.model;
 
-import ax.xz.mri.support.TestSimulationOutputFactory;
+import ax.xz.mri.model.simulation.Vec3;
+import ax.xz.mri.support.TestSimulationFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -14,25 +15,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IsochromatCollectionModelTest {
     @Test
-    void resetAddMoveDuplicateAndRemoveMaintainStableIdsAndSliceMembership() {
+    void resetAddMoveDuplicateAndRemoveMaintainStableIds() {
         var selection = new IsochromatSelectionModel();
         var points = new IsochromatCollectionModel(selection, Runnable::run, Runnable::run, () -> { });
-        points.setContext(TestSimulationOutputFactory.sampleDocument(), TestSimulationOutputFactory.pulseA());
+        points.setContext(TestSimulationFactory.sampleSimulation(), TestSimulationFactory.pulseA());
 
         points.resetToDefaults();
         int defaults = points.entries.size();
         assertTrue(defaults > 0);
         assertTrue(points.entries.stream().allMatch(entry -> entry.trajectory() != null));
 
-        points.addUserPoint(1.0, 8.0, "User Point");
+        // Adding a user point uses a Vec3 in metres. The collection model
+        // doesn't know or care about cylindrical symmetry — positions are
+        // arbitrary 3-D points in the lab frame.
+        var p = new Vec3(1e-3, 0, 8e-3);
+        points.addUserPoint(p, "User Point");
         var userId = selection.primarySelectedId.get();
         var user = points.findById(userId).orElseThrow();
-        assertFalse(user.inSlice());
+        assertEquals(p, user.position());
         assertNotNull(user.trajectory());
 
-        points.move(userId, 1.0, 0.0);
+        // Move the user point — still a Vec3 in metres.
+        var moved = new Vec3(1e-3, 0, 0);
+        points.move(userId, moved);
         user = points.findById(userId).orElseThrow();
-        assertTrue(user.inSlice());
+        assertEquals(moved, user.position());
 
         selection.setSingle(userId);
         points.duplicateSelected();

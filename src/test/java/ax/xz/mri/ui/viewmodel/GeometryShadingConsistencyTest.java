@@ -3,10 +3,10 @@ package ax.xz.mri.ui.viewmodel;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.Segment;
-import ax.xz.mri.model.simulation.SimulationOutputFactory;
+import ax.xz.mri.model.simulation.SimulationCompiler;
+import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
 import ax.xz.mri.model.simulation.PhysicsParams;
-import ax.xz.mri.service.simulation.BlochSimulator;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot.CellSample;
 import ax.xz.mri.ui.viewmodel.ReferenceFrameViewModel;
 import ax.xz.mri.ui.viewmodel.ProjectSessionViewModel;
@@ -20,14 +20,13 @@ import java.util.concurrent.Executor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Consistency tests: at the same (r, z, cursor time), the shading cell's state
- * must match what a direct {@link BlochSimulator#simulateTo} call returns.
+ * Consistency tests for the (u, v) slice-plane shading.
  *
- * <p>Also verifies that the grid is dense enough that off-axis points (r != 0)
- * are sampled at worst ~1.5 mm from the actual physical position — the CPMG
- * example the user reported ("r=10.8 mm looks excited, but isochromat at
- * (10.8, 8.5) shows near-z on the sphere") should now land within the same
- * cell as its nearest-sample state.
+ * <p>At the same (u, v, cursor time), the shading cell's state must match
+ * what a direct {@link ax.xz.mri.service.simulation.compiled.CompiledSimulation#singleSpinStateAt}
+ * call at {@code plane.sampleAt(u, v)} returns. The default plane is the
+ * {@code y = 0} slice (legacy φ = 0 half-plane semantics, just expressed in
+ * the new {@link SlicePlane} basis).
  */
 class GeometryShadingConsistencyTest {
 
@@ -74,31 +73,33 @@ class GeometryShadingConsistencyTest {
         var repo = session.project();
 
         var train = buildSimpleCpmg(2);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> {});
         var geometry = new GeometryViewModel();
 
         // Pick a cursor time after both refocusing pulses.
         double cursorUs = 5000;
-        service.request(geometry, data, train.pulse(), cursorUs, new ReferenceFrameViewModel());
+        service.request(geometry, simulation, train.pulse(), cursorUs, new ReferenceFrameViewModel());
 
         var snapshot = geometry.shadingSnapshot.get();
         assertNotNull(snapshot, "Shading snapshot should be produced");
+        var plane = snapshot.plane();
+        assertNotNull(plane);
 
-        int radialSamples = snapshot.cells().length;
-        double rMax = data.field().rMm[data.field().rMm.length - 1];
-        var zSamples = snapshot.zSamples();
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
 
-        // Spot-check ten positions spread across the grid.
+        // Spot-check positions spread across the grid: each cell must match
+        // a direct singleSpinStateAt call at plane.sampleAt(u, v).
         int mismatches = 0;
         double worstPerpError = 0;
-        for (int radialIndex = 0; radialIndex < radialSamples; radialIndex += Math.max(1, radialSamples / 5)) {
-            double rMm = (double) radialIndex / (radialSamples - 1) * rMax;
-            for (int zStride = 0; zStride < zSamples.size(); zStride += Math.max(1, zSamples.size() / 5)) {
-                double zMm = zSamples.get(zStride);
-                CellSample cell = snapshot.cells()[radialIndex][zStride];
-                var direct = BlochSimulator.simulateTo(data, rMm, zMm, train.pulse(), cursorUs);
+        for (int i = 0; i < us.size(); i += Math.max(1, us.size() / 5)) {
+            double u = us.get(i);
+            for (int j = 0; j < vs.size(); j += Math.max(1, vs.size() / 5)) {
+                double v = vs.get(j);
+                CellSample cell = snapshot.cells()[i][j];
+                var direct = simulation.singleSpinStateAt(plane.sampleAt(u, v), cursorUs);
                 double perpError = Math.abs(cell.mPerp() - direct.mPerp());
                 if (perpError > 1e-6) {
                     mismatches++;
@@ -107,12 +108,14 @@ class GeometryShadingConsistencyTest {
             }
         }
         assertEquals(0, mismatches,
-            "Shading cell should exactly match direct simulateTo at the sample point. " +
+            "Shading cell should exactly match direct singleSpinStateAt at the sample point. " +
             "Worst |M⊥| disagreement = " + worstPerpError);
     }
 
     @Test
-    void shadingSampleIsCloseToAnyOffAxisIsochromatPosition() {
+    void shadingSampleSpacingMatchesFovHalfExtent() {
+        // Spacing on each axis should equal the per-axis FOV half-extent
+        // projected onto that basis vector, divided by SAMPLES-1.
         var session = ProjectSessionViewModel.standalone();
         var doc = session.createSimConfig("density",
             SimConfigTemplate.LOW_FIELD_MRI,
@@ -120,32 +123,34 @@ class GeometryShadingConsistencyTest {
         var config = doc.config();
         var repo = session.project();
         var train = buildSimpleCpmg(0);
-        var data = SimulationOutputFactory.build(config, train.segments(), repo);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
 
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> {});
         var geometry = new GeometryViewModel();
-        service.request(geometry, data, train.pulse(), 100.0, new ReferenceFrameViewModel());
+        service.request(geometry, simulation, train.pulse(), 100.0, new ReferenceFrameViewModel());
         var snapshot = geometry.shadingSnapshot.get();
         assertNotNull(snapshot);
 
-        double rMax = data.field().rMm[data.field().rMm.length - 1];
-        int radialSamples = snapshot.cells().length;
-        double radialStep = rMax / (radialSamples - 1);
-        assertTrue(radialStep <= 1.60,
-            "Radial sample spacing should be ≤ 1.6 mm for Phase-Map-R-comparable resolution, got " + radialStep);
-
-        // The user's reported position r = 10.8 mm, z = 8.5 mm.
-        // Find nearest sample to (10.8, 8.5) and verify it's close.
-        int nearestR = (int) Math.round(10.8 / radialStep);
-        double nearestRmm = nearestR * radialStep;
-        assertTrue(Math.abs(nearestRmm - 10.8) <= radialStep / 2,
-            "Nearest r sample to 10.8 mm should be within " + (radialStep / 2) + " mm, got " + nearestRmm);
-
-        double bestZ = Double.POSITIVE_INFINITY;
-        for (var z : snapshot.zSamples()) {
-            if (Math.abs(z - 8.5) < Math.abs(bestZ - 8.5)) bestZ = z;
+        // Default plane is y = 0 → u = +x, v = -z. The u-extent spans
+        // 2*halfX (= 60 mm for the low-field FOV); v-extent spans 2*halfZ.
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
+        double uExtentMm = (us.get(us.size() - 1) - us.get(0)) * 1e3;
+        double vExtentMm = (vs.get(vs.size() - 1) - vs.get(0)) * 1e3;
+        // FOV is now derived from substances — sum the largest half-extent
+        // across substances on each axis.
+        double halfX = 0, halfZ = 0;
+        for (var s : simulation.substances()) {
+            var h = s.halfExtent();
+            halfX = Math.max(halfX, h.x());
+            halfZ = Math.max(halfZ, h.z());
         }
-        assertTrue(Math.abs(bestZ - 8.5) <= 0.3,
-            "Nearest z sample to 8.5 mm should be within 0.3 mm, got " + bestZ);
+        halfX *= 1e3;
+        halfZ *= 1e3;
+        // u and v together cover roughly the full FOV diagonal projection.
+        assertTrue(uExtentMm >= halfX * 1.95,
+            "U axis should span the full 2·halfX, got " + uExtentMm + " mm (expected ~" + (2 * halfX) + ")");
+        assertTrue(vExtentMm >= halfZ * 1.95,
+            "V axis should span the full 2·halfZ, got " + vExtentMm + " mm (expected ~" + (2 * halfZ) + ")");
     }
 }

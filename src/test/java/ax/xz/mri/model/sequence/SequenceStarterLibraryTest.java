@@ -8,7 +8,10 @@ import ax.xz.mri.model.circuit.ComponentTerminal;
 import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.substance.ContinuousMagnetisation;
 import ax.xz.mri.project.ProjectNodeId;
+import ax.xz.mri.project.SubstanceDocument;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.support.FxTestSupport;
 import ax.xz.mri.ui.wizard.starters.SequenceStarter;
 import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
@@ -32,11 +35,25 @@ class SequenceStarterLibraryTest {
     private static final double GAMMA = 267.522e6;
     private static final double B1_MAX = 200e-6;
     private static final ProjectNodeId CIRCUIT_ID = new ProjectNodeId("circuit-test");
+    private static final ProjectNodeId SUBSTANCE_ID = new ProjectNodeId("substance-water");
 
     private static SimulationConfig config() {
-        return new SimulationConfig(
-            1000, 100, GAMMA, 5, 40, 20, 5, 5, 1.5, 1e-6, CIRCUIT_ID);
+        return new SimulationConfig(1.5, 1e-6, CIRCUIT_ID);
     }
+
+    /**
+     * Project state with a proton water substance registered — the
+     * substance-aware starters resolve γ through this. Tests that don't
+     * exercise pulse-duration math can still pass {@link #emptyState()}.
+     */
+    private static ProjectState protonState() {
+        var doc = new SubstanceDocument(
+            SUBSTANCE_ID, "Water",
+            new ContinuousMagnetisation(1.0, 0.1, GAMMA, 1.0, 0.030, 0.030, 0.010, 5, 5, 50));
+        return ProjectState.empty().withSubstance(doc);
+    }
+
+    private static ProjectState emptyState() { return ProjectState.empty(); }
 
     private static CircuitDocument circuitWithRf() {
         var rfISrc = new CircuitComponent.VoltageSource(new ComponentId("src-rf-i"),
@@ -51,6 +68,10 @@ class SequenceStarterLibraryTest {
             "RF Coil", new ProjectNodeId("ef-rf"), 0, 1);
         var gxCoil = new CircuitComponent.Coil(new ComponentId("coil-gx"),
             "Gx Coil", new ProjectNodeId("ef-gx"), 0, 1);
+        var substance = new CircuitComponent.Substance(
+            new ComponentId("sub-water"), "Water",
+            SUBSTANCE_ID,
+            CircuitComponent.Substance.Kind.CONTINUOUS_MAGNETISATION);
         var wires = List.of(
             new Wire("w-rfi", new ComponentTerminal(rfISrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in0")),
             new Wire("w-rfq", new ComponentTerminal(rfQSrc.id(), "out"), new ComponentTerminal(rfModulator.id(), "in1")),
@@ -58,7 +79,7 @@ class SequenceStarterLibraryTest {
             new Wire("w-gx-out", new ComponentTerminal(gxSrc.id(), "out"), new ComponentTerminal(gxCoil.id(), "in"))
         );
         return new CircuitDocument(CIRCUIT_ID, "Test Circuit",
-            List.of(rfISrc, rfQSrc, gxSrc, rfModulator, rfCoil, gxCoil), wires, CircuitLayout.empty());
+            List.of(rfISrc, rfQSrc, gxSrc, rfModulator, rfCoil, gxCoil, substance), wires, CircuitLayout.empty());
     }
 
     private static CircuitDocument circuitWithoutRf() {
@@ -78,12 +99,13 @@ class SequenceStarterLibraryTest {
     }
 
     @Test
-    void library_exposesBlank_cpmg_cp_inOrder() {
+    void library_exposesBlank_cpmg_cp_nvRamsey_inOrder() {
         var all = SequenceStarterLibrary.all();
-        assertEquals(3, all.size());
+        assertEquals(4, all.size());
         assertEquals("blank", all.get(0).id());
         assertEquals("cpmg", all.get(1).id());
         assertEquals("cp", all.get(2).id());
+        assertEquals("nv-ramsey", all.get(3).id());
     }
 
     @Test
@@ -93,7 +115,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void blank_producesTracksForEveryChannelAndNoClips() {
-        var seq = starter("blank").build(config(), circuitWithRf());
+        var seq = starter("blank").build(config(), circuitWithRf(), protonState());
         // RF has 2 (I, Q) + Gradient X has 1 = 3 tracks.
         assertEquals(3, seq.tracks().size());
         assertTrue(seq.clips().isEmpty());
@@ -101,7 +123,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void blank_acceptsNullCircuit() {
-        var seq = starter("blank").build(config(), null);
+        var seq = starter("blank").build(config(), null, emptyState());
         assertNotNull(seq);
         assertTrue(seq.tracks().isEmpty());
         assertTrue(seq.clips().isEmpty());
@@ -109,7 +131,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cpmg_placesExcitationOnI_andRefocusingOnQ() {
-        var seq = starter("cpmg").build(config(), circuitWithRf());
+        var seq = starter("cpmg").build(config(), circuitWithRf(), protonState());
         // Tracks are one per source channel: RF I, RF Q, Gradient X = 3.
         assertEquals(3, seq.tracks().size());
         // 1 excitation + 4 refocus pulses (default echo count) = 5 clips.
@@ -135,7 +157,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cp_placesAllPulsesOnI() {
-        var seq = starter("cp").build(config(), circuitWithRf());
+        var seq = starter("cp").build(config(), circuitWithRf(), protonState());
         Track iTrack = seq.tracks().stream()
             .filter(t -> t.simChannel().sourceName().equals("RF I"))
             .findFirst().orElseThrow();
@@ -147,7 +169,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cpmg_sizesThe90AndThe180FromRabiRate() {
-        var seq = starter("cpmg").build(config(), circuitWithRf());
+        var seq = starter("cpmg").build(config(), circuitWithRf(), protonState());
         var sorted = seq.clips().stream()
             .sorted((a, b) -> Double.compare(a.startTime(), b.startTime()))
             .toList();
@@ -165,7 +187,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cpmg_allClipsAreConstantAtMaxAmplitude() {
-        var seq = starter("cpmg").build(config(), circuitWithRf());
+        var seq = starter("cpmg").build(config(), circuitWithRf(), protonState());
         for (var clip : seq.clips()) {
             assertInstanceOf(ClipShape.Constant.class, clip.shape(),
                 "CPMG seeds constant (square) pulses so the flip angle is unambiguous");
@@ -175,7 +197,7 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cpmg_clipsAreNonOverlapping_andInBounds() {
-        var seq = starter("cpmg").build(config(), circuitWithRf());
+        var seq = starter("cpmg").build(config(), circuitWithRf(), protonState());
         var sorted = seq.clips().stream()
             .sorted((a, b) -> Double.compare(a.startTime(), b.startTime()))
             .toList();
@@ -191,7 +213,7 @@ class SequenceStarterLibraryTest {
     @Test
     void cpmg_bakeRoundTripIsClean() {
         var circuit = circuitWithRf();
-        var seq = starter("cpmg").build(config(), circuit);
+        var seq = starter("cpmg").build(config(), circuit, protonState());
         var baked = ClipBaker.bake(seq, circuit);
         assertNotNull(baked);
         assertFalse(baked.segments().isEmpty());
@@ -200,14 +222,17 @@ class SequenceStarterLibraryTest {
 
     @Test
     void cpmg_degradesToEmptyClipListWhenNoRfSource() {
-        var seq = starter("cpmg").build(config(), circuitWithoutRf());
+        // No RF source → starter can't find an I/Q track and bails out before
+        // it would ask for γ, so this is allowed to use emptyState().
+        var seq = starter("cpmg").build(config(), circuitWithoutRf(), emptyState());
         assertTrue(seq.clips().isEmpty());
         assertEquals(1, seq.tracks().size(), "Gradient X track should still exist");
     }
 
     @Test
     void cpmg_handlesNullCircuit() {
-        var seq = starter("cpmg").build(config(), null);
+        // Null circuit short-circuits before γ resolution.
+        var seq = starter("cpmg").build(config(), null, emptyState());
         assertNotNull(seq);
         assertTrue(seq.clips().isEmpty());
     }

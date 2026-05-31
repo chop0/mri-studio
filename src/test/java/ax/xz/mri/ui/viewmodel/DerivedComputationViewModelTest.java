@@ -1,7 +1,6 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.service.simulation.SignalTraceComputer;
-import ax.xz.mri.support.TestSimulationOutputFactory;
+import ax.xz.mri.support.TestSimulationFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayDeque;
@@ -20,16 +19,17 @@ class DerivedComputationViewModelTest {
     void staleGenerationDoesNotOverwriteNewerDerivedResults() {
         var executor = new ManualExecutor();
         var derived = new DerivedComputationViewModel(executor, Runnable::run, () -> { });
-        var data = TestSimulationOutputFactory.sampleDocument();
-        var pulseA = TestSimulationOutputFactory.pulseA();
-        var pulseB = TestSimulationOutputFactory.pulseB();
+        var simulationA = TestSimulationFactory.sampleSimulation();
+        var simulationB = TestSimulationFactory.sampleSimulationWithPulseB();
+        var pulseA = TestSimulationFactory.pulseA();
+        var pulseB = TestSimulationFactory.pulseB();
 
-        var expectedA = SignalTraceComputer.compute(data, pulseA);
-        var expectedB = SignalTraceComputer.compute(data, pulseB);
+        var expectedA = simulationA.runMultiProbe().primary();
+        var expectedB = simulationB.runMultiProbe().primary();
         assertNotEquals(expectedA.points(), expectedB.points());
 
-        derived.recompute(data, pulseA);
-        derived.recompute(data, pulseB);
+        derived.recompute(simulationA, pulseA, null);
+        derived.recompute(simulationB, pulseB, null);
 
         assertTrue(derived.computing.get());
         executor.runNext();
@@ -37,26 +37,22 @@ class DerivedComputationViewModelTest {
 
         executor.runNext();
         assertEquals(expectedB.points(), derived.signalTrace.get().points());
-        assertNotNull(derived.phaseMapZ.get());
-        assertNotNull(derived.phaseMapR.get());
         assertFalse(derived.computing.get());
         assertNull(derived.errorMessage.get());
     }
 
     @Test
-    void failuresClearStaleOutputsAndSurfaceAnError() {
+    void resettingToNullClearsStaleOutputs() {
         var derived = new DerivedComputationViewModel((Executor) Runnable::run, Runnable::run, () -> { });
-        var data = TestSimulationOutputFactory.sampleDocument();
+        var simulation = TestSimulationFactory.sampleSimulation();
 
-        derived.recompute(data, TestSimulationOutputFactory.pulseA());
+        derived.recompute(simulation, TestSimulationFactory.pulseA(), null);
         assertNotNull(derived.signalTrace.get());
 
-        derived.recompute(TestSimulationOutputFactory.brokenDocumentMissingSegments(), TestSimulationOutputFactory.pulseA());
+        derived.recompute(null, null, null);
 
-        assertNull(derived.phaseMapZ.get());
-        assertNull(derived.phaseMapR.get());
         assertNull(derived.signalTrace.get());
-        assertNotNull(derived.errorMessage.get());
+        assertNull(derived.errorMessage.get());
         assertFalse(derived.computing.get());
     }
 

@@ -1,4 +1,4 @@
-package ax.xz.mri.ui.viewmodel;
+package ax.xz.mri.ui.edit;
 
 import ax.xz.mri.hardware.HardwarePluginRegistry;
 import ax.xz.mri.hardware.builtin.redpitaya.RedPitayaConfig;
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
  * "no config bound" in the UI even though the user had selected one.
  *
  * <p>The root cause was an identity-vs-id confusion in
- * {@link SequenceEditSession}: the binding was kept as a
+ * {@link EditSession}: the binding was kept as a
  * {@link HardwareConfigDocument} reference, but every time the document was
  * re-saved, renamed, or in-place edited the in-memory state replaced it with
  * a fresh immutable instance and the cached reference went stale.
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
  * <p>The fix: bind by {@link ProjectNodeId}, resolve the document through
  * the live state on demand. These tests pin the contract.
  */
-class SequenceEditSessionHardwareBindingTest {
+class EditSessionHardwareBindingTest {
 
     @BeforeAll
     static void refreshRegistry() {
@@ -50,7 +50,7 @@ class SequenceEditSessionHardwareBindingTest {
         var original = freshDoc("MyRP");
         repo.set(repo.get().withHardware(original));
 
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         session.setRepositorySupplier(repo::get);
         session.activeHardwareConfigId.set(original.id());
 
@@ -73,7 +73,7 @@ class SequenceEditSessionHardwareBindingTest {
         var original = freshDoc("MyRP");
         repo.set(repo.get().withHardware(original));
 
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         session.setRepositorySupplier(repo::get);
         session.activeHardwareConfigId.set(original.id());
 
@@ -94,7 +94,7 @@ class SequenceEditSessionHardwareBindingTest {
         var doc = freshDoc("MyRP");
         repo.set(repo.get().withHardware(doc));
 
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         session.setRepositorySupplier(repo::get);
         session.activeHardwareConfigId.set(doc.id());
 
@@ -111,7 +111,7 @@ class SequenceEditSessionHardwareBindingTest {
         var docB = freshDoc("B");
         repo.set(repo.get().withHardware(docA).withHardware(docB));
 
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         session.setRepositorySupplier(repo::get);
         session.activeHardwareConfigId.set(docA.id());
 
@@ -133,7 +133,7 @@ class SequenceEditSessionHardwareBindingTest {
         var doc = freshDoc("MyRP");
         repo.set(repo.get().withHardware(doc));
 
-        var session = new SequenceEditSession();
+        var session = new EditSession();
         session.setRepositorySupplier(repo::get);
         session.activeHardwareConfigId.set(doc.id());
 

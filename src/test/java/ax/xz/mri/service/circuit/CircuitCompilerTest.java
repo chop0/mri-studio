@@ -1,4 +1,5 @@
 package ax.xz.mri.service.circuit;
+import ax.xz.mri.model.field.CylindricalGrid;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
@@ -35,7 +36,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, coil), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         var mna = compiled.mna();
         // One source-out branch + one coil branch = 2 total. The source's
@@ -77,7 +78,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, gate, sw, coil), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         assertEquals(1, compiled.mna().switchCount());
         var ctl = compiled.mna().switchCtl()[0];
@@ -98,7 +99,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, meta, sw, coil), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         var ctl = compiled.mna().switchCtl()[0];
         assertInstanceOf(CtlBinding.FromSourceActive.class, ctl);
@@ -115,7 +116,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, sw, coil), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         var ctl = compiled.mna().switchCtl()[0];
         assertInstanceOf(CtlBinding.AlwaysOpen.class, ctl);
@@ -136,7 +137,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(rfSrc, meta, coil, probe, mux), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         // One mux → two switch stamps.
         assertEquals(2, compiled.mna().switchCount());
@@ -160,7 +161,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, coil, rShunt), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         assertEquals(1, compiled.mna().resistorCount());
         assertEquals(-1, compiled.mna().resistorB()[0], "shunt returns to ground");
@@ -178,7 +179,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, coil, l), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
 
         boolean foundPassive = false;
         for (int b = 0; b < compiled.mna().branchCount(); b++) {
@@ -212,7 +213,7 @@ class CircuitCompilerTest {
         );
         var circuit = new CircuitDocument(new ProjectNodeId("c"), "c",
             List.of(src, coil, mixer, probeI, probeQ), wires, CircuitLayout.empty());
-        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), R, Z);
+        var compiled = CircuitCompiler.compile(circuit, ax.xz.mri.state.ProjectState.empty(), new CylindricalGrid(R, Z));
         var mna = compiled.mna();
 
         assertEquals(1, mna.mixerCount());

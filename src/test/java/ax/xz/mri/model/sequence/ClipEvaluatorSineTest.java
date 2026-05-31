@@ -29,7 +29,8 @@ class ClipEvaluatorSineTest {
             duration,
             amplitude,
             0.0,
-            duration
+            duration,
+            true
         );
     }
 
@@ -106,7 +107,7 @@ class ClipEvaluatorSineTest {
     void clipOffsetOnTimelineIsRespected() {
         var clip = new SignalClip(
             "test", TRACK.id(), new ClipShape.Sine(1000, 0.0, 1.0),
-            500.0, 1000.0, 1.0, 0.0, 1000.0);
+            500.0, 1000.0, 1.0, 0.0, 1000.0, true);
         assertEquals( 0.0, clip.evaluate( 500.0), TOL);
         assertEquals( 1.0, clip.evaluate( 750.0), TOL);
         assertEquals(-1.0, clip.evaluate(1250.0), TOL);
@@ -140,7 +141,7 @@ class ClipEvaluatorSineTest {
         var track2 = new Track("track-b1-other", "B1 extra", CHANNEL, null);
         var a = sine(1000, 1.0, new ClipShape.Sine(1000, 0.0, 1.0));
         var b = new SignalClip("b", track2.id(), new ClipShape.Sine(1000, 0.0, 1.0),
-            0.0, 1000.0, 0.5, 0.0, 1000.0);
+            0.0, 1000.0, 0.5, 0.0, 1000.0, true);
         double v = ClipEvaluator.evaluateChannel(List.of(a, b), List.of(TRACK, track2), ax.xz.mri.model.sequence.RunContext.SIMULATION, CHANNEL, 250.0);
         assertEquals(1.5, v, TOL);
     }

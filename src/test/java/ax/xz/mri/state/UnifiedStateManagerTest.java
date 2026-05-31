@@ -163,7 +163,7 @@ class UnifiedStateManagerTest {
     void refIntegrityCascadesOnSimConfigDelete() {
         var c = simpleCircuit("c");
         var sim = new SimulationConfigDocument(simId("a"), "Sim",
-            SimulationConfig.fromPhysics(PhysicsParams.DEFAULTS, 0.05, c.id()));
+            new SimulationConfig(0.05, PhysicsParams.DEFAULTS.dtSeconds(), c.id()));
         var seq = new SequenceDocument(seqId("s"), "Seq",
             new ax.xz.mri.model.sequence.ClipSequence(10.0, 1000.0, List.of(), List.of()),
             sim.id(), null);

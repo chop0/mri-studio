@@ -21,6 +21,31 @@ class ProjectSerialiserTest {
     }
 
     @Test
+    void manifestRoundTripWithActiveSimulation() throws Exception {
+        var serialiser = new ProjectSerialiser();
+        var manifest = new ProjectManifest("Demo", ".mri-studio/layout.json",
+            ".mri-studio/ui-state.json", "low-field-mri");
+        var manifestPath = tempDir.resolve("mri-project.toml");
+        serialiser.writeManifest(manifestPath, manifest);
+        var restored = serialiser.readManifest(manifestPath);
+        assertEquals("low-field-mri", restored.activeSimulation());
+        assertEquals(manifest, restored);
+    }
+
+    @Test
+    void manifestOmitsActiveSimulationLineWhenNull() throws Exception {
+        var serialiser = new ProjectSerialiser();
+        var manifest = new ProjectManifest("Demo", ".mri-studio/layout.json",
+            ".mri-studio/ui-state.json", null);
+        var manifestPath = tempDir.resolve("mri-project.toml");
+        serialiser.writeManifest(manifestPath, manifest);
+        var text = java.nio.file.Files.readString(manifestPath);
+        org.junit.jupiter.api.Assertions.assertFalse(text.contains("active_simulation"),
+            "active_simulation = … line must be omitted when null");
+        assertEquals(manifest, serialiser.readManifest(manifestPath));
+    }
+
+    @Test
     void jsonRoundTripPreservesEigenfieldDocument() throws Exception {
         var serialiser = new ProjectSerialiser();
         var eigen = new EigenfieldDocument(

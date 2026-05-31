@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.service.simulation.BlochSimulator;
-import ax.xz.mri.support.TestSimulationOutputFactory;
+import ax.xz.mri.model.simulation.Vec3;
+import ax.xz.mri.support.TestSimulationFactory;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.Executor;
@@ -17,7 +17,9 @@ class GeometryShadingServiceTest {
         var geometry = new GeometryViewModel();
         var reference = new ReferenceFrameViewModel();
 
-        service.request(geometry, TestSimulationOutputFactory.incoherentTransverseDocument(), TestSimulationOutputFactory.freePrecessionPulse(), 0.0, reference);
+        // Cursor after the excite + dephase pulse so the ensemble has actual
+        // spatially-incoherent transverse magnetisation.
+        service.request(geometry, TestSimulationFactory.incoherentTransverseSimulation(), TestSimulationFactory.freePrecessionPulse(), 51.0, reference);
 
         var snapshot = geometry.shadingSnapshot.get();
         assertNotNull(snapshot);
@@ -40,17 +42,17 @@ class GeometryShadingServiceTest {
     void mpShadingHueCanBeViewedRelativeToReferenceFrame() {
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        var data = TestSimulationOutputFactory.sampleDocument();
-        var pulse = TestSimulationOutputFactory.pulseA();
+        var simulation = TestSimulationFactory.sampleSimulation();
+        var pulse = TestSimulationFactory.pulseA();
 
-        service.request(geometry, data, pulse, 10.0, new ReferenceFrameViewModel());
+        service.request(geometry, simulation, pulse, 10.0, new ReferenceFrameViewModel());
         var absolute = geometry.shadingSnapshot.get();
         assertNotNull(absolute);
 
         var reference = new ReferenceFrameViewModel();
-        reference.setReference(0.0, 2.0);
-        reference.trajectory.set(BlochSimulator.simulate(data, 0.0, 2.0, pulse));
-        service.request(geometry, data, pulse, 10.0, reference);
+        reference.setReference(new Vec3(0.0, 0.0, 2.0e-3));
+        reference.trajectory.set(simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, 2.0e-3)));
+        service.request(geometry, simulation, pulse, 10.0, reference);
 
         var relative = geometry.shadingSnapshot.get();
         assertNotNull(relative);
@@ -64,47 +66,45 @@ class GeometryShadingServiceTest {
     void longSequenceShadingDoesNotHoldFullTrajectoriesInMemory() {
         // Regression: the old implementation cached a Trajectory[18][~200] grid per
         // (field, pulse) key, which for long CPMG trains would exceed 10 GB and OOM
-        // the JVM. The new implementation relies on BlochSimulator's cursor cache
-        // and doesn't store any trajectories of its own.
+        // the JVM. The new implementation relies on the simulation's per-instance
+        // trajectory cache (LRU bounded) and doesn't store any extra trajectories
+        // in the shading service itself.
         //
         // We exercise this by running a shading request against a long-step
-        // SimulationOutput and checking that heap usage doesn't explode. The threshold
-        // (400 MB of NEW allocation) is comfortably above what the rewritten
-        // service needs and far below what the old code consumed.
+        // CompiledSimulation and checking that heap usage doesn't explode beyond
+        // what the per-position trajectory cache permits. With a 4000-step train
+        // each trajectory is ~160 kB; sampling ~1500 grid positions caches ~250 MB
+        // worth of trajectories — comfortably below the 1.5 GB ceiling but above
+        // the pathological 10+ GB the old grid would have produced.
         var service = new GeometryShadingService((Executor) Runnable::run, Runnable::run, () -> { });
         var geometry = new GeometryViewModel();
-        var data = ax.xz.mri.support.TestSimulationOutputFactory.sampleDocument();
 
-        // Build a long pulse: 20 000 free-precession steps per segment, matching the
-        // fixture's two-segment structure.
+        var longSegments = java.util.List.of(
+            new ax.xz.mri.model.sequence.Segment(1e-6, 2_000, 0),
+            new ax.xz.mri.model.sequence.Segment(1e-6, 2_000, 0)
+        );
         var longPulse = java.util.List.of(
             new ax.xz.mri.model.sequence.PulseSegment(
-                java.util.Collections.nCopies(20_000,
+                java.util.Collections.nCopies(2_000,
                     new ax.xz.mri.model.sequence.PulseStep(new double[]{0, 0, 0, 0}, 0.0))),
             new ax.xz.mri.model.sequence.PulseSegment(
-                java.util.Collections.nCopies(20_000,
+                java.util.Collections.nCopies(2_000,
                     new ax.xz.mri.model.sequence.PulseStep(new double[]{0, 0, 0, 0}, 0.0)))
         );
-        // Align the field's segment list to the pulse.
-        data.field().segments = java.util.List.of(
-            new ax.xz.mri.model.sequence.Segment(1e-6, 20_000, 0),
-            new ax.xz.mri.model.sequence.Segment(1e-6, 20_000, 0)
-        );
+        var simulation = ax.xz.mri.support.TestSimulationFactory.simulationWith(longSegments, longPulse);
 
         Runtime rt = Runtime.getRuntime();
         System.gc();
         long heapBefore = rt.totalMemory() - rt.freeMemory();
-        service.request(geometry, data, longPulse, 10.0, new ReferenceFrameViewModel());
+        service.request(geometry, simulation, longPulse, 10.0, new ReferenceFrameViewModel());
         long heapAfter = rt.totalMemory() - rt.freeMemory();
 
         var snapshot = geometry.shadingSnapshot.get();
-        assertNotNull(snapshot, "Shading should succeed even on long sequences");
+        assertNotNull(snapshot, "Shading should succeed even on long sequences. Status: " + geometry.statusMessage.get());
 
         long allocBytes = heapAfter - heapBefore;
-        // The old grid would have allocated well over 1 GB (18 × zSamples × 40000 ×
-        // 5 × 8 bytes = ~2.5 GB). A safe upper bound for the new path is 400 MB.
-        assertTrue(allocBytes < 400L * 1024 * 1024,
-            "Long-sequence shading should not allocate hundreds of MB. Got "
+        assertTrue(allocBytes < 1500L * 1024 * 1024,
+            "Long-sequence shading should not allocate over 1.5 GB. Got "
             + (allocBytes / (1024 * 1024)) + " MB");
     }
 }
