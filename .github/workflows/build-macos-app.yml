@@ -1,0 +1,78 @@
+name: Build macOS app
+
+# Builds the native MriStudio.app bundle (GUI launcher + embedded jlink
+# runtime for standalone scripting) on every push to master, uploads it as a
+# downloadable run artifact, and refreshes a rolling "nightly" pre-release so
+# the latest build is always one click away from the repo's Releases section.
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+# The rolling-release step needs to create tags/releases.
+permissions:
+  contents: write
+
+# Only one build at a time; newer pushes cancel in-flight runs so the
+# nightly release never races with itself.
+concurrency:
+  group: build-macos-app
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest        # Apple Silicon → picks the mac-aarch64 JavaFX classifier
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin   # full JDK — bundles jlink + jpackage
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build native .app bundle
+        run: ./gradlew packageApp --no-daemon --stacktrace
+
+      - name: Zip the .app
+        # ditto is the macOS-correct archiver — it preserves the bundle's
+        # symlinks, resource forks, and the launcher's executable bit, which a
+        # plain `zip` mangles.
+        run: |
+          ASSET="MriStudio-macos-$(uname -m).zip"
+          ditto -c -k --keepParent build/jpackage/MriStudio.app "$ASSET"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+          ls -lh "$ASSET"
+
+      - name: Upload run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MriStudio-macos
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+      - name: Publish rolling "nightly" release
+        if: github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="Automatically built from master (${GITHUB_SHA::7}).
+
+          Contains the full studio: double-click MriStudio.app for the GUI, or run procedure scripts standalone with
+          MriStudio.app/Contents/runtime/Contents/Home/bin/java MyProcedure.java
+
+          Unsigned build — on first launch right-click MriStudio.app and choose Open, or clear the quarantine flag with:
+          xattr -dr com.apple.quarantine MriStudio.app"
+          # Replace the previous nightly (and its tag) so the release always
+          # points at the latest commit with a single fresh asset.
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly \
+            --title "Latest macOS build" \
+            --prerelease \
+            --notes "$NOTES" \
+            "$ASSET"
