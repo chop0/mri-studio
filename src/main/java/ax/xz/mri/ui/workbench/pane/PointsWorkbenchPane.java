@@ -1,6 +1,8 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.ui.model.IsochromatEntry;
+import ax.xz.mri.ui.model.IsochromatOrigin;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import javafx.beans.property.SimpleStringProperty;
@@ -33,6 +35,17 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         super(paneContext);
         setPaneTitle("Points of Interest");
 
+        var add = new Button("Add Point");
+        add.setOnAction(event -> paneContext.session().points.addUserPoint(Vec3.ZERO, "New Point"));
+        // The Add tool needs a substance in the FOV — without one there's
+        // nothing to observe.
+        Runnable updateAddEnabled = () -> {
+            var sim = paneContext.session().document.simulation.get();
+            add.setDisable(sim == null || sim.substances().isEmpty());
+        };
+        updateAddEnabled.run();
+        paneContext.session().document.simulation.addListener((obs, o, n) -> updateAddEnabled.run());
+
         var defaults = new Button("Defaults");
         defaults.setOnAction(event -> paneContext.session().points.resetToDefaults());
         var clearUser = new Button("Clear User");
@@ -42,7 +55,7 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         var delete = new Button("Delete");
         delete.setOnAction(event ->
             paneContext.session().points.remove(paneContext.session().selection.selectedIds));
-        setToolNodes(defaults, clearUser, duplicate, delete);
+        setToolNodes(add, defaults, clearUser, duplicate, delete);
 
         table.setEditable(true);
         table.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
@@ -58,13 +71,10 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         var visibility = visibilityColumn();
         var colour = colourColumn();
         var name = nameColumn();
-        var r = rColumn();
-        var z = zColumn();
-        var origin = originColumn();
-        table.getColumns().setAll(List.of(visibility, colour, name, r, z, origin));
-        origin.setSortType(TableColumn.SortType.ASCENDING);
+        var position = positionColumn();
+        table.getColumns().setAll(List.of(visibility, colour, name, position));
         name.setSortType(TableColumn.SortType.ASCENDING);
-        table.getSortOrder().setAll(origin, name);
+        table.getSortOrder().setAll(name);
         table.sort();
         table.setRowFactory(view -> buildRow());
         table.getSelectionModel().getSelectedItems().addListener((ListChangeListener<IsochromatEntry>) change -> syncFromTable());
@@ -109,37 +119,45 @@ public class PointsWorkbenchPane extends WorkbenchPane {
     private TableColumn<IsochromatEntry, String> nameColumn() {
         var column = new TableColumn<IsochromatEntry, String>("Name");
         column.setCellValueFactory(cell -> new SimpleStringProperty(cell.getValue().name()));
-        column.setCellFactory(TextFieldTableCell.forTableColumn());
+        column.setCellFactory(col -> new TextFieldTableCell<IsochromatEntry, String>(
+            new javafx.util.converter.DefaultStringConverter()) {
+            @Override
+            public void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                var entry = getTableRow() == null ? null : getTableRow().getItem();
+                if (entry != null && entry.origin() == IsochromatOrigin.NV_CENTRE) {
+                    setStyle("-fx-font-style: italic;");
+                    setEditable(false);
+                } else {
+                    setStyle("");
+                    setEditable(true);
+                }
+            }
+        });
         column.setOnEditCommit(event ->
             paneContext.session().points.rename(event.getRowValue().id(), event.getNewValue()));
         return column;
     }
 
-    private TableColumn<IsochromatEntry, String> rColumn() {
-        var column = new TableColumn<IsochromatEntry, String>("r");
-        column.setCellValueFactory(cell -> new SimpleStringProperty(String.format("%.1f", cell.getValue().r())));
-        column.setMaxWidth(70);
+    /**
+     * Single Position column. Renders the 3-D position in unit-aware
+     * SI prefixes ({@code (1.23, 0.00, 5.00) mm} or
+     * {@code (0.50, 0.00, -50.00) nm}) so the same column reads correctly
+     * for a millimetre-scale MRI fan and a nanometre-scale NV array.
+     */
+    private TableColumn<IsochromatEntry, String> positionColumn() {
+        var column = new TableColumn<IsochromatEntry, String>("Position");
+        column.setCellValueFactory(cell -> {
+            var p = cell.getValue().position();
+            double max = Math.max(Math.max(Math.abs(p.x()), Math.abs(p.y())), Math.abs(p.z()));
+            var u = ax.xz.mri.util.SiFormat.pickPrefix(max, "m");
+            return new SimpleStringProperty(String.format("(%.2f, %.2f, %.2f) %s",
+                p.x() * u.scale(), p.y() * u.scale(), p.z() * u.scale(), u.label()));
+        });
+        column.setPrefWidth(180);
         return column;
     }
 
-    private TableColumn<IsochromatEntry, String> zColumn() {
-        var column = new TableColumn<IsochromatEntry, String>("z");
-        column.setCellValueFactory(cell -> new SimpleStringProperty(String.format("%.1f", cell.getValue().z())));
-        column.setMaxWidth(70);
-        return column;
-    }
-
-    private TableColumn<IsochromatEntry, String> originColumn() {
-        var column = new TableColumn<IsochromatEntry, String>("Group");
-        column.setCellValueFactory(cell -> new SimpleStringProperty(
-            switch (cell.getValue().origin()) {
-                case SCENARIO_DEFAULT -> "Scenario Defaults";
-                case USER -> "User Points";
-            }
-        ));
-        column.setMaxWidth(140);
-        return column;
-    }
 
     private TableColumn<IsochromatEntry, Boolean> visibilityColumn() {
         var column = new TableColumn<IsochromatEntry, Boolean>("");
@@ -186,7 +204,7 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         var menu = new ContextMenu();
         if (entry == null) {
             var add = new MenuItem("Add Point at Centre");
-            add.setOnAction(event -> paneContext.session().points.addUserPoint(0, 0, "New Point"));
+            add.setOnAction(event -> paneContext.session().points.addUserPoint(Vec3.ZERO, "New Point"));
             var reset = new MenuItem("Reset Defaults");
             reset.setOnAction(event -> paneContext.session().points.resetToDefaults());
             var clear = new MenuItem("Clear User Points");
@@ -206,6 +224,14 @@ public class PointsWorkbenchPane extends WorkbenchPane {
         delete.setOnAction(event -> paneContext.session().points.remove(entry.id()));
         var lock = new MenuItem(entry.locked() ? "Unlock" : "Lock");
         lock.setOnAction(event -> paneContext.session().points.setLocked(entry.id(), !entry.locked()));
+        // NV centres are mastered by the substance editor — Points pane only
+        // displays them. Delete and Lock are inert; duplicate clones into a
+        // free-standing USER row (handy: "I want to track this NV centre's
+        // neighbour with a virtual probe").
+        if (entry.origin() == IsochromatOrigin.NV_CENTRE) {
+            delete.setDisable(true);
+            lock.setDisable(true);
+        }
         menu.getItems().addAll(toggle, duplicate, lock, delete);
         return menu;
     }

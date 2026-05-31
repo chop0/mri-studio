@@ -153,19 +153,19 @@ public class MagnitudeTracePane extends AbstractTracePlotPane {
         var title = new javafx.scene.control.MenuItem("Receive Window");
         title.setDisable(true);
         var setCursor = new javafx.scene.control.MenuItem("Set Cursor To Window Centre");
-        setCursor.setOnAction(event -> paneContext.session().viewport.setCursor(hoveredMeasurement.centerMicros()));
+        setCursor.setOnAction(event -> paneContext.session().timeAxis.cursor.scrubTo(hoveredMeasurement.centerMicros()));
         var zoom = new javafx.scene.control.MenuItem("Zoom To Window");
         zoom.setOnAction(event -> {
             double span = Math.max(10.0, hoveredMeasurement.endMicros() - hoveredMeasurement.startMicros());
             double margin = span * 0.35;
-            paneContext.session().timeline.viewportController.setViewport(
+            paneContext.session().timeAxis.viewport.setSpan(
                 hoveredMeasurement.startMicros() - margin,
                 hoveredMeasurement.endMicros() + margin
             );
         });
         var useAnalysis = new javafx.scene.control.MenuItem("Use As Analysis Window");
         useAnalysis.setOnAction(event ->
-            paneContext.session().viewport.setAnalysisWindow(hoveredMeasurement.startMicros(), hoveredMeasurement.endMicros()));
+            paneContext.session().timeAxis.analysis.setSpan(hoveredMeasurement.startMicros(), hoveredMeasurement.endMicros()));
         menu.getItems().addAll(title, new javafx.scene.control.SeparatorMenuItem(), setCursor, zoom, useAnalysis);
         return true;
     }

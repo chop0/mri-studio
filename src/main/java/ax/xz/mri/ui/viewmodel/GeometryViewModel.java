@@ -16,11 +16,20 @@ public class GeometryViewModel {
 
     public final DoubleProperty halfHeight = new SimpleDoubleProperty(80);
     public final DoubleProperty zCenter = new SimpleDoubleProperty(0);
-    public final BooleanProperty showSliceOverlay = new SimpleBooleanProperty(true);
     public final BooleanProperty showLabels = new SimpleBooleanProperty(true);
     public final ObjectProperty<GeometryShadingSnapshot> shadingSnapshot = new SimpleObjectProperty<>();
     public final BooleanProperty shadingComputing = new SimpleBooleanProperty(false);
     public final StringProperty statusMessage = new SimpleStringProperty("");
+
+    /**
+     * The active slicing plane. The shading service samples along this plane;
+     * the 3-D slice editor renders the plane as a draggable translucent quad
+     * and the heatmap pane reads {@link SlicePlane#u u}/{@link SlicePlane#v v}
+     * to lay out rows + columns. Default: Y = 0 (the legacy "φ = 0 half-plane"
+     * cross-section).
+     */
+    public final ObjectProperty<SlicePlane> slicePlane =
+        new SimpleObjectProperty<>(SlicePlane.axisY());
 
     public double visibleStart() {
         return zCenter.get() - halfHeight.get();

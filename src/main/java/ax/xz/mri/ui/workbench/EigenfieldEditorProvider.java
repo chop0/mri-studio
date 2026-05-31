@@ -5,12 +5,9 @@ import ax.xz.mri.ui.eigenfield.EigenfieldEditorPane;
 import ax.xz.mri.ui.viewmodel.StudioSession;
 import javafx.scene.Node;
 
-import java.util.Set;
-
 /**
  * Editor provider for {@link EigenfieldDocument}. Content: the script editor
- * plus live 3D preview. No analysis tool windows are relevant (the field
- * shape is self-contained — not a time-domain simulation artefact).
+ * plus live 3D preview. The editor pane fills the document tab on its own.
  */
 public final class EigenfieldEditorProvider implements DocumentEditorProvider {
     private final EigenfieldDocument document;
@@ -24,7 +21,6 @@ public final class EigenfieldEditorProvider implements DocumentEditorProvider {
     }
 
     @Override public Node editorContent() { return editorPane; }
-    @Override public Set<PaneId> relevantToolWindows() { return Set.of(); }
 
     @Override
     public void activate(StudioSession session) {

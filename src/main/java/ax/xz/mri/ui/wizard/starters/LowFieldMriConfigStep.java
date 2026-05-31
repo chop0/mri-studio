@@ -11,16 +11,14 @@ import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.VBox;
 
-/** Wizard step for configuring the low-field MRI template (B0 strength, gamma). */
+/** Wizard step for configuring the low-field MRI template's B₀ strength. */
 final class LowFieldMriConfigStep implements WizardStep {
 	private final Spinner<Double> b0Spinner;
-	private final Spinner<Double> gammaSpinner;
 	private final BooleanBinding valid = Bindings.createBooleanBinding(() -> true);
 	private final VBox root;
 
 	LowFieldMriConfigStep() {
 		b0Spinner = dblSpinner(0.001, 20, 0.0154, 0.001);
-		gammaSpinner = dblSpinner(1e6, 1e9, 267.522e6, 1e6);
 
 		var header = new Label("Field parameters");
 		header.getStyleClass().add("section-header");
@@ -32,8 +30,7 @@ final class LowFieldMriConfigStep implements WizardStep {
 		var grid = new GridPane();
 		grid.setHgap(10);
 		grid.setVgap(8);
-		grid.addRow(0, new Label("B\u2080 field strength (T)"), b0Spinner);
-		grid.addRow(1, new Label("\u03b3 gyromagnetic ratio (rad/s/T)"), gammaSpinner);
+		grid.addRow(0, new Label("B₀ field strength (T)"), b0Spinner);
 
 		root = new VBox(10, header, desc, grid);
 		root.setPadding(new Insets(4));
@@ -44,7 +41,6 @@ final class LowFieldMriConfigStep implements WizardStep {
 	@Override public BooleanBinding validProperty() { return valid; }
 
 	double getB0Tesla() { return b0Spinner.getValue(); }
-	double getGamma() { return gammaSpinner.getValue(); }
 
 	private static Spinner<Double> dblSpinner(double min, double max, double value, double step) {
 		var s = new Spinner<>(new SpinnerValueFactory.DoubleSpinnerValueFactory(min, max, value, step));

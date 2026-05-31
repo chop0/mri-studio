@@ -55,6 +55,27 @@ public abstract class WorkbenchPane extends BorderPane {
         paneContext.publishStatus(text);
     }
 
+    /**
+     * Status with multiple fields rendered separated by a vertical
+     * {@link javafx.scene.control.Separator} UI element. Project convention is
+     * to use this rather than baking a unicode separator character into a
+     * single status string.
+     */
+    protected final void setPaneStatus(String... segments) {
+        statusBar.setSegments(segments);
+        // Publish a joined-text fallback so the shell status mirrors the
+        // pane status; the shell strip uses a single string.
+        var joined = new StringBuilder();
+        if (segments != null) {
+            for (var seg : segments) {
+                if (seg == null || seg.isEmpty()) continue;
+                if (joined.length() > 0) joined.append("   ");
+                joined.append(seg);
+            }
+        }
+        paneContext.publishStatus(joined.toString());
+    }
+
     public void dispose() {
     }
 }

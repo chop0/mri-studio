@@ -1,44 +1,26 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import module ax.xz.mri;
+import module javafx.base;
+import module javafx.controls;
+import module javafx.graphics;
+
+import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.circuit.CircuitDocument;
-import ax.xz.mri.model.simulation.SimulationConfig;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SimulationConfigDocument;
+import ax.xz.mri.project.SubstanceDocument;
+import ax.xz.mri.state.Mutation;
+import ax.xz.mri.state.Scope;
 import ax.xz.mri.ui.workbench.PaneContext;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.config.ConfigStore;
-import ax.xz.mri.ui.workbench.pane.config.GeometryPreview;
 import ax.xz.mri.ui.workbench.pane.config.NumberField;
-import ax.xz.mri.ui.workbench.pane.config.RelaxationPreview;
 import ax.xz.mri.ui.workbench.pane.schematic.CircuitEditSession;
 import ax.xz.mri.ui.workbench.pane.schematic.SchematicPane;
-import ax.xz.mri.state.Mutation;
-import ax.xz.mri.state.Scope;
-import javafx.beans.binding.Bindings;
-import javafx.beans.property.SimpleStringProperty;
-import javafx.geometry.Pos;
-import javafx.scene.Node;
-import javafx.scene.control.Button;
-import javafx.scene.control.ComboBox;
-import javafx.scene.control.Label;
-import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Separator;
-import javafx.scene.control.Tab;
-import javafx.scene.control.TabPane;
-import javafx.scene.control.TextField;
-import javafx.scene.control.Tooltip;
-import javafx.scene.input.KeyCode;
-import javafx.scene.input.KeyCodeCombination;
-import javafx.scene.input.KeyCombination;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
-import javafx.scene.layout.VBox;
+import ax.xz.mri.util.SiFormat;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
@@ -49,12 +31,18 @@ import java.time.Instant;
  *
  * <p>Tabs:
  * <ul>
- *   <li>Overview — live metrics + health checks.</li>
- *   <li>Tissue — T1/T2 and gyromagnetic ratio.</li>
- *   <li>Geometry — FOV + grid size + slice thickness.</li>
- *   <li>Reference — reference B0 + integration step.</li>
- *   <li>Schematic — the {@link SchematicPane} editing the associated circuit.</li>
+ *   <li><b>Overview</b> — top-line metrics + a glanceable summary of every
+ *       knob, plus a read-only substance panel pulled from the project.</li>
+ *   <li><b>Reference</b> — rotating-frame reference B₀ and the integration
+ *       time step.</li>
+ *   <li><b>Schematic</b> — the {@link SchematicPane} editing the associated
+ *       circuit.</li>
  * </ul>
+ *
+ * <p>Spatial layout (extent + resolution) is a property of the substance the
+ * circuit references — it's edited in the substance pane, not here. Pulling
+ * the FOV onto the simulation config created two sources of truth for the
+ * same physical fact; Part 12 of the rebuild merged them.
  *
  * <p>{@link ConfigStore} is the single source of truth; every control binds
  * bidirectionally. The schematic tab's {@link CircuitEditSession} shares the
@@ -72,8 +60,6 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
 
     private final TabPane tabs = new TabPane();
     private final Tab overviewTab = new Tab("Overview");
-    private final Tab tissueTab = new Tab("Tissue");
-    private final Tab geometryTab = new Tab("Geometry");
     private final Tab referenceTab = new Tab("Reference");
     private final Tab schematicTab = new Tab("Schematic");
 
@@ -91,8 +77,6 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         buildShell();
 
         overviewTab.setContent(scrollWrap(buildOverviewTab()));
-        tissueTab.setContent(scrollWrap(buildTissueTab()));
-        geometryTab.setContent(scrollWrap(buildGeometryTab()));
         referenceTab.setContent(scrollWrap(buildReferenceTab()));
         schematicTab.setContent(buildSchematicTab());
 
@@ -138,9 +122,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         var stats = new HBox(16);
         stats.setAlignment(Pos.CENTER_LEFT);
         stats.getChildren().addAll(
-            stat("LARMOR",   fmt(store.larmorHz, SimulationConfigEditorPane::formatFrequencyShort)),
-            stat("dt",       fmt(store.dtSeconds, SimulationConfigEditorPane::formatSeconds)),
-            stat("GRID",     Bindings.createStringBinding(() -> store.nZ.get() + "\u00D7" + store.nR.get(), store.nZ, store.nR))
+            stat("LARMOR", fmt(store.larmorHz, SimulationConfigEditorPane::formatFrequencyShort)),
+            stat("dt",     fmt(store.dtSeconds, SimulationConfigEditorPane::formatSeconds))
         );
 
         var strip = new HBox(10, titleLabel, typeLabel, spacer, stats);
@@ -155,16 +138,25 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         var v = new Label();
         v.getStyleClass().add("cfg-title-stat-value");
         v.textProperty().bind(binding);
+        // Pin a generous fixed pref-width so this stat tile doesn't re-measure
+        // when its value's character count changes. Without this, every nX/nY/nZ
+        // edit reflows the title strip → toolbar → schematic canvas.
+        l.setPrefWidth(72);
+        l.setMinWidth(72);
+        v.setPrefWidth(72);
+        v.setMinWidth(72);
         var box = new VBox(0, l, v);
         box.setAlignment(Pos.CENTER_LEFT);
+        box.setMinWidth(72);
+        box.setPrefWidth(72);
         return box;
     }
 
     private Node buildTabs() {
         tabs.getStyleClass().add("cfg-tabs");
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        for (var t : List.of(overviewTab, tissueTab, geometryTab, referenceTab, schematicTab)) t.setClosable(false);
-        tabs.getTabs().addAll(overviewTab, tissueTab, geometryTab, referenceTab, schematicTab);
+        for (var t : List.of(overviewTab, referenceTab, schematicTab)) t.setClosable(false);
+        tabs.getTabs().addAll(overviewTab, referenceTab, schematicTab);
         return tabs;
     }
 
@@ -203,29 +195,18 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         metrics.getStyleClass().add("cfg-metric-strip");
         metrics.setFillHeight(true);
         metrics.getChildren().addAll(
-            bigMetric("REF B\u2080", fmt(store.referenceB0Tesla, SimulationConfigEditorPane::formatTesla), "T", false),
+            bigMetric("REF B₀", fmt(store.referenceB0Tesla, SimulationConfigEditorPane::formatTesla), "T", false),
             bigMetric("LARMOR", fmt(store.larmorHz, SimulationConfigEditorPane::formatFrequencyShort),
                 fmt(store.larmorHz, SimulationConfigEditorPane::frequencyUnit), false),
             bigMetric("TIME STEP", fmt(store.dtSeconds, SimulationConfigEditorPane::formatDt),
-                fmt(store.dtSeconds, SimulationConfigEditorPane::dtUnit), false),
-            bigMetric("GRID",
-                Bindings.createStringBinding(() -> store.nZ.get() + "\u00D7" + store.nR.get(), store.nZ, store.nR),
-                staticText(""), true)
+                fmt(store.dtSeconds, SimulationConfigEditorPane::dtUnit), true)
         );
         box.getChildren().add(metrics);
 
         box.getChildren().add(sectionTitle("Configuration at a glance"));
         box.getChildren().addAll(
-            kvBound("Tissue", Bindings.createStringBinding(
-                () -> String.format("T\u2081 = %s \u00b7 T\u2082 = %s", formatMs(store.t1Ms.get()), formatMs(store.t2Ms.get())),
-                store.t1Ms, store.t2Ms)),
-            kvBound("Spatial FOV", Bindings.createStringBinding(
-                () -> String.format("%.1f \u00D7 %.1f mm", store.fovZMm.get(), store.fovRMm.get()),
-                store.fovZMm, store.fovRMm)),
-            kvBound("Slice half-thickness", fmt(store.sliceHalfMm, v -> String.format("%.2f mm", v))),
-            kvBound("Gyromagnetic ratio",
-                fmt(store.gamma, v -> String.format("%.3f \u00D7 10\u2076 rad/s/T", v / 1e6))),
-            kvBound("Reference period", fmt(store.larmorHz, v -> formatSeconds(1.0 / Math.max(v, 1e-12)))),
+            kvBound("Reference period", fmt(store.larmorHz,
+                v -> Double.isNaN(v) || v <= 0 ? "—" : formatSeconds(1.0 / v))),
             kvBound("Circuit", Bindings.createStringBinding(
                 () -> {
                     var id = store.circuitId.get();
@@ -236,54 +217,136 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
                 },
                 store.circuitId))
         );
-        return box;
-    }
-
-    private Node buildTissueTab() {
-        var box = new VBox(10);
-        box.getChildren().add(sectionTitle("Relaxation"));
-        box.getChildren().add(rowLabelled("T\u2081", numberField(0, 1_000_000, 10).bindBidirectional(store.t1Ms), "ms"));
-        box.getChildren().add(rowLabelled("T\u2082", numberField(0, 1_000_000, 5).bindBidirectional(store.t2Ms), "ms"));
 
         box.getChildren().add(new Separator());
-        box.getChildren().add(sectionTitle("Nucleus"));
-        box.getChildren().add(rowLabelled("\u03b3", numberField(0, 1e12, 1e6).bindBidirectional(store.gamma), "rad/s/T"));
-
-        var preview = new RelaxationPreview();
-        preview.setParams(store.t1Ms.get(), store.t2Ms.get());
-        Runnable refreshPreview = () -> preview.setParams(store.t1Ms.get(), store.t2Ms.get());
-        store.t1Ms.addListener((obs, o, n) -> refreshPreview.run());
-        store.t2Ms.addListener((obs, o, n) -> refreshPreview.run());
-        box.getChildren().add(preview);
+        box.getChildren().add(buildSubstanceSection());
         return box;
     }
 
-    private Node buildGeometryTab() {
-        var box = new VBox(10);
-        box.getChildren().add(sectionTitle("Spatial grid"));
-        box.getChildren().add(rowLabelled("Slice half-thickness", numberField(0.1, 100, 0.5).bindBidirectional(store.sliceHalfMm), "mm"));
-        box.getChildren().add(rowLabelled("FOV Z", numberField(1, 2000, 1).bindBidirectional(store.fovZMm), "mm"));
-        box.getChildren().add(rowLabelled("FOV R", numberField(1, 2000, 1).bindBidirectional(store.fovRMm), "mm"));
-        box.getChildren().add(rowLabelled("n_Z", numberField(2, 10000, 1).decimals(0).bindBidirectional(store.nZ), "samples"));
-        box.getChildren().add(rowLabelled("n_R", numberField(2, 10000, 1).decimals(0).bindBidirectional(store.nR), "samples"));
+    /**
+     * Read-only "Substance" section listing every substance the circuit's
+     * Substance blocks reference. Tissue physics (T₁, T₂, γ) live on the
+     * substance, not the simulation config — this section reads them from
+     * the resolved {@link ax.xz.mri.project.SubstanceDocument}s. When the
+     * circuit has no substance blocks, the section reports "No substance"
+     * explicitly — no proton fallback.
+     */
+    private Node buildSubstanceSection() {
+        var box = new VBox(8);
+        var headerRow = new HBox(8);
+        headerRow.setAlignment(Pos.CENTER_LEFT);
+        var header = new Label("Substance");
+        header.getStyleClass().add("cfg-section-title");
+        var spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        headerRow.getChildren().addAll(header, spacer);
+        box.getChildren().add(headerRow);
 
-        var preview = new GeometryPreview();
-        preview.setGeometry(store.fovZMm.get(), store.fovRMm.get(), store.nZ.get(), store.nR.get(), store.sliceHalfMm.get());
-        Runnable repaint = () -> preview.setGeometry(store.fovZMm.get(), store.fovRMm.get(),
-            store.nZ.get(), store.nR.get(), store.sliceHalfMm.get());
-        store.fovZMm.addListener((obs, o, n) -> repaint.run());
-        store.fovRMm.addListener((obs, o, n) -> repaint.run());
-        store.nZ.addListener((obs, o, n) -> repaint.run());
-        store.nR.addListener((obs, o, n) -> repaint.run());
-        store.sliceHalfMm.addListener((obs, o, n) -> repaint.run());
-        box.getChildren().add(preview);
+        var content = new VBox(4);
+        Runnable refresh = () -> {
+            content.getChildren().clear();
+            var docs = resolveSubstances();
+            if (docs.isEmpty()) {
+                content.getChildren().add(kvStatic("Substance", "(none — add a Substance block to the circuit)"));
+                return;
+            }
+            for (var doc : docs) {
+                var sub = doc.substance();
+                content.getChildren().add(kvStatic("Name", doc.name()));
+                switch (sub) {
+                    case ContinuousMagnetisation cm -> content.getChildren().addAll(
+                        kvStatic("Kind", "Continuous magnetisation"),
+                        kvStatic("T₁", String.format("%.3f s", cm.t1Seconds())),
+                        kvStatic("T₂", String.format("%.3f s", cm.t2Seconds())),
+                        kvStatic("γ", String.format("%.3f × 10⁶ rad/s/T",
+                            cm.gammaRadPerSecPerTesla() / 1e6)),
+                        kvStatic("FOV", SiFormat.fovExtents(
+                            cm.halfExtentXMetres(), cm.halfExtentYMetres(), cm.halfExtentZMetres())),
+                        kvStatic("Grid", cm.nX() + " × " + cm.nY() + " × " + cm.nZ())
+                    );
+                    case NvEnsemble nv -> {
+                        var h = nv.halfExtent();
+                        content.getChildren().addAll(
+                            kvStatic("Kind", "NV ensemble"),
+                            kvStatic("Centres", String.valueOf(nv.centres().size())),
+                            kvStatic("γ (electron)", String.format("%.3f × 10⁹ rad/s/T",
+                                nv.physics().gammaRadPerSecPerTesla() / 1e9)),
+                            kvStatic("Bounding box", SiFormat.fovExtents(h.x(), h.y(), h.z()))
+                        );
+                    }
+                }
+            }
+        };
+        refresh.run();
+        refreshGammaFromCircuit();
+        // Re-resolve when project state changes (the linked substance docs
+        // may be edited).
+        paneContext.session().project.state().currentProperty()
+            .addListener((obs, o, n) -> {
+                refresh.run();
+                refreshGammaFromCircuit();
+            });
+        box.getChildren().add(content);
         return box;
+    }
+
+    /**
+     * Push γ from the first continuous-magnetisation substance (if any) into
+     * the {@link ConfigStore} so the Larmor-frequency binding has a real
+     * value to multiply B₀ by. {@code NaN} when no Bloch substance — the
+     * Larmor display then renders "—" instead of a proton-default lie.
+     */
+    private void refreshGammaFromCircuit() {
+        // Prefer a continuous-magnetisation substance (MRI proton, etc.);
+        // fall back to the first NV ensemble's electron γ so an NV-only
+        // circuit still gets a sensible Larmor display instead of NaN.
+        double gamma = Double.NaN;
+        for (var doc : resolveSubstances()) {
+            if (doc.substance() instanceof ContinuousMagnetisation cm) {
+                gamma = cm.gammaRadPerSecPerTesla();
+                break;
+            }
+        }
+        if (Double.isNaN(gamma)) {
+            for (var doc : resolveSubstances()) {
+                if (doc.substance() instanceof NvEnsemble nv) {
+                    gamma = nv.physics().gammaRadPerSecPerTesla();
+                    break;
+                }
+            }
+        }
+        store.gammaRadPerSecPerTesla.set(gamma);
+    }
+
+    /** Substances referenced by Substance blocks in the current circuit. */
+    private List<SubstanceDocument> resolveSubstances() {
+        var state = paneContext.session().project.project();
+        if (state == null) return List.of();
+        var cfg = currentConfig();
+        if (cfg == null || cfg.circuitId() == null) return List.of();
+        var circuit = state.circuit(cfg.circuitId());
+        if (circuit == null) return List.of();
+        var out = new ArrayList<SubstanceDocument>();
+        for (var c : circuit.components()) {
+            if (c instanceof CircuitComponent.Substance block) {
+                var doc = state.substance(block.substanceDocId());
+                if (doc != null) out.add(doc);
+            }
+        }
+        return out;
+    }
+
+    private SimulationConfig currentConfig() {
+        var state = paneContext.session().project.project();
+        if (state == null) return null;
+        var doc = state.simulation(document.id());
+        return doc == null ? null : doc.config();
     }
 
     private Node buildReferenceTab() {
         var box = new VBox(10);
         box.getChildren().add(sectionTitle("Rotating frame"));
-        box.getChildren().add(rowLabelled("Reference B\u2080", numberField(-50, 50, 0.001).bindBidirectional(store.referenceB0Tesla), "T"));
+        box.getChildren().add(rowLabelled("Reference B₀", numberField(-50, 50, 0.001).bindBidirectional(store.referenceB0Tesla), "T"));
 
         // dt has its own setup so we can guard against zero/negative.
         var dt = numberField(1e-12, 1e-2, 1e-7);
@@ -293,7 +356,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         box.getChildren().add(rowLabelled("Time step dt", dt, "s"));
 
         var larmor = new Label();
-        larmor.textProperty().bind(fmt(store.larmorHz, v -> String.format("\u03c9\u209b / 2\u03c0 = %s", formatFrequencyShort(v) + frequencyUnit(v))));
+        larmor.textProperty().bind(fmt(store.larmorHz, v -> String.format("ωₛ / 2π = %s", formatFrequencyShort(v) + frequencyUnit(v))));
         larmor.getStyleClass().add("cfg-row-hint");
         box.getChildren().add(larmor);
 
@@ -384,7 +447,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node rowLabelled(String label, Node control, String unit) {
         var l = new Label(label);
         l.getStyleClass().add("cfg-row-label");
-        l.setPrefWidth(160);
+        l.setPrefWidth(180);
         var row = new HBox(8, l, control);
         row.getStyleClass().add("cfg-row");
         row.setAlignment(Pos.CENTER_LEFT);
@@ -399,12 +462,21 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private Node kvBound(String label, javafx.beans.value.ObservableValue<String> value) {
         var l = new Label(label);
         l.getStyleClass().add("cfg-kv-label");
+        // Pin the label column so the value column's width changes don't
+        // shuffle the label horizontally as numbers grow / shrink. Without
+        // this, every "1.2 mT" → "12.34 µT" transition jitters the row.
+        l.setPrefWidth(160);
+        l.setMinWidth(160);
         var v = new Label();
         v.getStyleClass().add("cfg-kv-value");
         v.textProperty().bind(value);
         var row = new HBox(8, l, v);
         row.getStyleClass().add("cfg-kv");
         return row;
+    }
+
+    private Node kvStatic(String label, String value) {
+        return kvBound(label, new SimpleStringProperty(value));
     }
 
     private Node bigMetric(String label, javafx.beans.value.ObservableValue<String> value,
@@ -448,6 +520,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private static String formatFrequencyShort(double hz) {
+        if (Double.isNaN(hz)) return "—";
         double abs = Math.abs(hz);
         if (abs == 0) return "0";
         if (abs >= 1e9) return String.format("%.2f", hz / 1e9);
@@ -457,6 +530,7 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     }
 
     private static String frequencyUnit(double hz) {
+        if (Double.isNaN(hz)) return "";
         double abs = Math.abs(hz);
         if (abs >= 1e9) return " GHz";
         if (abs >= 1e6) return " MHz";
@@ -469,12 +543,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         if (abs == 0) return "0";
         if (abs >= 1) return String.format("%.3f s", s);
         if (abs >= 1e-3) return String.format("%.3f ms", s * 1e3);
-        if (abs >= 1e-6) return String.format("%.3f \u03bcs", s * 1e6);
+        if (abs >= 1e-6) return String.format("%.3f μs", s * 1e6);
         return String.format("%.3f ns", s * 1e9);
-    }
-
-    private static String formatMs(double v) {
-        return String.format("%.0f ms", v);
     }
 
     private static String formatDt(double s) {
@@ -487,11 +557,8 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     private static String dtUnit(double s) {
         double abs = Math.abs(s);
         if (abs >= 1e-3) return " ms";
-        if (abs >= 1e-6) return " \u03bcs";
+        if (abs >= 1e-6) return " μs";
         return " ns";
     }
 
-    public SimulationConfig currentConfig() {
-        return store.getConfig();
-    }
 }

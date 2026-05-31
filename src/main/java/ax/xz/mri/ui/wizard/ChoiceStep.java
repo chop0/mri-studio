@@ -2,6 +2,7 @@ package ax.xz.mri.ui.wizard;
 
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
+import javafx.beans.value.ObservableValue;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.control.Label;
@@ -61,4 +62,9 @@ public final class ChoiceStep<T> implements WizardStep {
 	@Override public void onEnter() { listView.requestFocus(); }
 
 	public T getValue() { return listView.getSelectionModel().getSelectedItem(); }
+
+	/** Observable selection, for callers that need to react to changes. */
+	public ObservableValue<T> selectedItemProperty() {
+		return listView.getSelectionModel().selectedItemProperty();
+	}
 }

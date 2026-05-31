@@ -3,6 +3,8 @@ package ax.xz.mri.ui.workbench.pane;
 import ax.xz.mri.ui.canvas.CanvasDrawingUtils;
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.timeline.scrub.ScrubStrip;
+import ax.xz.mri.ui.timeline.scrub.TimeTickFormatter;
 import ax.xz.mri.ui.viewmodel.PulseTimelineAnalysis;
 import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.viewmodel.TracePlotViewModel;
@@ -14,6 +16,9 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
@@ -27,13 +32,14 @@ import static ax.xz.mri.ui.theme.StudioTheme.UI_BOLD_10;
 
 /** Shared single trace-plot pane. */
 public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
-    protected static final double OVERVIEW_H = 10;
-    protected static final double OVERVIEW_GAP = 6;
     protected static final double LEGEND_H = 16;
     protected static final double TITLE_H = 14;
     protected static final double PAD_LEFT = 40;
     protected static final double PAD_RIGHT = 8;
-    protected static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP + LEGEND_H + TITLE_H;
+    // The overview scrub strip is a separate Region above the canvas now,
+    // so the canvas's top padding only reserves space for the title +
+    // legend rows it paints.
+    protected static final double PAD_TOP = 14 + LEGEND_H + TITLE_H;
     protected static final double PAD_BOTTOM = 18;
 
     private record TraceHoverTarget(
@@ -49,7 +55,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     }
 
     private final TracePlotViewModel viewModel;
-    private final AxisScrubBar.Interaction overviewInteraction;
+    protected final ScrubStrip scrubStrip = new ScrubStrip();
     private boolean hoveringPlot;
     private double hoveredTimeMicros;
     private double hoveredMouseX;
@@ -59,70 +65,80 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     protected AbstractTracePlotPane(PaneContext paneContext, TracePlotViewModel viewModel) {
         super(paneContext);
         this.viewModel = viewModel;
-        var viewport = paneContext.session().viewport;
-        this.overviewInteraction = new AxisScrubBar.Interaction(
-            AxisScrubBar.Orientation.HORIZONTAL,
-            AxisScrubBar.WindowModel.of(
-                () -> 0,
-                () -> Math.max(viewport.maxTime.get(), 1),
-                viewport.tS::get, viewport.tE::get,
-                viewport::setAnalysisWindow,
-                viewport::zoomAnalysisWindowAround,
-                viewport::fitAnalysisToData,
-                null
-            )
-        );
+        var ta = paneContext.session().timeAxis;
+
+        // Top scrub strip — manages the analysis window that this trace pane
+        // is plotting. Domain = full project; window = analysis window;
+        // marker = read-only cursor mark. Same component as the editor's
+        // overview bar — consistent gesture model across the app.
+        scrubStrip.style.set(ScrubStrip.Style.OVERVIEW);
+        scrubStrip.priority.set(ScrubStrip.InteractionPriority.WINDOW);
+        scrubStrip.windowEditable.set(true);
+        scrubStrip.markerEditable.set(false);
+        scrubStrip.tickFormatter.set(TimeTickFormatter.INSTANCE);
+        scrubStrip.showTicks.set(false);
+        scrubStrip.domainStart.set(0);
+        scrubStrip.domainEnd.bind(javafx.beans.binding.Bindings.createDoubleBinding(
+            () -> Math.max(1, ta.domain.maxTime.get()), ta.domain.maxTime));
+        scrubStrip.windowStart.bindBidirectional(ta.analysis.start);
+        scrubStrip.windowEnd  .bindBidirectional(ta.analysis.end);
+        scrubStrip.marker.bind(ta.cursor.time);
+        scrubStrip.minWindowSpan.set(1);
+        scrubStrip.onReset.set(ta.analysis::fit);
+        scrubStrip.onZoom.set(ta.analysis::zoomAround);
+        bindRfSpansToStrip(scrubStrip);
+
+        // Restructure pane content: strip on top, plot canvas below. The
+        // base class set us up with `new StackPane(canvas)`; we override.
+        var canvasHolder = new StackPane(canvas);
+        var content = new VBox(scrubStrip, canvasHolder);
+        VBox.setVgrow(canvasHolder, Priority.ALWAYS);
+        setPaneContent(content);
+
         setPaneTitle(viewModel.title());
         bindRedraw(
             paneContext.session().points.entries,
             paneContext.session().selection.selectedIds,
-            paneContext.session().viewport.tS,
-            paneContext.session().viewport.tE,
-            paneContext.session().viewport.tC,
-            paneContext.session().viewport.maxTime,
+            paneContext.session().timeAxis.analysis.start,
+            paneContext.session().timeAxis.analysis.end,
+            paneContext.session().timeAxis.cursor.time,
+            paneContext.session().timeAxis.domain.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.simulationOutput,
+            paneContext.session().document.simulation,
             paneContext.session().reference.enabled,
-            paneContext.session().reference.r,
-            paneContext.session().reference.z,
+            paneContext.session().reference.position,
             paneContext.session().reference.trajectory
         );
 
+        // Plot canvas: clicks scrub the cursor; hover updates the readout.
         canvas.setOnMousePressed(event -> {
             if (!event.isPrimaryButtonDown()) return;
-            if (overviewInteraction.handlePress(overviewBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateStatus(event.getX());
-                scheduleRedraw();
-                return;
-            }
             moveCursor(event.getX());
         });
         canvas.setOnMouseDragged(event -> {
-            if (overviewInteraction.handleDrag(overviewBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateStatus(event.getX());
-                scheduleRedraw();
-                return;
-            }
             updateHover(event.getX(), event.getY());
             moveCursor(event.getX());
         });
-        canvas.setOnMouseReleased(event -> overviewInteraction.handleRelease());
         canvas.setOnMouseMoved(event -> {
             updateHover(event.getX(), event.getY());
             updateStatus(event.getX());
-        });
-        canvas.setOnScroll(event -> {
-            if (overviewInteraction.handleScroll(overviewBounds(), event)) {
-                scheduleRedraw();
-                updateStatus(event.getX());
-            }
         });
         canvas.setOnContextMenuRequested(event -> {
             var menu = buildContextMenu(event.getX(), event.getY());
             showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
         });
+    }
+
+    private void bindRfSpansToStrip(ScrubStrip strip) {
+        Runnable rebuild = () -> {
+            strip.spans.clear();
+            for (var sp : rfSpans()) {
+                strip.spans.add(new ScrubStrip.Span(sp.start, sp.end, sp.colour, sp.opacity));
+            }
+        };
+        rebuild.run();
+        paneContext.session().document.simulation.addListener((obs, o, n) -> rebuild.run());
+        paneContext.session().document.currentPulse.addListener((obs, o, n) -> rebuild.run());
     }
 
     @Override
@@ -132,26 +148,14 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
         double plotWidth = width - PAD_LEFT - PAD_RIGHT;
         double plotHeight = height - PAD_TOP - PAD_BOTTOM;
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         double tSpan = tMax - tMin;
-        double cursorTime = paneContext.session().viewport.tC.get();
+        double cursorTime = paneContext.session().timeAxis.cursor.time.get();
         var referenceTrajectory = paneContext.session().reference.enabled.get()
             ? paneContext.session().reference.trajectory.get()
             : null;
         var pulseAnalysis = pulseTimelineAnalysis();
-        AxisScrubBar.draw(
-            g,
-            overviewBounds(width),
-            AxisScrubBar.Spec.horizontal(
-                0,
-                Math.max(paneContext.session().viewport.maxTime.get(), 1),
-                tMin,
-                tMax,
-                rfSpans(),
-                java.util.List.of(new AxisScrubBar.Marker(cursorTime, CUR, 0.85, 1.0))
-            )
-        );
 
         g.setTextAlign(TextAlignment.RIGHT);
         for (double tick : viewModel.ticks()) {
@@ -288,37 +292,37 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     }
 
     private void moveCursor(double mouseX) {
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
         double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
-        paneContext.session().viewport.setCursor(time);
+        paneContext.session().timeAxis.cursor.scrubTo(time);
     }
 
     private void updateStatus(double mouseX) {
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         double plotWidth = canvas.getWidth() - PAD_LEFT - PAD_RIGHT;
         double time = tMin + (mouseX - PAD_LEFT) / plotWidth * (tMax - tMin);
         if (hoveredTraceTarget != null) {
-            setPaneStatus(String.format(
-                "%s | t=%.1f \u03bcs | %s=%s | M=(%.3f, %.3f, %.3f) | (r=%.1f mm, z=%.1f mm)",
+            var p = hoveredTraceTarget.entry().position();
+            setPaneStatus(
                 hoveredTraceTarget.entry().name(),
-                hoveredTraceTarget.timeMicros(),
-                viewModel.title(),
-                formatPlotValue(hoveredTraceTarget.value()),
-                hoveredTraceTarget.mx(),
-                hoveredTraceTarget.my(),
-                hoveredTraceTarget.mz(),
-                hoveredTraceTarget.entry().r(),
-                hoveredTraceTarget.entry().z()
-            ));
+                String.format("t=%.1f \u03bcs", hoveredTraceTarget.timeMicros()),
+                String.format("%s=%s", viewModel.title(), formatPlotValue(hoveredTraceTarget.value())),
+                String.format("M=(%.3f, %.3f, %.3f)",
+                    hoveredTraceTarget.mx(), hoveredTraceTarget.my(), hoveredTraceTarget.mz()),
+                String.format("(%.1f, %.1f, %.1f) mm", p.x() * 1e3, p.y() * 1e3, p.z() * 1e3)
+            );
             return;
         }
         long visible = paneContext.session().points.entries.stream()
             .filter(entry -> entry.visible() && entry.trajectory() != null)
             .count();
-        setPaneStatus(String.format("t=%.1f \u03bcs | %d traces visible", time, visible));
+        setPaneStatus(
+            String.format("t=%.1f \u03bcs", time),
+            String.format("%d traces visible", visible)
+        );
     }
 
     private static int niceTick(double span) {
@@ -339,8 +343,8 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             }
             return;
         }
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         hoveringPlot = true;
         hoveredMouseX = mouseX;
         hoveredMouseY = mouseY;
@@ -350,14 +354,17 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
         scheduleRedraw();
     }
 
-    private java.util.List<AxisScrubBar.Span> rfSpans() {
-        return AxisScrubBar.rfSpans(
-            paneContext.session().document.simulationOutput.get(),
+    private java.util.List<RfSpan> rfSpans() {
+        return RfSpans.compute(
+            paneContext.session().document.simulation.get(),
             paneContext.session().document.currentPulse.get(),
             Color.web("#1565c0"),
             0.20
         );
     }
+
+    /** RF-active background span used by scrub strips in trace and heat-map panes. */
+    record RfSpan(double start, double end, Color colour, double opacity) {}
 
     protected void drawPlotMarkers(
         GraphicsContext g,
@@ -393,7 +400,7 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
 
     protected final PulseTimelineAnalysis.Analysis pulseTimelineAnalysis() {
         return PulseTimelineAnalysis.compute(
-            paneContext.session().document.simulationOutput.get(),
+            paneContext.session().document.simulation.get(),
             paneContext.session().document.currentPulse.get(),
             paneContext.session().derived.signalTrace.get()
         );
@@ -470,34 +477,51 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
     }
 
     private ContextMenu buildContextMenu(double mouseX, double mouseY) {
+        var V = ax.xz.mri.ui.menu.ContextMenuVocabulary.class;
         var menu = new ContextMenu();
-        if (overviewBounds().contains(mouseX, mouseY)) {
-            var overview = new MenuItem("Overview");
-            overview.setDisable(true);
-            menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
-            return menu;
-        }
-        if (populateCustomContextMenu(menu, mouseX, mouseY)) {
-            menu.getItems().add(new SeparatorMenuItem());
-            menu.getItems().add(overviewInteraction.newResetMenuItem());
-            return menu;
-        }
+
+        // Per-pane custom items first (e.g. heat-map mode toggles).
+        boolean customAdded = populateCustomContextMenu(menu, mouseX, mouseY);
+
+        // Hovered-trace-specific items.
         if (hoveredTraceTarget != null) {
+            if (customAdded) menu.getItems().add(new SeparatorMenuItem());
             var title = new MenuItem("Trace: " + hoveredTraceTarget.entry().name());
             title.setDisable(true);
+            menu.getItems().add(title);
             var select = new MenuItem("Select " + hoveredTraceTarget.entry().name());
             select.setOnAction(actionEvent -> paneContext.session().selection.setSingle(hoveredTraceTarget.entry().id()));
             var toggle = new MenuItem(hoveredTraceTarget.entry().visible() ? "Hide " + hoveredTraceTarget.entry().name() : "Show " + hoveredTraceTarget.entry().name());
             toggle.setOnAction(actionEvent -> paneContext.session().points.toggleVisibility(hoveredTraceTarget.entry().id()));
-            var setCursor = new MenuItem("Set cursor here");
-            setCursor.setOnAction(actionEvent -> moveCursor(mouseX));
-            menu.getItems().addAll(title, new SeparatorMenuItem(), select, toggle, setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
-            return menu;
+            menu.getItems().addAll(select, toggle);
         }
-        var setCursor = new MenuItem("Set cursor here");
+
+        if (!menu.getItems().isEmpty()) menu.getItems().add(new SeparatorMenuItem());
+
+        // Standard plot verbs — same vocabulary as every other plot in the studio.
+        var setCursor = new MenuItem("Set Cursor Here");
         setCursor.setOnAction(actionEvent -> moveCursor(mouseX));
-        menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+        menu.getItems().add(setCursor);
+        menu.getItems().add(ax.xz.mri.ui.menu.ContextMenuVocabulary.RESET_VIEW.item(
+            () -> paneContext.session().timeAxis.analysis.fit()));
+        menu.getItems().add(ax.xz.mri.ui.menu.ContextMenuVocabulary.EXPORT_PNG.item(this::exportPlotAsPng));
         return menu;
+    }
+
+    private void exportPlotAsPng() {
+        var chooser = new javafx.stage.FileChooser();
+        chooser.setTitle("Export plot as PNG");
+        chooser.setInitialFileName(getClass().getSimpleName() + ".png");
+        chooser.getExtensionFilters().add(
+            new javafx.stage.FileChooser.ExtensionFilter("PNG image", "*.png"));
+        var window = canvas.getScene() == null ? null : canvas.getScene().getWindow();
+        var file = chooser.showSaveDialog(window);
+        if (file == null) return;
+        var img = canvas.snapshot(null, null);
+        try {
+            javax.imageio.ImageIO.write(
+                javafx.embed.swing.SwingFXUtils.fromFXImage(img, null), "png", file);
+        } catch (java.io.IOException ignore) { /* best-effort export */ }
     }
 
     private TraceHoverTarget findHoveredTraceTarget(
@@ -564,7 +588,11 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
                 viewModel.title() + " = " + formatPlotValue(hoveredTraceTarget.value()),
                 String.format("Mx = %.3f, My = %.3f", hoveredTraceTarget.mx(), hoveredTraceTarget.my()),
                 String.format("Mz = %.3f", hoveredTraceTarget.mz()),
-                String.format("r = %.1f mm, z = %.1f mm", hoveredTraceTarget.entry().r(), hoveredTraceTarget.entry().z())
+                String.format(
+                    "pos = (%.1f, %.1f, %.1f) mm",
+                    hoveredTraceTarget.entry().position().x() * 1e3,
+                    hoveredTraceTarget.entry().position().y() * 1e3,
+                    hoveredTraceTarget.entry().position().z() * 1e3)
             )
         );
     }
@@ -575,11 +603,4 @@ public abstract class AbstractTracePlotPane extends CanvasWorkbenchPane {
             : String.format("%.3f%s", value, viewModel.unit());
     }
 
-    private AxisScrubBar.Bounds overviewBounds() {
-        return overviewBounds(canvas.getWidth());
-    }
-
-    private static AxisScrubBar.Bounds overviewBounds(double width) {
-        return new AxisScrubBar.Bounds(PAD_LEFT, 2, Math.max(1, width - PAD_LEFT - PAD_RIGHT), OVERVIEW_H);
-    }
 }

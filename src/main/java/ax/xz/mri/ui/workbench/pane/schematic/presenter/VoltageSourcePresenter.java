@@ -4,7 +4,6 @@ import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.ui.workbench.pane.schematic.ComponentGeometry;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.control.Label;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
@@ -20,8 +19,7 @@ import static ax.xz.mri.ui.workbench.pane.schematic.presenter.SchematicInk.drawL
 /** Voltage source — the schematic-side endpoint of a DAW track. */
 final class VoltageSourcePresenter implements ComponentPresenter {
     private static final ComponentGeometry GEOM = new ComponentGeometry(90, 70, List.of(
-        new ComponentGeometry.Terminal("out", 45, 0),
-        new ComponentGeometry.Terminal("active", 0, 35)
+        new ComponentGeometry.Terminal("out", 45, 0)
     ));
 
     private final CircuitComponent.VoltageSource v;
@@ -40,10 +38,6 @@ final class VoltageSourcePresenter implements ComponentPresenter {
         g.setStroke(INK);
         g.setLineWidth(1.4);
         g.strokeLine(22, 0, 45, 0);
-        g.setStroke(accent.deriveColor(0, 1, 1, 0.6));
-        g.setLineDashes(3, 2);
-        g.strokeLine(0, 22, 0, 35);
-        g.setLineDashes();
         g.setFill(Color.WHITE);
         g.fillOval(-22, -22, 44, 44);
         g.setStroke(accent);
@@ -63,13 +57,6 @@ final class VoltageSourcePresenter implements ComponentPresenter {
 
     @Override
     public void buildInspector(VBox container, InspectorEnv env) {
-        var help = new Label(
-            "The source's name doubles as the DAW track name \u2014 every track " +
-            "with this name sums into the source each step, then its voltage drives " +
-            "the coil it's wired to.");
-        help.setWrapText(true);
-        help.getStyleClass().add("schematic-inspector-hint");
-        container.getChildren().add(help);
         container.getChildren().add(InspectorFields.enumField("Kind", AmplitudeKind.values(), v.kind(),
             k -> env.session().replaceComponent(v.withKind(k))));
         container.getChildren().add(InspectorFields.doubleField("Carrier (Hz)", v.carrierHz(),

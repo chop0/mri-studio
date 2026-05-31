@@ -1,19 +1,16 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
-import ax.xz.mri.model.simulation.PhaseMapData;
 import ax.xz.mri.model.simulation.SignalTrace;
-import ax.xz.mri.service.simulation.PhaseMapComputer;
-import ax.xz.mri.service.simulation.SignalTraceComputer;
+import ax.xz.mri.service.simulation.compiled.CompiledSimulation;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleObjectProperty;
-import javafx.beans.property.StringProperty;
 import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
 
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -22,10 +19,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
-/** Background phase-map and signal-trace computations with generation/error tracking. */
+/**
+ * Per-document derived state — at v1, just the primary signal trace.
+ *
+ * <p>The simulator pipeline ({@link ax.xz.mri.ui.sim.SimRunner}) calls
+ * {@link CompiledSimulation#runMultiProbe()} once on its worker thread and
+ * publishes the result on {@link ax.xz.mri.ui.sim.SimResult#traces()}; this
+ * model reuses that result by default. Callers without a precomputed trace
+ * (importers, hardware-only sessions) can submit a fresh
+ * {@link MultiProbeSignalTrace} via {@link #acceptProbeTraces}.
+ */
 public class DerivedComputationViewModel {
-    public final ObjectProperty<PhaseMapData> phaseMapZ = new SimpleObjectProperty<>();
-    public final ObjectProperty<PhaseMapData> phaseMapR = new SimpleObjectProperty<>();
     public final ObjectProperty<SignalTrace> signalTrace = new SimpleObjectProperty<>();
     public final BooleanProperty computing = new SimpleBooleanProperty(false);
     public final StringProperty errorMessage = new SimpleStringProperty();
@@ -46,17 +50,32 @@ public class DerivedComputationViewModel {
         this.disposer = disposer != null ? disposer : () -> { };
     }
 
-    /** Attach a diagnostics sink (typically MessagesViewModel::logError-bridging). */
     public void setErrorSink(Consumer<Throwable> sink) {
         this.errorSink = sink != null ? sink : ex -> { };
     }
 
-    public void recompute(SimulationOutput data, List<PulseSegment> pulse) {
+    /** Recompute the signal trace from the simulation. */
+    public void recompute(CompiledSimulation simulation, List<PulseSegment> pulse) {
+        recompute(simulation, pulse, null);
+    }
+
+    /**
+     * Recompute / replace the signal trace. {@code precomputedPrimary} is the
+     * typical hot-path input — the simulator already computed it on its
+     * worker thread. When null, we fall back to running
+     * {@link CompiledSimulation#runMultiProbe()} on the background thread.
+     */
+    public void recompute(CompiledSimulation simulation, List<PulseSegment> pulse, SignalTrace precomputedPrimary) {
         long currentGeneration = generation.incrementAndGet();
-        if (data == null || pulse == null) {
-            phaseMapZ.set(null);
-            phaseMapR.set(null);
+        if (simulation == null || pulse == null) {
             signalTrace.set(null);
+            errorMessage.set(null);
+            computing.set(false);
+            return;
+        }
+
+        if (precomputedPrimary != null) {
+            signalTrace.set(precomputedPrimary);
             errorMessage.set(null);
             computing.set(false);
             return;
@@ -66,23 +85,17 @@ public class DerivedComputationViewModel {
         errorMessage.set(null);
         executor.execute(() -> {
             try {
-                var nextZ = PhaseMapComputer.computePhaseZ(data, pulse);
-                var nextR = PhaseMapComputer.computePhaseR(data, pulse);
-                var nextSignal = SignalTraceComputer.compute(data, pulse);
+                var traces = simulation.runMultiProbe();
                 if (Thread.currentThread().isInterrupted()) return;
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
-                    phaseMapZ.set(nextZ);
-                    phaseMapR.set(nextR);
-                    signalTrace.set(nextSignal);
+                    signalTrace.set(traces == null ? null : traces.primary());
                     computing.set(false);
                 });
             } catch (Exception ex) {
                 errorSink.accept(ex);
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
-                    phaseMapZ.set(null);
-                    phaseMapR.set(null);
                     signalTrace.set(null);
                     errorMessage.set(ex.getMessage());
                     computing.set(false);
@@ -91,18 +104,11 @@ public class DerivedComputationViewModel {
         });
     }
 
-    /**
-     * Replace the derived state with traces produced directly by a hardware
-     * device. Phase maps stay null (they require the simulator's spatial state).
-     */
+    /** Replace the derived state with traces produced directly by a hardware device. */
     public void acceptProbeTraces(MultiProbeSignalTrace traces) {
-        // Cancel any in-flight computation; we want this snapshot to be the
-        // surviving state for the analysis panes.
         long currentGeneration = generation.incrementAndGet();
         uiDispatcher.accept(() -> {
             if (currentGeneration != generation.get()) return;
-            phaseMapZ.set(null);
-            phaseMapR.set(null);
             signalTrace.set(traces == null ? null : traces.primary());
             errorMessage.set(null);
             computing.set(false);

@@ -13,6 +13,8 @@ public final class ProjectDisplayNames {
             case HARDWARE_CONFIG -> "Hardware: " + node.name();
             case EIGENFIELD -> "Eigenfield: " + node.name();
             case CIRCUIT -> "Circuit: " + node.name();
+            case SUBSTANCE -> "Substance: " + node.name();
+            case PROCEDURE -> "Procedure: " + node.name();
         };
     }
 }

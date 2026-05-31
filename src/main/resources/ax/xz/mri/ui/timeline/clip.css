@@ -1,0 +1,68 @@
+/* ============================================================================
+ * Clip — scene-graph node styling
+ *
+ * Border-driven selection chrome. No dropshadow effects: a clip body can be
+ * 30 000 px wide at extreme zoom, and JavaFX renders the dropshadow texture
+ * at the body's full size — busting the 16 384-px hardware texture ceiling.
+ * Borders, in contrast, render per-edge regardless of size.
+ * ============================================================================ */
+
+.clip {
+    -clip-base:      -studio-accent;
+    -clip-bg-top:    derive(-clip-base, 75%);
+    -clip-bg-bottom: derive(-clip-base, 60%);
+    -clip-border:    derive(-clip-base, 40%);
+    -fx-cursor: hand;
+}
+
+.clip:hover {
+    -clip-bg-top:    derive(-clip-base, 65%);
+    -clip-bg-bottom: derive(-clip-base, 50%);
+}
+
+.clip:selected {
+    -clip-border:    -clip-base;
+    -clip-bg-top:    derive(-clip-base, 55%);
+    -clip-bg-bottom: derive(-clip-base, 40%);
+}
+
+.clip:primary {
+    -clip-border:    -clip-base;
+    -clip-bg-top:    derive(-clip-base, 45%);
+    -clip-bg-bottom: derive(-clip-base, 30%);
+}
+
+.clip:dragging { -fx-opacity: 0.78; }
+
+.clip .clip-body {
+    -fx-background-color: linear-gradient(to bottom, -clip-bg-top, -clip-bg-bottom);
+    -fx-border-color: -clip-border;
+    -fx-border-width: 1;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 2;
+}
+.clip:selected .clip-body { -fx-border-width: 2; }
+.clip:primary  .clip-body { -fx-border-width: 2; -fx-border-style: solid; }
+.clip:focused  .clip-body { -fx-border-color: -studio-accent; }
+
+.clip .clip-label {
+    -fx-text-fill: derive(-clip-base, -45%);
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-padding: 2 4 0 4;
+}
+
+.clip .clip-resize-handle           { -fx-background-color: transparent; }
+.clip:hover    .clip-resize-handle,
+.clip:selected .clip-resize-handle  { -fx-background-color: rgba(15, 95, 166, 0.18); }
+.clip:primary  .clip-resize-handle  { -fx-background-color: rgba(15, 95, 166, 0.32); }
+
+.clip .clip-spline-point {
+    -fx-fill: white;
+    -fx-stroke: -clip-base;
+    -fx-stroke-width: 1.4;
+}
+
+/* Stay-centred glyph indicator on the corner */
+.clip.centred .clip-label::after { content: " ·"; }

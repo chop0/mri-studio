@@ -1,750 +1,506 @@
 package ax.xz.mri.ui.workbench.pane;
 
+import ax.xz.mri.model.simulation.Vec3;
 import ax.xz.mri.ui.canvas.ColourUtil;
 import ax.xz.mri.ui.model.IsochromatEntry;
-import ax.xz.mri.ui.model.IsochromatId;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.viewmodel.Geometry3DCanvas;
 import ax.xz.mri.ui.viewmodel.GeometryShadingSnapshot;
-import ax.xz.mri.ui.viewmodel.GeometryViewModel;
 import ax.xz.mri.ui.viewmodel.MagnetisationColouringSupport;
 import ax.xz.mri.ui.viewmodel.MagnetisationColouringViewModel;
+import ax.xz.mri.ui.viewmodel.SlicePlane;
 import ax.xz.mri.ui.workbench.PaneContext;
-import ax.xz.mri.ui.workbench.framework.CanvasWorkbenchPane;
+import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.util.MathUtil;
-import javafx.scene.Cursor;
+import javafx.beans.InvalidationListener;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
+import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ContextMenu;
+import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.control.SplitPane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
-import java.util.ArrayList;
 import java.util.List;
 
-/** Geometry/cross-section pane with a shared scrub-bar interaction model and a true z-axis viewport. */
-public class GeometryPane extends CanvasWorkbenchPane {
-    private static final double PAD_LEFT = 28;
-    private static final double PAD_TOP = 8;
-    private static final double PAD_BOTTOM = 20;
-    private static final double PAD_RIGHT = 8;
-    private static final double SCRUB_GAP = 8;
-    private static final double SCRUB_WIDTH = 12;
+/**
+ * Geometry / cross-section pane (Part 8 v1).
+ *
+ * <p>Two stacked surfaces:
+ *
+ * <ol>
+ *   <li>{@link Geometry3DCanvas} on top — CAD-style 3-D viewport for the FOV,
+ *       substances, optional eigenfield overlay, and the active slicing
+ *       plane (translucent quad with a draggable origin handle).</li>
+ *   <li>A 2-D heatmap below — renders the cells of {@link GeometryShadingSnapshot}
+ *       in the plane's own (u, v) basis. The horizontal axis is {@code u},
+ *       the vertical axis is {@code v}; both in metres in the lab frame.</li>
+ * </ol>
+ *
+ * <p>The toolbar carries canonical camera-view buttons (+X / +Y / +Z / ISO)
+ * and plane-normal preset buttons (⊥X / ⊥Y / ⊥Z). Snapping (NV centres + axes)
+ * lives in the 3-D canvas itself.
+ */
+public class GeometryPane extends WorkbenchPane {
 
-    private final AxisScrubBar.Interaction zRangeInteraction;
-    private IsochromatId draggingId;
-    private double dragOffsetR;
-    private double dragOffsetZ;
-    private boolean draggingReference;
-    private boolean hoveringPlot;
-    private double hoveredR;
-    private double hoveredZ;
+    private static final double PAD_LEFT = 36;
+    private static final double PAD_TOP = 8;
+    private static final double PAD_BOTTOM = 22;
+    private static final double PAD_RIGHT = 10;
+
+    private final Geometry3DCanvas editor = new Geometry3DCanvas();
+    private final Canvas heatmap = new Canvas(600, 240);
 
     public GeometryPane(PaneContext paneContext) {
         super(paneContext);
         setPaneTitle("Geometry");
 
-        var colourMenu = MagnetisationColouringControls.newMenuButton(paneContext.session().colouring);
+        var session = paneContext.session();
+
+        // Wire the 3-D editor.
+        editor.simulationProperty().bind(session.document.simulation);
+        editor.planeProperty().bindBidirectional(session.geometry.slicePlane);
+
+        // Toolbar.
         var labels = new CheckBox("Labels");
-        labels.selectedProperty().bindBidirectional(paneContext.session().geometry.showLabels);
-        setToolNodes(colourMenu, labels);
+        labels.selectedProperty().bindBidirectional(session.geometry.showLabels);
+        var colourMenu = MagnetisationColouringControls.newMenuButton(session.colouring);
+        var toolbar = buildToolbar(labels, colourMenu);
+        setToolNodes(toolbar);
 
-        var geometry = paneContext.session().geometry;
-        zRangeInteraction = new AxisScrubBar.Interaction(
-            AxisScrubBar.Orientation.VERTICAL,
-            AxisScrubBar.WindowModel.of(
-                this::zDomainStart, this::zDomainEnd,
-                geometry::visibleStart, geometry::visibleEnd,
-                (start, end) -> geometry.setVisibleRange(start, end, zDomainStart(), zDomainEnd()),
-                (anchor, factor) -> geometry.zoomVisibleRangeAround(anchor, factor, zDomainStart(), zDomainEnd()),
-                () -> geometry.fitVisibleRange(zDomainStart(), zDomainEnd()),
-                "Zoom Out Z Axis"
-            )
-        );
+        // Vertical split: 3-D editor on top, heatmap below.
+        heatmap.widthProperty().addListener((obs, o, n) -> redrawHeatmap());
+        heatmap.heightProperty().addListener((obs, o, n) -> redrawHeatmap());
+        var heatHolder = new javafx.scene.layout.StackPane(heatmap);
+        heatmap.widthProperty().bind(heatHolder.widthProperty());
+        heatmap.heightProperty().bind(heatHolder.heightProperty());
 
-        bindRedraw(
-            paneContext.session().document.simulationOutput,
-            paneContext.session().document.currentPulse,
-            paneContext.session().viewport.tC,
-            paneContext.session().points.entries,
-            paneContext.session().selection.selectedIds,
-            paneContext.session().geometry.halfHeight,
-            paneContext.session().geometry.zCenter,
-            paneContext.session().colouring.hueSource,
-            paneContext.session().colouring.brightnessSource,
-            paneContext.session().geometry.showLabels,
-            paneContext.session().geometry.showSliceOverlay,
-            paneContext.session().geometry.shadingSnapshot,
-            paneContext.session().geometry.shadingComputing,
-            paneContext.session().geometry.statusMessage,
-            paneContext.session().reference.enabled,
-            paneContext.session().reference.r,
-            paneContext.session().reference.z,
-            paneContext.session().reference.trajectory
-        );
+        var split = new SplitPane();
+        split.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        split.getItems().setAll(editor, heatHolder);
+        split.setDividerPositions(0.55);
 
-        canvas.setOnMousePressed(event -> {
-            if (event.isSecondaryButtonDown()) return;
-            if (zRangeInteraction.handlePress(scrubBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateCursor(event.getX(), event.getY());
-                updateStatus(event.getX(), event.getY());
-                scheduleRedraw();
-                return;
-            }
+        setPaneContent(split);
 
-            if (referenceHandleContains(event.getX(), event.getY())) {
-                draggingReference = true;
-                var rz = screenToRz(event.getX(), event.getY());
-                paneContext.session().reference.moveTo(rz[0], rz[1]);
-                updateHover(event.getX(), event.getY());
-                updateCursor(event.getX(), event.getY());
-                updateStatus(event.getX(), event.getY());
-                return;
-            }
+        // Redraw triggers.
+        InvalidationListener redraw = obs -> redrawHeatmap();
+        session.geometry.shadingSnapshot.addListener(redraw);
+        session.geometry.shadingComputing.addListener(redraw);
+        session.geometry.statusMessage.addListener(redraw);
+        session.geometry.slicePlane.addListener(redraw);
+        session.colouring.hueSource.addListener(redraw);
+        session.colouring.brightnessSource.addListener(redraw);
+        session.points.entries.addListener((InvalidationListener) obs -> redrawHeatmap());
+        session.selection.selectedIds.addListener(redraw);
+        session.timeAxis.cursor.time.addListener(redraw);
+        session.geometry.showLabels.addListener(redraw);
+        session.document.simulation.addListener(redraw);
+        session.document.currentPulse.addListener(redraw);
 
-            var entry = findEntry(event.getX(), event.getY());
-            if (entry != null) {
-                paneContext.session().selection.setSingle(entry.id());
-                if (!entry.locked()) {
-                    draggingId = entry.id();
-                    var rz = screenToRz(event.getX(), event.getY());
-                    dragOffsetR = entry.r() - rz[0];
-                    dragOffsetZ = entry.z() - rz[1];
-                }
-            } else if (plotBounds().contains(event.getX(), event.getY())) {
-                paneContext.session().selection.clear();
-            }
+        heatmap.setOnMouseMoved(this::onHeatmapHover);
+        heatmap.setOnMouseExited(e -> setPaneStatus(""));
+        heatmap.setOnMousePressed(this::onHeatmapClick);
+        heatmap.setOnContextMenuRequested(e -> {
+            var menu = buildHeatmapMenu(e.getX(), e.getY());
+            showCanvasContextMenu(menu, e.getScreenX(), e.getScreenY());
         });
-        canvas.setOnMouseDragged(event -> {
-            if (zRangeInteraction.handleDrag(scrubBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateCursor(event.getX(), event.getY());
-                updateStatus(event.getX(), event.getY());
-                scheduleRedraw();
-                return;
-            }
-            if (draggingReference) {
-                var rz = screenToRz(event.getX(), event.getY());
-                paneContext.session().reference.moveTo(rz[0], rz[1]);
-            }
-            if (draggingId != null) {
-                var rz = screenToRz(event.getX(), event.getY());
-                paneContext.session().points.move(draggingId, Math.max(0, rz[0] + dragOffsetR), rz[1] + dragOffsetZ);
-            }
-            updateHover(event.getX(), event.getY());
-            updateCursor(event.getX(), event.getY());
-            updateStatus(event.getX(), event.getY());
-        });
-        canvas.setOnMouseReleased(event -> {
-            draggingId = null;
-            draggingReference = false;
-            zRangeInteraction.handleRelease();
-        });
-        canvas.setOnMouseMoved(event -> {
-            updateHover(event.getX(), event.getY());
-            updateCursor(event.getX(), event.getY());
-            updateStatus(event.getX(), event.getY());
-        });
-        canvas.setOnMouseExited(event -> {
-            hoveringPlot = false;
-            updateCursor(-1, -1);
-            scheduleRedraw();
-        });
-        canvas.setOnScroll(event -> {
-            if (zRangeInteraction.handleScroll(scrubBounds(), event)) {
-                updateStatus(event.getX(), event.getY());
-                scheduleRedraw();
-                return;
-            }
-            if (plotBounds().contains(event.getX(), event.getY())) {
-                paneContext.session().geometry.zoomVisibleRangeAround(
-                    screenToRz(event.getX(), event.getY())[1],
-                    event.getDeltaY() > 0 ? 0.85 : 1.18,
-                    zDomainStart(),
-                    zDomainEnd()
-                );
-            }
-        });
-        canvas.setOnContextMenuRequested(event -> {
-            ContextMenu menu;
-            if (scrubBounds().contains(event.getX(), event.getY())) {
-                menu = buildZRangeMenu();
-            } else if (referenceHandleContains(event.getX(), event.getY())) {
-                menu = buildReferenceMenu();
-            } else {
-                var entry = findEntry(event.getX(), event.getY());
-                menu = entry != null ? buildEntryMenu(entry) : buildBackgroundMenu(event.getX(), event.getY());
-            }
-            showCanvasContextMenu(menu, event.getScreenX(), event.getScreenY());
-        });
+
+        redrawHeatmap();
     }
 
-    @Override
-    protected void paint(javafx.scene.canvas.GraphicsContext g, double width, double height) {
+    /* ── Toolbar ─────────────────────────────────────────────────────── */
+
+    private HBox buildToolbar(CheckBox labels, javafx.scene.Node colourMenu) {
+        var session = paneContext.session();
+        // Camera-view group.
+        var iso = btn("ISO", e -> editor.setIsoView(), "Iso 3-D camera");
+        var px = btn("+X", e -> editor.setPlusXView(), "Camera looking down +X");
+        var py = btn("+Y", e -> editor.setPlusYView(), "Camera looking down +Y");
+        var pz = btn("+Z", e -> editor.setPlusZView(), "Camera looking down +Z");
+
+        // Plane-normal group.
+        var perpX = btn("⊥X", e -> session.geometry.slicePlane.set(SlicePlane.axisX()),
+            "Slice plane perpendicular to X");
+        var perpY = btn("⊥Y", e -> session.geometry.slicePlane.set(SlicePlane.axisY()),
+            "Slice plane perpendicular to Y");
+        var perpZ = btn("⊥Z", e -> session.geometry.slicePlane.set(SlicePlane.axisZ()),
+            "Slice plane perpendicular to Z");
+
+        var snap = btn("Snap", e -> editor.snapPlaneNormalToAxis(8),
+            "Snap plane normal to nearest principal axis");
+        var reset = btn("Reset", e -> {
+            session.geometry.slicePlane.set(SlicePlane.axisY());
+            editor.resetView();
+        }, "Reset plane to y=0 and camera to ISO");
+
+        var spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        var cameraGroup = new HBox(2, iso, px, py, pz);
+        var planeGroup  = new HBox(2, perpX, perpY, perpZ);
+        var sep1 = new javafx.scene.control.Separator(javafx.geometry.Orientation.VERTICAL);
+        var sep2 = new javafx.scene.control.Separator(javafx.geometry.Orientation.VERTICAL);
+        var bar = new HBox(6, cameraGroup, sep1, planeGroup, sep2, snap, reset, spacer, colourMenu, labels);
+        bar.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        bar.getStyleClass().add("shell-tool-strip");
+        return bar;
+    }
+
+    private static Button btn(String label, javafx.event.EventHandler<javafx.event.ActionEvent> handler, String tooltip) {
+        var b = new Button(label);
+        b.setOnAction(handler);
+        b.setStyle("-fx-font-size: 10; -fx-padding: 2 6 2 6;");
+        b.setMinWidth(Region.USE_PREF_SIZE);  // prevent ellipsis collapse
+        if (tooltip != null) b.setTooltip(new javafx.scene.control.Tooltip(tooltip));
+        return b;
+    }
+
+    /* ── Heatmap rendering ──────────────────────────────────────────── */
+
+    private void redrawHeatmap() {
+        double w = heatmap.getWidth();
+        double h = heatmap.getHeight();
+        if (w <= 0 || h <= 0) return;
+        GraphicsContext g = heatmap.getGraphicsContext2D();
         g.setFill(StudioTheme.BG);
-        g.fillRect(0, 0, width, height);
+        g.fillRect(0, 0, w, h);
 
-        var data = paneContext.session().document.simulationOutput.get();
-        var pulse = paneContext.session().document.currentPulse.get();
-        if (data == null || pulse == null || data.field() == null) return;
+        var session = paneContext.session();
+        var sim = session.document.simulation.get();
+        var pulse = session.document.currentPulse.get();
+        if (sim == null || pulse == null) return;
 
-        var field = data.field();
-        double rMax = field.rMm[field.rMm.length - 1];
-        double zMin = paneContext.session().geometry.visibleStart();
-        double zMax = paneContext.session().geometry.visibleEnd();
-        double plotWidth = plotWidth(width);
-        double plotHeight = plotHeight(height);
-        if (plotWidth <= 0 || plotHeight <= 0) return;
+        boolean continuumPresent = sim.primaryContinuousMagnetisation() != null;
+        double plotWidth = Math.max(1, w - PAD_LEFT - PAD_RIGHT);
+        double plotHeight = Math.max(1, h - PAD_TOP - PAD_BOTTOM);
 
+        if (!continuumPresent) {
+            // No continuous-magnetisation substance — the per-voxel sweep
+            // would have nothing to draw. Tell the user.
+            g.save();
+            g.setFill(Color.color(0.55, 0.58, 0.62, 0.9));
+            g.setFont(StudioTheme.UI_8);
+            g.setTextAlign(TextAlignment.CENTER);
+            double cx = PAD_LEFT + plotWidth / 2;
+            double cy = PAD_TOP + plotHeight / 2;
+            g.fillText("No continuous-magnetisation substance in the FOV.", cx, cy - 6);
+            g.fillText("Slice heatmap shows static B-field geometry only.", cx, cy + 8);
+            g.restore();
+            g.setTextAlign(TextAlignment.LEFT);
+            drawAxesLabels(g, w, h);
+            return;
+        }
+
+        var snapshot = session.geometry.shadingSnapshot.get();
         boolean signalProjectionAvailable = MagnetisationColouringSupport.isSignalProjectionAvailable(
-            field,
-            pulse,
-            paneContext.session().viewport.tC.get()
-        );
-        if (!paneContext.session().colouring.isOff()) {
-            var snapshot = paneContext.session().geometry.shadingSnapshot.get();
-            if (snapshot != null) {
-                drawShading(
-                    g,
-                    snapshot,
-                    paneContext.session().colouring,
-                    signalProjectionAvailable,
-                    rMax,
-                    zMin,
-                    zMax,
-                    PAD_LEFT,
-                    PAD_TOP,
-                    plotWidth,
-                    plotHeight
-                );
-            } else if (paneContext.session().geometry.shadingComputing.get()) {
-                g.setFill(Color.gray(0.2, 0.5));
-                g.fillText("Computing shading\u2026", PAD_LEFT + 8, PAD_TOP + 14);
-            }
+            sim.segments(), pulse, session.timeAxis.cursor.time.get());
+
+        if (snapshot != null && !session.colouring.isOff()) {
+            drawShading(g, snapshot, session.colouring, signalProjectionAvailable, plotWidth, plotHeight);
+        } else if (snapshot == null && session.geometry.shadingComputing.get()) {
+            g.setFill(Color.gray(0.2, 0.5));
+            g.fillText("Computing shading…", PAD_LEFT + 8, PAD_TOP + 14);
         }
 
-        if (paneContext.session().geometry.showSliceOverlay.get()) {
-            double sliceHalf = (field.sliceHalf != null ? field.sliceHalf : 0.005) * 1e3;
-            double yTop = zToPixel(sliceHalf, zMin, zMax, plotHeight);
-            double yBottom = zToPixel(-sliceHalf, zMin, zMax, plotHeight);
-            g.setFill(Color.color(0.18, 0.49, 0.2, 0.05));
-            g.fillRect(PAD_LEFT, Math.min(yTop, yBottom), plotWidth, Math.abs(yBottom - yTop));
-            g.setStroke(Color.web("#2e7d32"));
-            g.setGlobalAlpha(0.55);
-            g.setLineWidth(1);
-            g.setLineDashes(4, 3);
-            g.strokeLine(PAD_LEFT, yTop, PAD_LEFT + plotWidth, yTop);
-            g.strokeLine(PAD_LEFT, yBottom, PAD_LEFT + plotWidth, yBottom);
-            g.setLineDashes();
-            g.setFill(Color.web("#2e7d32"));
-            g.fillText("slice", PAD_LEFT + 2, (yTop + yBottom) / 2 + 3);
-            g.setGlobalAlpha(1);
+        drawAxesLabels(g, w, h);
+
+        // Project IsochromatEntries onto the plane and draw those within
+        // a slice-thickness band as filled circles.
+        var plane = session.geometry.slicePlane.get();
+        if (plane != null && snapshot != null) {
+            drawPointsOnPlane(g, plane, snapshot, plotWidth, plotHeight);
         }
-
-        drawAxes(g, rMax, zMin, zMax, plotWidth, plotHeight, height);
-
-        for (var entry : paneContext.session().points.entries) {
-            double x = rToPixel(entry.r(), rMax, plotWidth);
-            double y = zToPixel(entry.z(), zMin, zMax, plotHeight);
-            if (y < PAD_TOP - 5 || y > PAD_TOP + plotHeight + 5 || x < PAD_LEFT - 5 || x > PAD_LEFT + plotWidth + 5) continue;
-            boolean selected = paneContext.session().selection.isSelected(entry.id());
-            double radius = selected ? 5.5 : 4.2;
-            if (selected) {
-                g.setFill(Color.color(0, 0, 0, 0.10));
-                g.fillOval(x - radius - 2, y - radius - 2, (radius + 2) * 2, (radius + 2) * 2);
-            }
-            g.setFill(entry.colour());
-            g.setGlobalAlpha(entry.visible() ? 0.92 : 0.18);
-            g.fillOval(x - radius, y - radius, radius * 2, radius * 2);
-            g.setStroke(selected ? Color.BLACK : Color.color(0, 0, 0, 0.35));
-            g.setLineWidth(selected ? 1.5 : 0.9);
-            g.strokeOval(x - radius, y - radius, radius * 2, radius * 2);
-            if (paneContext.session().geometry.showLabels.get()) {
-                drawPointLabel(g, entry, x + 8, y - 8, selected);
-            }
-            g.setGlobalAlpha(1);
-        }
-
-        drawReferenceMarker(g, rMax, zMin, zMax, plotWidth, plotHeight);
-
-        if (hoveringPlot) {
-            double hoverX = rToPixel(hoveredR, rMax, plotWidth);
-            double hoverY = zToPixel(hoveredZ, zMin, zMax, plotHeight);
-            g.setStroke(Color.color(StudioTheme.AC.getRed(), StudioTheme.AC.getGreen(), StudioTheme.AC.getBlue(), 0.35));
-            g.setLineWidth(0.8);
-            g.setLineDashes(4, 3);
-            g.strokeLine(hoverX, PAD_TOP, hoverX, PAD_TOP + plotHeight);
-            g.strokeLine(PAD_LEFT, hoverY, PAD_LEFT + plotWidth, hoverY);
-            g.setLineDashes();
-            drawBadge(g, PAD_LEFT + plotWidth - 48, PAD_TOP + 4, String.format("z=%.1f mm", hoveredZ), StudioTheme.AC);
-        }
-
-        AxisScrubBar.draw(
-            g,
-            scrubBounds(plotWidth, plotHeight),
-            AxisScrubBar.Spec.vertical(
-                zDomainStart(),
-                zDomainEnd(),
-                zMin,
-                zMax,
-                sliceSpans(),
-                List.of()
-            )
-        );
-        drawBadge(
-            g,
-            PAD_LEFT + plotWidth - 36,
-            PAD_TOP + plotHeight - 18,
-            String.format("[%.0f, %.0f] mm", zMin, zMax),
-            Color.web("#1565c0")
-        );
     }
 
-    private void drawAxes(
-        javafx.scene.canvas.GraphicsContext g,
-        double rMax,
-        double zMin,
-        double zMax,
+    private void drawShading(
+        GraphicsContext g,
+        GeometryShadingSnapshot snapshot,
+        MagnetisationColouringViewModel colouring,
+        boolean signalProjectionAvailable,
         double plotWidth,
-        double plotHeight,
-        double totalHeight
+        double plotHeight
     ) {
-        g.setStroke(Color.color(0, 0, 0, 0.2));
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
+        if (us.isEmpty() || vs.isEmpty()) return;
+        double uMin = us.get(0), uMax = us.get(us.size() - 1);
+        double vMin = vs.get(0), vMax = vs.get(vs.size() - 1);
+        double uSpan = Math.max(1e-30, uMax - uMin);
+        double vSpan = Math.max(1e-30, vMax - vMin);
+
+        for (int i = 0; i < us.size(); i++) {
+            double u0 = us.get(i);
+            double uPrev = i > 0 ? 0.5 * (us.get(i - 1) + u0) : uMin;
+            double uNext = i < us.size() - 1 ? 0.5 * (u0 + us.get(i + 1)) : uMax;
+            double x0 = PAD_LEFT + (uPrev - uMin) / uSpan * plotWidth;
+            double x1 = PAD_LEFT + (uNext - uMin) / uSpan * plotWidth;
+            for (int j = 0; j < vs.size(); j++) {
+                double v0 = vs.get(j);
+                double vPrev = j > 0 ? 0.5 * (vs.get(j - 1) + v0) : vMin;
+                double vNext = j < vs.size() - 1 ? 0.5 * (v0 + vs.get(j + 1)) : vMax;
+                // v ↑ on screen → flip y.
+                double y1 = PAD_TOP + plotHeight * (1 - (vPrev - vMin) / vSpan);
+                double y0 = PAD_TOP + plotHeight * (1 - (vNext - vMin) / vSpan);
+                var cell = snapshot.cells()[i][j];
+                var fill = shadingColour(colouring, cell, signalProjectionAvailable);
+                if (fill == null) continue;
+                g.setFill(fill);
+                g.fillRect(Math.min(x0, x1), Math.min(y0, y1),
+                    Math.abs(x1 - x0) + 1, Math.abs(y1 - y0) + 1);
+            }
+        }
+    }
+
+    private void drawAxesLabels(GraphicsContext g, double width, double height) {
+        var snapshot = paneContext.session().geometry.shadingSnapshot.get();
+        var plane = paneContext.session().geometry.slicePlane.get();
+        g.setStroke(Color.color(0, 0, 0, 0.20));
         g.setLineWidth(0.5);
-        g.beginPath();
-        g.moveTo(PAD_LEFT, PAD_TOP);
-        g.lineTo(PAD_LEFT, PAD_TOP + plotHeight);
-        g.lineTo(PAD_LEFT + plotWidth, PAD_TOP + plotHeight);
-        g.stroke();
+        double plotWidth = Math.max(1, width - PAD_LEFT - PAD_RIGHT);
+        double plotHeight = Math.max(1, height - PAD_TOP - PAD_BOTTOM);
+        g.strokeLine(PAD_LEFT, PAD_TOP, PAD_LEFT, PAD_TOP + plotHeight);
+        g.strokeLine(PAD_LEFT, PAD_TOP + plotHeight, PAD_LEFT + plotWidth, PAD_TOP + plotHeight);
 
         g.setFill(StudioTheme.TX2);
-        g.setFont(StudioTheme.UI_7);
-        g.setTextAlign(TextAlignment.RIGHT);
-        for (double z = niceStart(zMin, niceZTick(zMax - zMin)); z <= zMax + 1e-6; z += niceZTick(zMax - zMin)) {
-            double y = zToPixel(z, zMin, zMax, plotHeight);
-            if (y < PAD_TOP + 2 || y > PAD_TOP + plotHeight - 2) continue;
-            g.fillText(String.valueOf((int) Math.round(z)), PAD_LEFT - 3, y + 3);
-            g.setStroke(Color.color(0, 0, 0, 0.06));
-            g.setLineWidth(0.3);
-            g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
-        }
+        g.setFont(StudioTheme.UI_BOLD_7);
+        g.setGlobalAlpha(0.7);
 
+        String uLabel = "U", vLabel = "V", unitU = "MM", unitV = "MM";
+        if (snapshot != null && !snapshot.uMetres().isEmpty() && !snapshot.vMetres().isEmpty()) {
+            double uExtent = Math.max(
+                Math.abs(snapshot.uMetres().get(0)),
+                Math.abs(snapshot.uMetres().get(snapshot.uMetres().size() - 1)));
+            double vExtent = Math.max(
+                Math.abs(snapshot.vMetres().get(0)),
+                Math.abs(snapshot.vMetres().get(snapshot.vMetres().size() - 1)));
+            unitU = pickUnitSuffix(uExtent);
+            unitV = pickUnitSuffix(vExtent);
+            if (plane != null) {
+                uLabel = "U  (" + describeAxis(plane.u()) + ")";
+                vLabel = "V  (" + describeAxis(plane.v()) + ")";
+            }
+        }
         g.setTextAlign(TextAlignment.CENTER);
-        int rTickStep = rMax > 60 ? 20 : rMax > 30 ? 10 : 5;
-        for (double r = 0; r <= rMax + 1e-6; r += rTickStep) {
-            double x = rToPixel(r, rMax, plotWidth);
-            if (x < PAD_LEFT + 2 || x > PAD_LEFT + plotWidth - 2) continue;
-            g.fillText(String.valueOf((int) r), x, PAD_TOP + plotHeight + 11);
+        g.fillText(uLabel + " [" + unitU + "]", PAD_LEFT + plotWidth / 2, height - 4);
+        g.save();
+        g.translate(10, PAD_TOP + plotHeight / 2);
+        g.rotate(-90);
+        g.fillText(vLabel + " [" + unitV + "]", 0, 0);
+        g.restore();
+        g.setTextAlign(TextAlignment.LEFT);
+        g.setGlobalAlpha(1);
+
+        // Tick labels — 5 ticks per axis.
+        if (snapshot != null && !snapshot.uMetres().isEmpty()) {
+            drawTicksU(g, snapshot, plotWidth, plotHeight, unitU);
+            drawTicksV(g, snapshot, plotWidth, plotHeight, unitV);
+        }
+    }
+
+    private void drawTicksU(GraphicsContext g, GeometryShadingSnapshot snapshot,
+                            double plotWidth, double plotHeight, String unit) {
+        var us = snapshot.uMetres();
+        double uMin = us.get(0), uMax = us.get(us.size() - 1);
+        double uSpan = Math.max(1e-30, uMax - uMin);
+        double scale = unitScale(unit);
+        g.setTextAlign(TextAlignment.CENTER);
+        g.setFill(StudioTheme.TX2);
+        g.setFont(StudioTheme.UI_7);
+        for (int t = 0; t <= 4; t++) {
+            double u = uMin + uSpan * t / 4.0;
+            double x = PAD_LEFT + (u - uMin) / uSpan * plotWidth;
+            g.fillText(String.format("%.1f", u * scale), x, PAD_TOP + plotHeight + 12);
             g.setStroke(Color.color(0, 0, 0, 0.06));
             g.setLineWidth(0.3);
             g.strokeLine(x, PAD_TOP, x, PAD_TOP + plotHeight);
         }
-
-        g.setFill(StudioTheme.TX2);
-        g.setFont(StudioTheme.UI_BOLD_7);
-        g.setGlobalAlpha(0.6);
-        g.fillText("r [mm]", PAD_LEFT + plotWidth / 2, totalHeight - 2);
-        g.save();
-        g.translate(8, PAD_TOP + plotHeight / 2);
-        g.rotate(-90);
-        g.fillText("z [mm]", 0, 0);
-        g.restore();
-        g.setGlobalAlpha(1);
         g.setTextAlign(TextAlignment.LEFT);
     }
 
-    private void drawPointLabel(javafx.scene.canvas.GraphicsContext g, IsochromatEntry entry, double x, double y, boolean selected) {
-        double width = Math.max(42, entry.name().length() * 5.0 + 10);
-        g.setFill(Color.color(1, 1, 1, selected ? 0.85 : 0.72));
-        g.fillRoundRect(x - 3, y - 10, width, 12, 5, 5);
-        g.setStroke(Color.color(entry.colour().getRed(), entry.colour().getGreen(), entry.colour().getBlue(), selected ? 0.55 : 0.28));
-        g.setLineWidth(selected ? 0.9 : 0.6);
-        g.strokeRoundRect(x - 3, y - 10, width, 12, 5, 5);
-        g.setFill(StudioTheme.TX);
+    private void drawTicksV(GraphicsContext g, GeometryShadingSnapshot snapshot,
+                            double plotWidth, double plotHeight, String unit) {
+        var vs = snapshot.vMetres();
+        double vMin = vs.get(0), vMax = vs.get(vs.size() - 1);
+        double vSpan = Math.max(1e-30, vMax - vMin);
+        double scale = unitScale(unit);
+        g.setTextAlign(TextAlignment.RIGHT);
+        g.setFill(StudioTheme.TX2);
         g.setFont(StudioTheme.UI_7);
-        g.fillText(entry.name(), x + 2, y - 1.5);
+        for (int t = 0; t <= 4; t++) {
+            double v = vMin + vSpan * t / 4.0;
+            double y = PAD_TOP + plotHeight * (1 - (v - vMin) / vSpan);
+            g.fillText(String.format("%.1f", v * scale), PAD_LEFT - 4, y + 3);
+            g.setStroke(Color.color(0, 0, 0, 0.06));
+            g.setLineWidth(0.3);
+            g.strokeLine(PAD_LEFT, y, PAD_LEFT + plotWidth, y);
+        }
+        g.setTextAlign(TextAlignment.LEFT);
     }
 
-    private void drawShading(
-        javafx.scene.canvas.GraphicsContext g,
-        GeometryShadingSnapshot snapshot,
-        MagnetisationColouringViewModel colouring,
-        boolean signalProjectionAvailable,
-        double rMax,
-        double zMin,
-        double zMax,
-        double padLeft,
-        double padTop,
-        double plotWidth,
-        double plotHeight
+    private void drawPointsOnPlane(
+        GraphicsContext g, SlicePlane plane, GeometryShadingSnapshot snapshot,
+        double plotWidth, double plotHeight
     ) {
-        g.save();
-        g.beginPath();
-        g.rect(padLeft, padTop, plotWidth, plotHeight);
-        g.clip();
-        int radialSamples = snapshot.cells().length;
-        int zCount = snapshot.zSamples().size();
-        for (int radialIndex = 0; radialIndex < radialSamples; radialIndex++) {
-            double r0 = (double) radialIndex / (radialSamples - 1) * rMax;
-            double r1 = radialIndex < radialSamples - 1
-                ? (double) (radialIndex + 1) / (radialSamples - 1) * rMax
-                : rMax;
-            double x0 = padLeft + (r0 / rMax) * plotWidth;
-            double x1 = radialIndex < radialSamples - 1
-                ? padLeft + (r1 / rMax) * plotWidth
-                : padLeft + plotWidth;
-            for (int zIndex = 0; zIndex < zCount; zIndex++) {
-                double z0 = snapshot.zSamples().get(zIndex);
-                double zPrev = zIndex > 0 ? 0.5 * (snapshot.zSamples().get(zIndex - 1) + z0) : z0;
-                double zNext = zIndex < zCount - 1 ? 0.5 * (z0 + snapshot.zSamples().get(zIndex + 1)) : z0;
-                double zTop = zIndex < zCount - 1 ? zNext : z0 + (z0 - zPrev);
-                double zBottom = zIndex > 0 ? zPrev : z0 - (zNext - z0);
-                if (zTop < zMin || zBottom > zMax) continue;
-                var cell = snapshot.cells()[radialIndex][zIndex];
-                double y0 = padTop + plotHeight * (1 - (Math.min(zTop, zMax) - zMin) / (zMax - zMin));
-                double y1 = padTop + plotHeight * (1 - (Math.max(zBottom, zMin) - zMin) / (zMax - zMin));
-                Color fill = shadingColour(colouring, cell, signalProjectionAvailable);
-                if (fill == null) continue;
-                g.setFill(fill);
-                g.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) + 1, Math.abs(y1 - y0) + 1);
+        var session = paneContext.session();
+        var sim = session.document.simulation.get();
+        if (sim == null) return;
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
+        if (us.isEmpty() || vs.isEmpty()) return;
+        double uMin = us.get(0), uMax = us.get(us.size() - 1);
+        double vMin = vs.get(0), vMax = vs.get(vs.size() - 1);
+        double uSpan = Math.max(1e-30, uMax - uMin);
+        double vSpan = Math.max(1e-30, vMax - vMin);
+        // Off-plane points fade with distance from the plane, scaled to the
+        // substance bounding-box diagonal so a 1 µm box's NV centres at
+        // z=-50 nm fade similarly to a 30 mm box's isochromat 2 mm off the
+        // plane.
+        double hx = 0, hy = 0, hz = 0;
+        for (var s : sim.substances()) {
+            var hv = s.halfExtent();
+            hx = Math.max(hx, hv.x());
+            hy = Math.max(hy, hv.y());
+            hz = Math.max(hz, hv.z());
+        }
+        double fovDiag = Math.max(1e-30, Math.sqrt(hx * hx + hy * hy + hz * hz));
+
+        for (var entry : session.points.entries) {
+            if (!entry.visible()) continue;
+            var p = entry.position();
+            double d = plane.signedDistance(p);
+            // Project onto plane and compute (u, v).
+            var proj = plane.project(p);
+            var rel = proj.minus(plane.origin());
+            double uCoord = rel.dot(plane.u());
+            double vCoord = rel.dot(plane.v());
+            if (uCoord < uMin || uCoord > uMax || vCoord < vMin || vCoord > vMax) continue;
+            double sx = PAD_LEFT + (uCoord - uMin) / uSpan * plotWidth;
+            double sy = PAD_TOP + plotHeight * (1 - (vCoord - vMin) / vSpan);
+            // Fade off-plane: opacity 1.0 on the plane → 0.2 at half FOV diagonal.
+            double depthFraction = Math.min(1.0, Math.abs(d) / Math.max(1e-30, fovDiag));
+            double depthOpacity = MathUtil.clamp(1.0 - 0.8 * depthFraction, 0.2, 1.0);
+            boolean selected = session.selection.isSelected(entry.id());
+            double radius = selected ? 5.0 : 4.0;
+            g.setGlobalAlpha(depthOpacity);
+            g.setFill(entry.colour());
+            g.fillOval(sx - radius, sy - radius, 2 * radius, 2 * radius);
+            g.setStroke(selected ? Color.BLACK : Color.color(0, 0, 0, 0.4));
+            g.setLineWidth(selected ? 1.4 : 0.8);
+            g.strokeOval(sx - radius, sy - radius, 2 * radius, 2 * radius);
+            if (session.geometry.showLabels.get()) {
+                g.setFill(StudioTheme.TX);
+                g.setFont(StudioTheme.UI_7);
+                g.fillText(entry.name(), sx + 7, sy - 5);
             }
+            g.setGlobalAlpha(1.0);
         }
-        g.restore();
     }
 
-    private void updateStatus(double mouseX, double mouseY) {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) {
-            setPaneStatus("No geometry loaded");
-            return;
-        }
-        if (scrubBounds().contains(mouseX, mouseY)) {
-            String colouringSuffix = " | " + paneContext.session().colouring.statusLabel();
-            setPaneStatus(String.format(
-                "z view=[%.1f, %.1f] mm | double-click to zoom out%s%s",
-                paneContext.session().geometry.visibleStart(),
-                paneContext.session().geometry.visibleEnd(),
-                referenceSuffix(),
-                colouringSuffix
-            ));
-            return;
-        }
-        var rz = screenToRz(mouseX, mouseY);
-        long visible = paneContext.session().points.entries.stream().filter(IsochromatEntry::visible).count();
-        boolean signalProjectionAvailable = MagnetisationColouringSupport.isSignalProjectionAvailable(
-            data.field(),
-            paneContext.session().document.currentPulse.get(),
-            paneContext.session().viewport.tC.get()
-        );
-        StringBuilder suffix = new StringBuilder();
-        suffix.append(" | ").append(paneContext.session().colouring.statusLabel());
-        if (MagnetisationColouringSupport.isSignalProjectionFallbackActive(
-            paneContext.session().colouring.brightnessSource.get(),
-            signalProjectionAvailable
-        )) {
-            suffix.append(" | RF: using excitation brightness");
-        }
-        String statusMessage = paneContext.session().geometry.statusMessage.get();
-        if (statusMessage != null && !statusMessage.isBlank()) {
-            suffix.append(" | ").append(statusMessage);
-        }
-        setPaneStatus(String.format(
-            "r=%.1f z=%.1f mm | %d points (%d visible)%s%s",
-            rz[0],
-            rz[1],
-            paneContext.session().points.entries.size(),
-            visible,
-            referenceSuffix(),
-            suffix
-        ));
-    }
-
-    private ContextMenu buildBackgroundMenu(double mouseX, double mouseY) {
-        var rz = screenToRz(mouseX, mouseY);
-        var menu = new ContextMenu();
-        var add = new MenuItem(String.format("Add Point (r=%.1f, z=%.1f)", rz[0], rz[1]));
-        add.setOnAction(event -> paneContext.session().points.addUserPoint(rz[0], rz[1], String.format("r=%.1f z=%.1f", rz[0], rz[1])));
-        var setBasis = new MenuItem(String.format("Set Basis Frame Here (r=%.1f, z=%.1f)", rz[0], rz[1]));
-        setBasis.setOnAction(event -> paneContext.session().reference.setReference(rz[0], rz[1]));
-        var clearBasis = new MenuItem("Clear Basis Frame");
-        clearBasis.setDisable(!paneContext.session().reference.enabled.get());
-        clearBasis.setOnAction(event -> paneContext.session().reference.clear());
-        var resetDefaults = new MenuItem("Reset Defaults");
-        resetDefaults.setOnAction(event -> paneContext.session().points.resetToDefaults());
-        var clearUser = new MenuItem("Clear User Points");
-        clearUser.setOnAction(event -> paneContext.session().points.clearUserPoints());
-        menu.getItems().addAll(
-            add,
-            setBasis,
-            clearBasis,
-            new SeparatorMenuItem(),
-            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
-            new SeparatorMenuItem(),
-            zRangeInteraction.newResetMenuItem(),
-            new SeparatorMenuItem(),
-            resetDefaults,
-            clearUser
-        );
-        return menu;
-    }
-
-    private ContextMenu buildZRangeMenu() {
-        var menu = new ContextMenu();
-        var label = new MenuItem("Z Axis");
-        label.setDisable(true);
-        var centreSlice = new MenuItem("Centre on Slice");
-        centreSlice.setOnAction(event -> paneContext.session().geometry.setVisibleRange(
-            -paneContext.session().geometry.halfHeight.get(),
-            paneContext.session().geometry.halfHeight.get(),
-            zDomainStart(),
-            zDomainEnd()
-        ));
-        menu.getItems().addAll(
-            label,
-            new SeparatorMenuItem(),
-            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
-            new SeparatorMenuItem(),
-            zRangeInteraction.newResetMenuItem(),
-            centreSlice
-        );
-        return menu;
-    }
-
-    private ContextMenu buildEntryMenu(IsochromatEntry entry) {
-        var menu = new ContextMenu();
-        var selectOnly = new MenuItem("Select Only");
-        selectOnly.setOnAction(event -> paneContext.session().selection.setSingle(entry.id()));
-        var useAsBasis = new MenuItem("Use As Basis Frame");
-        useAsBasis.setOnAction(event -> paneContext.session().reference.setReference(entry.r(), entry.z()));
-        var toggle = new MenuItem(entry.visible() ? "Hide" : "Show");
-        toggle.setOnAction(event -> paneContext.session().points.toggleVisibility(entry.id()));
-        var duplicate = new MenuItem("Duplicate");
-        duplicate.setOnAction(event -> {
-            paneContext.session().selection.setSingle(entry.id());
-            paneContext.session().points.duplicateSelected();
-        });
-        var lock = new MenuItem(entry.locked() ? "Unlock" : "Lock");
-        lock.setOnAction(event -> paneContext.session().points.setLocked(entry.id(), !entry.locked()));
-        var delete = new MenuItem("Delete");
-        delete.setOnAction(event -> paneContext.session().points.remove(entry.id()));
-        menu.getItems().addAll(
-            selectOnly,
-            useAsBasis,
-            toggle,
-            duplicate,
-            lock,
-            new SeparatorMenuItem(),
-            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
-            new SeparatorMenuItem(),
-            delete,
-            new SeparatorMenuItem(),
-            zRangeInteraction.newResetMenuItem()
-        );
-        return menu;
-    }
-
-    private ContextMenu buildReferenceMenu() {
-        var reference = paneContext.session().reference;
-        var menu = new ContextMenu();
-        var label = new MenuItem(String.format("Basis Frame (r=%.1f, z=%.1f)", reference.r.get(), reference.z.get()));
-        label.setDisable(true);
-        var clear = new MenuItem("Clear Basis Frame");
-        clear.setOnAction(event -> reference.clear());
-        menu.getItems().addAll(
-            label,
-            new SeparatorMenuItem(),
-            MagnetisationColouringControls.newMenu(paneContext.session().colouring),
-            clear,
-            new SeparatorMenuItem(),
-            zRangeInteraction.newResetMenuItem()
-        );
-        return menu;
-    }
-
-    private IsochromatEntry findEntry(double mouseX, double mouseY) {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null || !plotBounds().contains(mouseX, mouseY)) return null;
-        double rMax = data.field().rMm[data.field().rMm.length - 1];
-        double plotWidth = plotWidth(canvas.getWidth());
-        double plotHeight = plotHeight(canvas.getHeight());
-        double zMin = paneContext.session().geometry.visibleStart();
-        double zMax = paneContext.session().geometry.visibleEnd();
-
+    private void onHeatmapClick(javafx.scene.input.MouseEvent e) {
+        if (e.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
+        var session = paneContext.session();
+        var snapshot = session.geometry.shadingSnapshot.get();
+        var plane = session.geometry.slicePlane.get();
+        if (snapshot == null || plane == null) return;
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
+        if (us.isEmpty() || vs.isEmpty()) return;
+        double plotWidth = Math.max(1, heatmap.getWidth() - PAD_LEFT - PAD_RIGHT);
+        double plotHeight = Math.max(1, heatmap.getHeight() - PAD_TOP - PAD_BOTTOM);
+        double uMin = us.get(0), uMax = us.get(us.size() - 1);
+        double vMin = vs.get(0), vMax = vs.get(vs.size() - 1);
+        double uSpan = Math.max(1e-30, uMax - uMin);
+        double vSpan = Math.max(1e-30, vMax - vMin);
+        // Hit-test every projected point; pick the nearest within 12 px.
         IsochromatEntry best = null;
-        double bestDistance = Double.MAX_VALUE;
-        for (var entry : paneContext.session().points.entries) {
-            double x = rToPixel(entry.r(), rMax, plotWidth);
-            double y = zToPixel(entry.z(), zMin, zMax, plotHeight);
-            double distance = Math.hypot(mouseX - x, mouseY - y);
-            if (distance < 10 && distance < bestDistance) {
+        double bestDistSq = 12 * 12;
+        for (var entry : session.points.entries) {
+            if (!entry.visible()) continue;
+            var p = entry.position();
+            var proj = plane.project(p);
+            var rel = proj.minus(plane.origin());
+            double uCoord = rel.dot(plane.u());
+            double vCoord = rel.dot(plane.v());
+            if (uCoord < uMin || uCoord > uMax || vCoord < vMin || vCoord > vMax) continue;
+            double sx = PAD_LEFT + (uCoord - uMin) / uSpan * plotWidth;
+            double sy = PAD_TOP + plotHeight * (1 - (vCoord - vMin) / vSpan);
+            double dx = e.getX() - sx, dy = e.getY() - sy;
+            double dsq = dx * dx + dy * dy;
+            if (dsq <= bestDistSq) {
+                bestDistSq = dsq;
                 best = entry;
-                bestDistance = distance;
             }
         }
-        return best;
-    }
-
-    private double[] screenToRz(double mouseX, double mouseY) {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) {
-            return new double[]{0, paneContext.session().geometry.zCenter.get()};
+        if (best != null) {
+            session.selection.setSingle(best.id());
+        } else {
+            session.selection.clear();
         }
-        double plotWidth = plotWidth(canvas.getWidth());
-        double plotHeight = plotHeight(canvas.getHeight());
-        double rMax = data.field().rMm[data.field().rMm.length - 1];
-        double zMin = paneContext.session().geometry.visibleStart();
-        double zMax = paneContext.session().geometry.visibleEnd();
-        double r = (mouseX - PAD_LEFT) / Math.max(1, plotWidth) * rMax;
-        double z = zMax - ((mouseY - PAD_TOP) / Math.max(1, plotHeight)) * (zMax - zMin);
-        return new double[]{Math.max(0, r), MathUtil.clamp(z, zMin, zMax)};
     }
 
-    private void updateHover(double mouseX, double mouseY) {
-        boolean nextHover = plotBounds().contains(mouseX, mouseY);
-        if (!nextHover) {
-            if (hoveringPlot) {
-                hoveringPlot = false;
-                scheduleRedraw();
-            }
+    private void onHeatmapHover(javafx.scene.input.MouseEvent e) {
+        var session = paneContext.session();
+        var snapshot = session.geometry.shadingSnapshot.get();
+        var plane = session.geometry.slicePlane.get();
+        if (snapshot == null || plane == null) {
+            setPaneStatus("");
             return;
         }
-        var rz = screenToRz(mouseX, mouseY);
-        hoveringPlot = true;
-        hoveredR = rz[0];
-        hoveredZ = rz[1];
-        scheduleRedraw();
-    }
-
-    private void updateCursor(double mouseX, double mouseY) {
-        if (scrubBounds().contains(mouseX, mouseY)) {
-            canvas.setCursor(zRangeInteraction.cursor(scrubBounds(), mouseX, mouseY));
+        var us = snapshot.uMetres();
+        var vs = snapshot.vMetres();
+        if (us.isEmpty() || vs.isEmpty()) return;
+        double plotWidth = Math.max(1, heatmap.getWidth() - PAD_LEFT - PAD_RIGHT);
+        double plotHeight = Math.max(1, heatmap.getHeight() - PAD_TOP - PAD_BOTTOM);
+        double uMin = us.get(0), uMax = us.get(us.size() - 1);
+        double vMin = vs.get(0), vMax = vs.get(vs.size() - 1);
+        double u = uMin + (e.getX() - PAD_LEFT) / plotWidth * (uMax - uMin);
+        double v = vMin + (1 - (e.getY() - PAD_TOP) / plotHeight) * (vMax - vMin);
+        if (e.getX() < PAD_LEFT || e.getX() > PAD_LEFT + plotWidth
+            || e.getY() < PAD_TOP || e.getY() > PAD_TOP + plotHeight) {
+            setPaneStatus("");
             return;
         }
-        if (draggingReference) {
-            canvas.setCursor(Cursor.CLOSED_HAND);
-            return;
-        }
-        if (referenceHandleContains(mouseX, mouseY)) {
-            canvas.setCursor(Cursor.OPEN_HAND);
-            return;
-        }
-        if (draggingId != null) {
-            canvas.setCursor(Cursor.CLOSED_HAND);
-            return;
-        }
-        canvas.setCursor(findEntry(mouseX, mouseY) != null ? Cursor.OPEN_HAND : Cursor.CROSSHAIR);
-    }
-
-    private List<AxisScrubBar.Span> sliceSpans() {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) return List.of();
-        double sliceHalf = (data.field().sliceHalf != null ? data.field().sliceHalf : 0.005) * 1e3;
-        var spans = new ArrayList<AxisScrubBar.Span>();
-        spans.add(new AxisScrubBar.Span(-sliceHalf, sliceHalf, Color.web("#2e7d32"), 0.14));
-        return spans;
-    }
-
-    private void drawBadge(javafx.scene.canvas.GraphicsContext g, double centerX, double y, String text, Color accent) {
-        ax.xz.mri.ui.canvas.CanvasDrawingUtils.drawBadge(g, centerX, y, text, accent, StudioTheme.UI_7,
-            48, PAD_LEFT + 2, canvas.getWidth() - PAD_RIGHT - SCRUB_WIDTH);
-    }
-
-    private void drawReferenceMarker(
-        javafx.scene.canvas.GraphicsContext g,
-        double rMax,
-        double zMin,
-        double zMax,
-        double plotWidth,
-        double plotHeight
-    ) {
-        var reference = paneContext.session().reference;
-        if (!reference.enabled.get()) return;
-        double x = rToPixel(reference.r.get(), rMax, plotWidth);
-        double y = zToPixel(reference.z.get(), zMin, zMax, plotHeight);
-        if (!plotBounds().contains(x, y)) return;
-
-        Color accent = Color.web("#f57c00");
-        double radius = draggingReference ? 7.0 : 6.0;
-        g.setFill(Color.color(accent.getRed(), accent.getGreen(), accent.getBlue(), 0.12));
-        g.fillOval(x - radius - 3, y - radius - 3, (radius + 3) * 2, (radius + 3) * 2);
-        g.setStroke(accent);
-        g.setLineWidth(1.6);
-        g.strokePolygon(
-            new double[]{x, x + radius, x, x - radius},
-            new double[]{y - radius, y, y + radius, y},
-            4
+        var world = plane.sampleAt(u, v);
+        setPaneStatus(
+            String.format("u=%.2f µm  v=%.2f µm", u * 1e6, v * 1e6),
+            String.format("(x=%.2f, y=%.2f, z=%.2f) µm",
+                world.x() * 1e6, world.y() * 1e6, world.z() * 1e6),
+            "plane n=" + describeAxis(plane.normal())
         );
-        g.strokeLine(x - radius - 3, y, x + radius + 3, y);
-        g.strokeLine(x, y - radius - 3, x, y + radius + 3);
-        drawBadge(g, Math.min(x + 28, PAD_LEFT + plotWidth - 18), Math.max(PAD_TOP + 4, y - 18), "Basis", accent);
     }
 
-    private boolean referenceHandleContains(double mouseX, double mouseY) {
-        var reference = paneContext.session().reference;
-        if (!reference.enabled.get()) return false;
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) return false;
-        double plotWidth = plotWidth(canvas.getWidth());
-        double plotHeight = plotHeight(canvas.getHeight());
-        double x = rToPixel(reference.r.get(), data.field().rMm[data.field().rMm.length - 1], plotWidth);
-        double y = zToPixel(reference.z.get(), paneContext.session().geometry.visibleStart(), paneContext.session().geometry.visibleEnd(), plotHeight);
-        return plotBounds().contains(x, y) && Math.hypot(mouseX - x, mouseY - y) <= 11.0;
+    private ContextMenu buildHeatmapMenu(double mouseX, double mouseY) {
+        var session = paneContext.session();
+        var menu = new ContextMenu();
+        var perpX = new MenuItem("Plane ⊥ X");
+        perpX.setOnAction(e -> session.geometry.slicePlane.set(SlicePlane.axisX()));
+        var perpY = new MenuItem("Plane ⊥ Y");
+        perpY.setOnAction(e -> session.geometry.slicePlane.set(SlicePlane.axisY()));
+        var perpZ = new MenuItem("Plane ⊥ Z");
+        perpZ.setOnAction(e -> session.geometry.slicePlane.set(SlicePlane.axisZ()));
+        var snap = new MenuItem("Snap normal to nearest axis");
+        snap.setOnAction(e -> editor.snapPlaneNormalToAxis(8));
+        var resetView = new MenuItem("Reset 3-D view");
+        resetView.setOnAction(e -> editor.resetView());
+        menu.getItems().addAll(perpX, perpY, perpZ, new SeparatorMenuItem(),
+            snap, MagnetisationColouringControls.newMenu(session.colouring),
+            new SeparatorMenuItem(), resetView);
+        return menu;
     }
 
-    private String referenceSuffix() {
-        var reference = paneContext.session().reference;
-        if (!reference.enabled.get()) return "";
-        return String.format(" | basis=(%.1f, %.1f)", reference.r.get(), reference.z.get());
+    private void showCanvasContextMenu(ContextMenu menu, double screenX, double screenY) {
+        menu.show(heatmap, screenX, screenY);
     }
 
-    private double zDomainStart() {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) return -80;
-        return data.field().zMm[0];
-    }
-
-    private double zDomainEnd() {
-        var data = paneContext.session().document.simulationOutput.get();
-        if (data == null || data.field() == null) return 80;
-        return data.field().zMm[data.field().zMm.length - 1];
-    }
-
-    private AxisScrubBar.Bounds scrubBounds() {
-        return scrubBounds(plotWidth(canvas.getWidth()), plotHeight(canvas.getHeight()));
-    }
-
-    private AxisScrubBar.Bounds scrubBounds(double plotWidth, double plotHeight) {
-        return new AxisScrubBar.Bounds(PAD_LEFT + plotWidth + SCRUB_GAP, PAD_TOP, SCRUB_WIDTH, plotHeight);
-    }
-
-    private AxisScrubBar.Bounds plotBounds() {
-        return new AxisScrubBar.Bounds(PAD_LEFT, PAD_TOP, plotWidth(canvas.getWidth()), plotHeight(canvas.getHeight()));
-    }
-
-    private static double plotWidth(double totalWidth) {
-        return Math.max(1, totalWidth - PAD_LEFT - PAD_RIGHT - SCRUB_GAP - SCRUB_WIDTH);
-    }
-
-    private static double plotHeight(double totalHeight) {
-        return Math.max(1, totalHeight - PAD_TOP - PAD_BOTTOM);
-    }
-
-    private static double rToPixel(double r, double rMax, double plotWidth) {
-        return PAD_LEFT + (r / Math.max(1e-9, rMax)) * plotWidth;
-    }
-
-    private static double zToPixel(double z, double zMin, double zMax, double plotHeight) {
-        return PAD_TOP + (1 - (z - zMin) / Math.max(1e-9, zMax - zMin)) * plotHeight;
-    }
-
-    private static int niceZTick(double span) {
-        return span > 120 ? 20 : span > 60 ? 10 : span > 24 ? 5 : span > 12 ? 2 : 1;
-    }
-
-    private static double niceStart(double value, double step) {
-        return Math.ceil(value / step) * step;
-    }
+    /* ── Helpers ─────────────────────────────────────────────────────── */
 
     private static Color shadingColour(
         MagnetisationColouringViewModel colouring,
@@ -757,11 +513,9 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 colouring.brightnessSource.get(),
                 cell.mPerp(),
                 cell.signalProjection(),
-                signalProjectionAvailable
-            ),
-            0,
-            1
-        );
+                signalProjectionAvailable),
+            0, 1);
+        if (brightness < 0.04) return null;
         return switch (colouring.hueSource.get()) {
             case PHASE -> ColourUtil.hue2color(cell.phaseDeg(), brightness);
             case NONE -> colouring.brightnessSource.get() == MagnetisationColouringViewModel.BrightnessSource.NONE
@@ -769,4 +523,31 @@ public class GeometryPane extends CanvasWorkbenchPane {
                 : ColourUtil.monochrome(brightness);
         };
     }
+
+    /** Compact axis description — "+ẑ", "−x̂", etc., or "(.., .., ..)" for arbitrary. */
+    private static String describeAxis(Vec3 axis) {
+        double tol = 0.02;
+        double ax = Math.abs(axis.x()), ay = Math.abs(axis.y()), az = Math.abs(axis.z());
+        if (ax > 1 - tol && ay < tol && az < tol) return axis.x() > 0 ? "+x̂" : "−x̂";
+        if (ay > 1 - tol && ax < tol && az < tol) return axis.y() > 0 ? "+ŷ" : "−ŷ";
+        if (az > 1 - tol && ax < tol && ay < tol) return axis.z() > 0 ? "+ẑ" : "−ẑ";
+        return String.format("(%+.2f, %+.2f, %+.2f)", axis.x(), axis.y(), axis.z());
+    }
+
+    private static String pickUnitSuffix(double extent) {
+        if (extent < 1e-3) return "ΜM";   // µm
+        if (extent < 1.0) return "MM";
+        return "M";
+    }
+
+    private static double unitScale(String unit) {
+        return switch (unit) {
+            case "ΜM" -> 1e6;
+            case "MM" -> 1e3;
+            default -> 1.0;
+        };
+    }
+
+    /** Test accessor for the embedded 3-D canvas. */
+    Geometry3DCanvas editorForTest() { return editor; }
 }

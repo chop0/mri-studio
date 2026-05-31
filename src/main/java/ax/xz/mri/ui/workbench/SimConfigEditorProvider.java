@@ -6,11 +6,9 @@ import ax.xz.mri.ui.viewmodel.StudioSession;
 import ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane;
 import javafx.scene.Node;
 
-import java.util.Set;
-
 /**
- * Editor provider for simulation configs. Content: the full config editor.
- * No analysis tool windows are relevant (no simulation data).
+ * Editor provider for simulation configs. The editor pane fills the
+ * document tab on its own.
  */
 public final class SimConfigEditorProvider implements DocumentEditorProvider {
 	private final SimulationConfigDocument configDoc;
@@ -24,7 +22,6 @@ public final class SimConfigEditorProvider implements DocumentEditorProvider {
 	}
 
 	@Override public Node editorContent() { return editorPane; }
-	@Override public Set<PaneId> relevantToolWindows() { return Set.of(); }
 
 	@Override
 	public void activate(StudioSession session) {
@@ -33,8 +30,6 @@ public final class SimConfigEditorProvider implements DocumentEditorProvider {
 		// The config editor doesn't produce its own simulation, but the
 		// user should still see the last sequence's analysis while editing.
 	}
-
-	@Override public void dispose() {}
 
 	public SimulationConfigDocument configDoc() { return configDoc; }
 	public SimulationConfigEditorPane editorPane() { return editorPane; }

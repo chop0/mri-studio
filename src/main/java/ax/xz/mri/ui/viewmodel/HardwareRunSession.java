@@ -11,6 +11,7 @@ import ax.xz.mri.model.sequence.ClipSequence;
 import ax.xz.mri.model.sequence.PulseStep;
 import ax.xz.mri.model.sequence.SequenceChannel;
 import ax.xz.mri.project.HardwareConfigDocument;
+import ax.xz.mri.ui.edit.EditSession;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.DoubleProperty;
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * Background runner that pushes a sequence at real hardware via a plugin.
  *
- * <p>Mirrors {@link SequenceSimulationSession}'s shape — three observables
+ * <p>Mirrors {@link SimDispatcher}'s shape — three observables
  * for status (running, progress, stale), a debounce-free explicit
  * {@link #run()} entry point. The actual I/O happens on a single
  * {@code hardware-io} executor with the {@link AtomicLong} generation pattern
@@ -36,7 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>The session is intentionally <em>not</em> a source of truth for the
  * bound hardware config — it resolves the binding on every run from
- * {@link SequenceEditSession#activeHardwareConfigDoc()}, which goes through
+ * {@link EditSession#activeHardwareConfigDoc()}, which goes through
  * the project repository each time. That removes the doc-reference-staleness
  * trap that bit us before (renaming or saving the bound config produced a
  * new doc instance, but a cached reference here would still point at the
@@ -51,7 +52,7 @@ public final class HardwareRunSession {
     public final BooleanProperty running = new SimpleBooleanProperty(false);
     public final DoubleProperty progress = new SimpleDoubleProperty(0);
 
-    public final SequenceEditSession editSession;
+    public final EditSession editSession;
     private final StudioSession studioSession;
     private final ExecutorService ioExecutor;
     private final AtomicLong generation = new AtomicLong();
@@ -67,7 +68,7 @@ public final class HardwareRunSession {
     private HardwareConfig cachedConfig;
     private HardwarePlugin cachedPlugin;
 
-    public HardwareRunSession(SequenceEditSession editSession, StudioSession studioSession) {
+    public HardwareRunSession(EditSession editSession, StudioSession studioSession) {
         this.editSession = editSession;
         this.studioSession = studioSession;
         this.ioExecutor = Executors.newSingleThreadExecutor(r -> {

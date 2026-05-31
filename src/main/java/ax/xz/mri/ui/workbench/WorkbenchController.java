@@ -3,21 +3,13 @@ package ax.xz.mri.ui.workbench;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
-import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
+import ax.xz.mri.ui.sim.SimDispatcher;
 import ax.xz.mri.ui.viewmodel.StudioSession;
 import ax.xz.mri.ui.workbench.framework.WorkbenchPane;
 import ax.xz.mri.ui.workbench.pane.ExplorerPane;
-import ax.xz.mri.ui.workbench.pane.GeometryPane;
-import ax.xz.mri.ui.workbench.pane.InspectorPane;
-import ax.xz.mri.ui.workbench.pane.MagnitudeTracePane;
+import ax.xz.mri.ui.inspector.InspectorPane;
 import ax.xz.mri.ui.workbench.pane.MessagesPane;
-import ax.xz.mri.ui.workbench.pane.PhaseMapRPane;
-import ax.xz.mri.ui.workbench.pane.PhaseMapZPane;
-import ax.xz.mri.ui.workbench.pane.PhaseTracePane;
-import ax.xz.mri.ui.workbench.pane.PolarTracePane;
 import ax.xz.mri.ui.workbench.pane.PointsWorkbenchPane;
-import ax.xz.mri.ui.workbench.pane.SphereWorkbenchPane;
-import ax.xz.mri.ui.workbench.pane.TimelineWorkbenchPane;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
@@ -55,23 +47,24 @@ import java.util.Map;
 public class WorkbenchController {
     private static final int STUDIO_DRAG_GROUP = 1;
 
-    /** Analysis pane IDs — contextually shown/hidden based on document type. */
-    private static final PaneId[] ANALYSIS_PANE_IDS = {
-        PaneId.CROSS_SECTION, PaneId.SPHERE,
-        PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
-        PaneId.TRACE_PHASE, PaneId.TRACE_POLAR, PaneId.TRACE_MAGNITUDE,
-        PaneId.TIMELINE
-    };
-
     private final StudioSession session;
     private final CommandRegistry commandRegistry = new CommandRegistry();
     private final StringProperty shellStatus = new SimpleStringProperty("Ready");
+    /**
+     * Status segments rendered by the shell with vertical {@link
+     * javafx.scene.control.Separator}s between them. Project convention is
+     * to never bake a unicode separator into the status string; this property
+     * is the structured replacement.
+     */
+    private final javafx.beans.property.ObjectProperty<java.util.List<String>> shellStatusSegments =
+        new javafx.beans.property.SimpleObjectProperty<>(java.util.List.of("Ready"));
     private final BorderPane dockContainer = new BorderPane();
 
-    // Analysis panes — singletons, re-pointed on tab switch
+    // Sidebar singletons (Explorer, Inspector, Messages, Points). Analysis
+    // panes (Sphere/Cross-section/Phase Maps/Traces) are owned per-document
+    // by SequenceEditorPane; editors are owned per-document by their providers.
     private final Map<PaneId, WorkbenchPane> panes = new EnumMap<>(PaneId.class);
     private final Map<PaneId, Dockable> dockables = new EnumMap<>(PaneId.class);
-    private final Map<PaneId, DockContainerLeaf> homeLeaves = new EnumMap<>(PaneId.class);
     private final Map<PaneId, String> paneStatuses = new EnumMap<>(PaneId.class);
 
     // Document tabs
@@ -82,14 +75,14 @@ public class WorkbenchController {
     private final ToolSidebar leftSidebar = new ToolSidebar(ToolSidebar.Side.LEFT, 220);
     private final ToolSidebar rightSidebar = new ToolSidebar(ToolSidebar.Side.RIGHT, 300);
 
-    // Dock bar — buttons for closed analysis panes (click to restore to home leaf)
+    // Dock bar — minimised tabs (currently always empty since there are no
+    // analysis-pane dockables; auto-hides via MinimizeBar).
     private final MinimizeBar dockBar = new MinimizeBar(this::restorePane);
 
     // BentoFX layout
     private Bento bento;
     private DockContainerRootBranch rootBranch;
-    private software.coley.bentofx.layout.container.DockContainerBranch centreShellBranch;
-    private DockContainerLeaf documentLeaf; // top — holds document tabs
+    private DockContainerLeaf documentLeaf; // the only leaf — holds every open document tab
     private Stage mainStage;
     private boolean disposed;
     private boolean switchingTabs;
@@ -111,9 +104,15 @@ public class WorkbenchController {
     // --- Public accessors ---
 
     public Node dockRoot() { return dockContainer; }
+    /** Test-only accessor for asserting Bento drag/drop setup. */
+    public Bento bentoForTesting() { return bento; }
     public ToolSidebar leftSidebar() { return leftSidebar; }
     public ToolSidebar rightSidebar() { return rightSidebar; }
     public StringProperty shellStatusProperty() { return shellStatus; }
+    public javafx.beans.property.ObjectProperty<java.util.List<String>> shellStatusSegmentsProperty() {
+        return shellStatusSegments;
+    }
+    public java.util.List<String> shellStatusSegments() { return shellStatusSegments.get(); }
     public CommandRegistry commandRegistry() { return commandRegistry; }
     public StudioSession session() { return session; }
     public ObjectProperty<WorkspaceTab> activeTabProperty() { return activeTab; }
@@ -151,7 +150,9 @@ public class WorkbenchController {
         dockable.setNode(editorNode);
         dockable.setClosable(true);
         dockable.setCanBeDragged(true);
-        dockable.setCanBeDroppedToNewWindow(false);
+        // Full BentoFX drag/drop: tabs can be torn off into floating windows
+        // or dropped onto the sides of the document leaf to split it.
+        dockable.setCanBeDroppedToNewWindow(true);
         dockable.setDragGroup(STUDIO_DRAG_GROUP);
         dockable.setContextMenuFactory(ignored -> buildDocumentTabMenu(tab));
         tab.setDockable(dockable);
@@ -218,10 +219,14 @@ public class WorkbenchController {
             if (newTab.snapshot() != null) {
                 newTab.editor().restoreState(session, newTab.snapshot());
             } else {
-                var data = session.document.simulationOutput.get();
-                if (data != null && data.field() != null && data.field().zMm != null) {
-                    session.geometry.fitVisibleRange(
-                        data.field().zMm[0], data.field().zMm[data.field().zMm.length - 1]);
+                var simulation = session.document.simulation.get();
+                if (simulation != null) {
+                    double halfZ = 0;
+                    for (var s : simulation.substances()) {
+                        halfZ = Math.max(halfZ, s.halfExtent().z());
+                    }
+                    if (halfZ <= 0) halfZ = 1e-3;
+                    session.geometry.fitVisibleRange(-halfZ * 1e3, halfZ * 1e3);
                 }
             }
 
@@ -235,14 +240,6 @@ public class WorkbenchController {
                 tab.editor().editorContent().getStyleClass().remove("editor-focus-ring");
             }
             newTab.editor().editorContent().getStyleClass().add("editor-focus-ring");
-
-            // Contextual analysis area: hide via dividers when document has no analysis,
-            // show when it does. The BentoFX tree is NEVER mutated — just divider positions.
-            if (newTab.editor().relevantToolWindows().isEmpty()) {
-                hideAnalysisArea();
-            } else {
-                showAnalysisArea();
-            }
         } finally {
             switchingTabs = false;
         }
@@ -284,12 +281,23 @@ public class WorkbenchController {
     }
 
     /** Get all open simulation sessions (for pushing config updates). */
-    public java.util.Collection<SequenceSimulationSession> allSimSessions() {
+    public java.util.Collection<SimDispatcher> allSimSessions() {
         return openTabs.stream()
             .map(WorkspaceTab::editor)
             .filter(SequenceEditorProvider.class::isInstance)
             .map(e -> ((SequenceEditorProvider) e).simSession)
             .toList();
+    }
+
+    /** Look up the {@link SimDispatcher} for the given edit session, or null. */
+    public SimDispatcher simSessionFor(ax.xz.mri.ui.edit.EditSession editSession) {
+        for (var tab : openTabs) {
+            if (tab.editor() instanceof SequenceEditorProvider sep
+                && sep.editSession == editSession) {
+                return sep.simSession;
+            }
+        }
+        return null;
     }
 
     /** Get all open hardware run sessions (for the inspector's Run-on-Hardware button). */
@@ -304,8 +312,8 @@ public class WorkbenchController {
     // --- Close / Restore (dock bar) ---
 
     /**
-     * Close a pane: remove from BentoFX tree, show a restore button in the dock bar.
-     * The pane can be restored to its home leaf via the dock bar button or View menu.
+     * Close a dockable pane (best-effort). Sidebar panes ignore this; dockable
+     * doc tabs use the tab's close button instead.
      */
     public void closePane(PaneId paneId) {
         var dockable = dockables.get(paneId);
@@ -314,47 +322,19 @@ public class WorkbenchController {
         dockBar.addPane(paneId, paneId.title());
     }
 
-    /** Restore a closed pane back into its home leaf in the BentoFX tree. */
+    /** Restore a closed pane (re-add to the document leaf as a fallback). */
     public void restorePane(PaneId paneId) {
         var dockable = dockables.get(paneId);
         if (dockable == null || !dockBar.isMinimized(paneId)) return;
         dockBar.removePane(paneId);
-        var home = homeLeaves.get(paneId);
-        if (home != null && home.getParentContainer() != null) {
-            home.addDockable(dockable);
-            home.selectDockable(dockable);
-        } else {
-            // Home leaf was pruned — create a fresh one in the centre shell
-            var freshLeaf = bento.dockBuilding().leaf(paneId.name().toLowerCase() + "-restored");
-            freshLeaf.setPruneWhenEmpty(true);
-            centreShellBranch.addContainer(freshLeaf);
-            homeLeaves.put(paneId, freshLeaf);
-            freshLeaf.addDockable(dockable);
-            freshLeaf.selectDockable(dockable);
+        if (documentLeaf != null) {
+            documentLeaf.addDockable(dockable);
+            documentLeaf.selectDockable(dockable);
         }
     }
 
     public boolean isPaneClosed(PaneId paneId) { return dockBar.isMinimized(paneId); }
     public MinimizeBar dockBar() { return dockBar; }
-
-    // --- Contextual analysis area visibility (divider-based, no tree mutation) ---
-
-    /** Saved divider position when analysis area is visible. */
-    private double savedCentreShellDivider = -1;
-
-    /** Hide the bottom area (analysis + timeline) by pushing the centreShell divider to 1.0. */
-    private void hideAnalysisArea() {
-        if (centreShellBranch == null) return;
-        var dividers = centreShellBranch.getDividerPositions();
-        if (dividers.length > 0) savedCentreShellDivider = dividers[0];
-        centreShellBranch.setDividerPositions(1.0);
-    }
-
-    /** Show the bottom area by restoring the centreShell divider. */
-    private void showAnalysisArea() {
-        if (centreShellBranch == null) return;
-        centreShellBranch.setDividerPositions(savedCentreShellDivider > 0 ? savedCentreShellDivider : 0.45);
-    }
 
     // --- Pane management ---
 
@@ -377,12 +357,38 @@ public class WorkbenchController {
     }
 
     public void focusPane(PaneId paneId) {
+        // Analysis sub-tabs (Sphere, Cross-section, Phase / Polar / Magnitude
+        // traces) live inside the active document tab's SequenceEditorPane,
+        // not in Bento's workbench layout. For those, ask the editor to
+        // select the matching JavaFX Tab. Bento-registered panes (Explorer,
+        // Inspector, Points, Messages) fall through to activatePane.
+        if (delegateToActiveSequenceEditor(paneId)) return;
         activatePane(paneId);
         var pane = panes.get(paneId);
         if (pane != null && pane.getScene() != null && pane.getScene().getWindow() instanceof Stage s) {
             s.toFront(); s.requestFocus();
         }
         if (pane != null) pane.requestFocus();
+    }
+
+    /**
+     * If {@code paneId} is one of the in-document analysis tabs and the active
+     * document tab is a sequence editor, ask the editor to select that tab.
+     * Returns true when the focus was handled there.
+     */
+    private boolean delegateToActiveSequenceEditor(PaneId paneId) {
+        if (paneId != PaneId.SPHERE && paneId != PaneId.CROSS_SECTION
+            && paneId != PaneId.TRACE_PHASE && paneId != PaneId.TRACE_POLAR
+            && paneId != PaneId.TRACE_MAGNITUDE) {
+            return false;
+        }
+        var tab = activeTab.get();
+        if (tab == null) return false;
+        var editor = tab.editor();
+        if (editor instanceof SequenceEditorProvider seq && seq.editorPane != null) {
+            return seq.editorPane.selectAnalysisTab(paneId);
+        }
+        return false;
     }
 
     public void floatPane(PaneId paneId) {
@@ -401,113 +407,26 @@ public class WorkbenchController {
             restorePane(paneId);
             return;
         }
-        var d = dockables.get(paneId); var hl = homeLeaves.get(paneId);
-        if (d == null || hl == null) return;
-        // If already in a leaf, move to home
-        if (d.getContainer() != null && d.getContainer() != hl) {
-            d.getContainer().removeDockable(d);
+        var d = dockables.get(paneId);
+        if (d == null) return;
+        // Best-effort: if the dockable is detached, re-add to the document leaf.
+        if (d.getContainer() == null && documentLeaf != null) {
+            documentLeaf.addDockable(d);
         }
-        if (d.getContainer() == null) {
-            hl.addDockable(d);
-        }
-        hl.selectDockable(d);
+        if (d.getContainer() != null) d.getContainer().selectDockable(d);
         focusPane(paneId);
     }
 
     public void resetLayout() { rebuildWorkbench(); }
 
-    private static final java.nio.file.Path LAYOUT_FILE =
-        java.nio.file.Path.of(System.getProperty("user.home"), ".mri-studio", "layout.json");
-    private final PersistentLayoutStore layoutStore = new PersistentLayoutStore(LAYOUT_FILE);
-
-    public void loadLayoutFromStore() {
-        layoutStore.load().ifPresentOrElse(
-            this::restoreLayout,
-            this::rebuildWorkbench
-        );
-    }
-
-    public void saveLayoutToStore() {
-        try {
-            layoutStore.save(captureLayout());
-        } catch (Exception ex) {
-            session.messages.logWarning("Layout", "Could not persist workbench layout: " + ex.getMessage());
-        }
-    }
-
-    // --- Layout capture: live BentoFX tree → WorkbenchLayoutState ---
-
-    private ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState captureLayout() {
-        // Capture the analysis/timeline portion of the tree (skip docLeaf — it's session-specific).
-        ax.xz.mri.ui.workbench.layout.DockNode dockRoot = null;
-        if (centreShellBranch != null && centreShellBranch.getChildContainers().size() > 1) {
-            dockRoot = LayoutTreeIO.capture(centreShellBranch.getChildContainers().get(1), this::paneIdOf);
-        }
-        if (dockRoot == null) dockRoot = LayoutTreeIO.capture(rootBranch, this::paneIdOf);
-        // Detect floating windows (dockables whose container's root != rootBranch)
-        var floatingWindows = new java.util.ArrayList<ax.xz.mri.ui.workbench.layout.FloatingWindowState>();
-        for (var entry : dockables.entrySet()) {
-            var dockable = entry.getValue();
-            if (dockable.getContainer() != null) {
-                var scene = dockable.getContainer().getScene();
-                if (scene != null && scene.getWindow() != mainStage) {
-                    var w = scene.getWindow();
-                    floatingWindows.add(new ax.xz.mri.ui.workbench.layout.FloatingWindowState(
-                        entry.getKey(), w.getX(), w.getY(), w.getWidth(), w.getHeight()));
-                }
-            }
-        }
-        return new ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState(dockRoot, floatingWindows);
-    }
-
-    // --- Layout restore: WorkbenchLayoutState → BentoFX tree ---
-
-    private void restoreLayout(ax.xz.mri.ui.workbench.layout.WorkbenchLayoutState state) {
-        if (state == null || state.dockRoot() == null) {
-            rebuildWorkbench();
-            return;
-        }
-
-        bento = new Bento();
-        configureBento();
-        dockables.clear();
-        homeLeaves.clear();
-
-        var builder = bento.dockBuilding();
-        var root = builder.root("restored-root");
-
-        // Document leaf (always exists, not persisted in the layout tree)
-        var docLeaf = builder.leaf("document_tabs");
-        docLeaf.setPruneWhenEmpty(false);
-
-        var restoredContainer = LayoutTreeIO.restore(builder, state.dockRoot(), this::createDockable, homeLeaves::put);
-
-        root.setOrientation(Orientation.VERTICAL);
-        if (restoredContainer != null) {
-            root.addContainers(docLeaf, restoredContainer);
-        } else {
-            root.addContainers(docLeaf);
-        }
-
-        rootBranch = root;
-        centreShellBranch = root;
-        documentLeaf = docLeaf;
-
-        dockContainer.setCenter(rootBranch);
-        dockContainer.setBottom(dockBar);
-
-        // Defer divider positions — SplitPane ignores them before layout.
-        deferDividers(root, 0.45);
-
-        // Restore floating windows
-        for (var fw : state.floatingWindows()) {
-            var dockable = dockables.get(fw.paneId());
-            if (dockable != null && mainStage != null && mainStage.getScene() != null) {
-                bento.stageBuilding().newStageForDockable(
-                    mainStage.getScene(), dockable, fw.x(), fw.y());
-            }
-        }
-    }
+    /**
+     * Layout is now structurally fixed (one document leaf hosting every open
+     * tab). There is nothing to persist, so save/load are no-ops that
+     * regenerate the fixed structure. The methods stay as public hooks for
+     * the View menu — clicking "Reset Layout" still does the right thing.
+     */
+    public void loadLayoutFromStore() { rebuildWorkbench(); }
+    public void saveLayoutToStore()   { /* nothing to save — structure is fixed */ }
 
     private Dockable createDockable(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
         var pane = panes.get(paneId);
@@ -637,7 +556,8 @@ public class WorkbenchController {
         simStatus.setVisible(false); simStatus.setStyle("-fx-progress-color: #e06000;");
         new javafx.animation.AnimationTimer() {
             @Override public void handle(long now) {
-                simStatus.setVisible(allSimSessions().stream().anyMatch(s -> s.simulating.get()));
+                simStatus.setVisible(allSimSessions().stream()
+                    .anyMatch(s -> s.state.get() instanceof ax.xz.mri.ui.sim.SimState.Running));
             }
         }.start();
 
@@ -652,11 +572,15 @@ public class WorkbenchController {
 
     // --- Initialization ---
 
+    /**
+     * Build the four sidebar singletons: Explorer / Inspector / Messages /
+     * Points. Analysis panes (Sphere / Cross-section / Phase Maps / Traces)
+     * are constructed by {@link ax.xz.mri.ui.pane.SequenceEditorPane} per-
+     * document — they don't exist outside an open sequence editor.
+     */
     private void initializePanes() {
-        for (var paneId : PaneId.values()) {
-            if (paneId == PaneId.SEQUENCE_EDITOR
-                    || paneId == PaneId.SIM_CONFIG_EDITOR
-                    || paneId == PaneId.EIGENFIELD_EDITOR) continue;
+        for (var paneId : java.util.List.of(
+                PaneId.EXPLORER, PaneId.INSPECTOR, PaneId.MESSAGES, PaneId.POINTS)) {
             panes.put(paneId, createPane(paneId));
         }
     }
@@ -667,13 +591,15 @@ public class WorkbenchController {
             "Explorer", StudioIcons.create(StudioIconKind.PROJECT), panes.get(PaneId.EXPLORER)));
         leftSidebar.showTool("explorer"); // open by default
 
-        // Right sidebar: Inspector, Messages, Points
+        // Right sidebar: Inspector, Points, Messages. Points is a sibling
+        // of Inspector here so users can flip between editing a clip and
+        // viewing the isochromat list without losing screen space.
         rightSidebar.addTool(new ToolSidebar.Tool("inspector",
             "Inspector", StudioIcons.create(StudioIconKind.SIMULATION), panes.get(PaneId.INSPECTOR)));
-        rightSidebar.addTool(new ToolSidebar.Tool("messages",
-            "Messages", StudioIcons.create(StudioIconKind.MESSAGES), panes.get(PaneId.MESSAGES)));
         rightSidebar.addTool(new ToolSidebar.Tool("points",
             "Points", StudioIcons.create(StudioIconKind.SIMULATION), panes.get(PaneId.POINTS)));
+        rightSidebar.addTool(new ToolSidebar.Tool("messages",
+            "Messages", StudioIcons.create(StudioIconKind.MESSAGES), panes.get(PaneId.MESSAGES)));
         rightSidebar.showTool("inspector"); // open by default
 
         // When an error lands in the message log, surface the Messages tool so the user sees it.
@@ -693,20 +619,14 @@ public class WorkbenchController {
     private WorkbenchPane createPane(PaneId paneId) {
         var ctx = new PaneContext(session, this, paneId);
         return switch (paneId) {
-            case EXPLORER -> new ExplorerPane(ctx);
+            case EXPLORER  -> new ExplorerPane(ctx);
             case INSPECTOR -> new InspectorPane(ctx);
-            case SPHERE -> new SphereWorkbenchPane(ctx);
-            case CROSS_SECTION -> new GeometryPane(ctx);
-            case POINTS -> new PointsWorkbenchPane(ctx);
-            case TIMELINE -> new TimelineWorkbenchPane(ctx);
-            case PHASE_MAP_Z -> new PhaseMapZPane(ctx);
-            case PHASE_MAP_R -> new PhaseMapRPane(ctx);
-            case TRACE_PHASE -> new PhaseTracePane(ctx);
-            case TRACE_POLAR -> new PolarTracePane(ctx);
-            case TRACE_MAGNITUDE -> new MagnitudeTracePane(ctx);
-            case MESSAGES -> new MessagesPane(ctx);
-            case SEQUENCE_EDITOR, SIM_CONFIG_EDITOR, EIGENFIELD_EDITOR ->
-                throw new IllegalStateException("Editor panes are created per-document");
+            case POINTS    -> new PointsWorkbenchPane(ctx);
+            case MESSAGES  -> new MessagesPane(ctx);
+            default -> throw new IllegalStateException(
+                "WorkbenchController only constructs sidebar singletons; analysis "
+                + "panes are owned by SequenceEditorPane and editors are per-document. "
+                + "paneId=" + paneId);
         };
     }
 
@@ -737,6 +657,31 @@ public class WorkbenchController {
         commandRegistry.register(new PaneAction(CommandId.NEW_HARDWARE_CONFIG, "New Hardware Config", this::newHardwareConfigWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_EIGENFIELD, "New Eigenfield", this::newEigenfieldWizard));
         commandRegistry.register(new PaneAction(CommandId.NEW_SEQUENCE, "New Sequence", this::newSequenceWizard));
+        commandRegistry.register(new PaneAction(CommandId.NEW_SUBSTANCE, "New Substance", this::newSubstanceWizard));
+        commandRegistry.register(new PaneAction(CommandId.DELETE_SUBSTANCE, "Delete Substance", () -> {
+            var n = session.project.inspector.inspectedNodeId.get();
+            if (n != null && session.state.current().node(n) instanceof ax.xz.mri.project.SubstanceDocument)
+                session.project.deleteSubstance(n);
+        }));
+        commandRegistry.register(new PaneAction(CommandId.NEW_PROCEDURE, "New Procedure", this::newProcedureWizard));
+        commandRegistry.register(new PaneAction(CommandId.DELETE_PROCEDURE, "Delete Procedure", () -> {
+            var n = session.project.inspector.inspectedNodeId.get();
+            if (n != null && session.state.current().node(n) instanceof ax.xz.mri.project.ProcedureDocument)
+                session.project.deleteProcedure(n);
+        }));
+    }
+
+    private void newProcedureWizard() {
+        ax.xz.mri.ui.wizard.NewProcedureWizard.show(mainStage, session.project).ifPresent(doc -> {
+            session.project.selectNode(doc.id());
+            openProcedureTab(doc);
+        });
+    }
+
+    /** Open a procedure as a workspace tab. */
+    public void openProcedureTab(ax.xz.mri.project.ProcedureDocument doc) {
+        openTab(doc.id().value(), doc.name(),
+            new ProcedureEditorProvider(doc, session, this));
     }
 
     private void newSimConfigWizard() {
@@ -767,8 +712,21 @@ public class WorkbenchController {
         });
     }
 
+    private void newSubstanceWizard() {
+        ax.xz.mri.ui.wizard.NewSubstanceWizard.show(mainStage, session.project).ifPresent(doc -> {
+            session.project.selectNode(doc.id());
+            openSubstanceTab(doc);
+        });
+    }
+
+    /** Open a substance as a workspace tab. */
+    public void openSubstanceTab(ax.xz.mri.project.SubstanceDocument doc) {
+        openTab(doc.id().value(), doc.name(),
+            new SubstanceEditorProvider(doc, session, this));
+    }
+
     private void installShellStatusBindings() {
-        session.viewport.tC.addListener((obs, o, n) -> updateShellStatus());
+        session.timeAxis.cursor.time.addListener((obs, o, n) -> updateShellStatus());
         session.points.entries.addListener((javafx.collections.ListChangeListener<ax.xz.mri.ui.model.IsochromatEntry>) c ->
             updateShellStatus());
     }
@@ -778,83 +736,52 @@ public class WorkbenchController {
         session.project.setOnSimConfigOpened(this::openSimConfigTab);
         session.project.setOnHardwareConfigOpened(this::openHardwareConfigTab);
         session.project.setOnEigenfieldOpened(this::openEigenfieldTab);
+        session.project.setOnSubstanceOpened(this::openSubstanceTab);
+        session.project.setOnProcedureOpened(this::openProcedureTab);
     }
 
     // --- BentoFX layout ---
 
+    /**
+     * Build the dock layout: a single document leaf that hosts every open
+     * document tab (sequences, hardware configs, sim configs, eigenfields).
+     *
+     * <p>Each tab fills the dock area on its own. Document-specific chrome
+     * (the analysis tile + DAW for a sequence, the schematic editor for a
+     * hardware config, etc.) lives <em>inside</em> the editor pane, not in
+     * the workbench. This means: opening a hardware-config tab shows just
+     * the hardware-config editor — no analysis panes leak through.
+     */
     private void rebuildWorkbench() {
+        if (bento != null && rootBranch != null) bento.unregisterRoot(rootBranch);
         bento = new Bento();
         configureBento();
         dockables.clear();
-        homeLeaves.clear();
 
         var builder = bento.dockBuilding();
         var root = builder.root("studio-root");
 
-        // Layout:
-        //   Top: Document editor tabs (DAW, import views, config editors)
-        //   Middle: Analysis tools = (Geometry + Sphere) | (PhaseMaps + Traces)
-        //   Bottom: Timeline (collapsible bar)
-        var centreShell = builder.branch("centre-shell");
-
-        // Document editor leaf (top)
         var docLeaf = builder.leaf("document_tabs");
         docLeaf.setPruneWhenEmpty(false);
+        // Allow drops on the sides of the leaf to split the dock area into
+        // two leaves (and recursively). This is BentoFX's native split-on-
+        // drop — users drag a tab out and dock it left/right/above/below to
+        // create a new pane next to the original.
+        docLeaf.setCanSplit(true);
+        root.addContainers(docLeaf);
 
-        // Analysis leaf (middle) — ALL analysis panes as tabs in one leaf.
-        // Click a tab to view it, click the selected tab to collapse the entire leaf
-        // to a thin tab bar. Users can drag panes out to float if they need side-by-side.
-        var analysisLeaf = builder.leaf("analysis_tabs");
-        analysisLeaf.setPruneWhenEmpty(false);
-        for (var paneId : ANALYSIS_PANE_IDS) {
-            if (paneId == PaneId.TIMELINE) continue; // timeline gets its own leaf
-            var dockable = createDockable(builder, paneId);
-            if (dockable == null) continue;
-            homeLeaves.put(paneId, analysisLeaf);
-            analysisLeaf.addDockable(dockable);
-        }
-        if (!analysisLeaf.getDockables().isEmpty()) {
-            analysisLeaf.selectDockable(analysisLeaf.getDockables().getFirst());
-        }
-
-        // Timeline leaf (bottom) — its own leaf so it collapses independently
-        var timeline = registerLeaf(builder, PaneId.TIMELINE);
-
-        // Hierarchy: nest so BOTH analysis and timeline are at edges (BentoFX
-        // collapse only works on first/last child of a branch).
-        //   centreShell = docLeaf | bottomArea
-        //   bottomArea  = analysisLeaf | timeline
-        // analysisLeaf is FIRST in bottomArea → can collapse ✓
-        // timeline is LAST in bottomArea → can collapse ✓
-        var bottomArea = builder.branch("bottom-area");
-        root.setOrientation(Orientation.HORIZONTAL);
-        centreShell.setOrientation(Orientation.VERTICAL);
-        bottomArea.setOrientation(Orientation.VERTICAL);
-        root.addContainers(centreShell);
-        centreShell.addContainers(docLeaf, bottomArea);
-        bottomArea.addContainers(analysisLeaf, timeline);
-
-        deferDividers(centreShell, 0.45);  // editors 45%, bottom area 55%
-        deferDividers(bottomArea, 0.75);   // analysis 75%, timeline 25%
+        // CRITICAL: registerRoot tells Bento to consider this root for drag/drop
+        // target detection. Without it, getRootContainers() is empty, every
+        // drag has no targets, and drops fail silently — which is exactly the
+        // "can't drag tabs" symptom users hit. DockBuilding.root(name) only
+        // constructs the branch; it does not auto-register.
+        bento.registerRoot(root);
 
         rootBranch = root;
-        centreShellBranch = centreShell;
         documentLeaf = docLeaf;
 
         dockContainer.setCenter(rootBranch);
         dockContainer.setBottom(dockBar); // auto-hides when empty
-    }
-
-    private DockContainerLeaf registerLeaf(software.coley.bentofx.building.DockBuilding builder, PaneId paneId) {
-        var leaf = builder.leaf(paneId.name().toLowerCase());
-        leaf.setPruneWhenEmpty(true);
-        var dockable = createDockable(builder, paneId);
-        if (dockable != null) {
-            homeLeaves.put(paneId, leaf);
-            leaf.addDockable(dockable);
-            leaf.selectDockable(dockable);
-        }
-        return leaf;
     }
 
     /** Context menu for document editor tabs. */
@@ -940,8 +867,15 @@ public class WorkbenchController {
         var tab = activeTab.get();
         String tabName = tab != null ? tab.displayName() : "\u2014";
         long visible = session.points.entries.stream().filter(ax.xz.mri.ui.model.IsochromatEntry::visible).count();
-        shellStatus.set(String.format("Tab: %s | Cursor: %.1f \u03bcs | Points: %d (%d visible)",
-            tabName, session.viewport.tC.get(), session.points.entries.size(), visible));
+        var segments = java.util.List.of(
+            "Tab: " + tabName,
+            String.format("Cursor: %.1f \u03bcs", session.timeAxis.cursor.time.get()),
+            String.format("Points: %d (%d visible)", session.points.entries.size(), visible)
+        );
+        shellStatusSegments.set(segments);
+        // Keep the legacy joined-text property in sync for any callers still
+        // bound to it (mostly tests + tooltip read-outs).
+        shellStatus.set(String.join("   ", segments));
     }
 
     private void showError(String title, String message) {

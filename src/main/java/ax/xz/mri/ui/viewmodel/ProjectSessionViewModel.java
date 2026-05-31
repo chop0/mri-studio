@@ -2,6 +2,8 @@ package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.model.sequence.ClipBaker;
+import ax.xz.mri.model.substance.Substance;
+import ax.xz.mri.model.substance.SubstanceStarterLibrary;
 import ax.xz.mri.ui.wizard.starters.SequenceStarter;
 import ax.xz.mri.ui.wizard.starters.SequenceStarterLibrary;
 import ax.xz.mri.ui.wizard.starters.SimConfigTemplate;
@@ -14,6 +16,7 @@ import ax.xz.mri.project.ProjectManifest;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
+import ax.xz.mri.project.SubstanceDocument;
 import ax.xz.mri.state.Autosaver;
 import ax.xz.mri.state.Mutation;
 import ax.xz.mri.state.ProjectState;
@@ -58,6 +61,8 @@ public final class ProjectSessionViewModel {
     private Consumer<HardwareConfigDocument> onHardwareConfigOpened;
     private Consumer<SequenceDocument> onSequenceOpened;
     private Consumer<EigenfieldDocument> onEigenfieldOpened;
+    private Consumer<SubstanceDocument> onSubstanceOpened;
+    private Consumer<ax.xz.mri.project.ProcedureDocument> onProcedureOpened;
     private BiConsumer<ProjectNodeId, ProjectNodeId> onNodeSelected;
     private Consumer<Throwable> errorSink = ex -> { };
 
@@ -103,6 +108,12 @@ public final class ProjectSessionViewModel {
     }
     public void setOnEigenfieldOpened(Consumer<EigenfieldDocument> callback) {
         this.onEigenfieldOpened = callback;
+    }
+    public void setOnSubstanceOpened(Consumer<SubstanceDocument> callback) {
+        this.onSubstanceOpened = callback;
+    }
+    public void setOnProcedureOpened(Consumer<ax.xz.mri.project.ProcedureDocument> callback) {
+        this.onProcedureOpened = callback;
     }
 
     /* ── Lifecycle: open / save ────────────────────────────────────────── */
@@ -167,6 +178,16 @@ public final class ProjectSessionViewModel {
             case EigenfieldDocument eigen -> {
                 inspector.inspectedNodeId.set(nodeId);
                 if (onEigenfieldOpened != null) onEigenfieldOpened.accept(eigen);
+            }
+            case SubstanceDocument sub -> {
+                workspace.activeNodeId.set(nodeId);
+                inspector.inspectedNodeId.set(nodeId);
+                if (onSubstanceOpened != null) onSubstanceOpened.accept(sub);
+            }
+            case ax.xz.mri.project.ProcedureDocument proc -> {
+                workspace.activeNodeId.set(nodeId);
+                inspector.inspectedNodeId.set(nodeId);
+                if (onProcedureOpened != null) onProcedureOpened.accept(proc);
             }
             case CircuitDocument ignored -> {
                 // Circuits don't open standalone — surface their owning sim-config.
@@ -344,17 +365,25 @@ public final class ProjectSessionViewModel {
 
     public SimulationConfigDocument createSimConfig(String name, SimConfigTemplate template, PhysicsParams params) {
         var built = template.buildCircuit(state.current(), name + " circuit");
-        // Dispatch any eigenfields the starter required first, then the circuit (so FKs resolve).
+        // Dispatch satellite documents first so the circuit's foreign-key
+        // references resolve: eigenfields (referenced by coils), then
+        // substances (referenced by Substance schematic blocks).
         for (var ef : built.newEigenfields()) {
             state.dispatch(new Mutation(efScope(ef.id()), null, ef,
                 "Create eigenfield", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        }
+        for (var sub : built.newSubstances()) {
+            state.dispatch(new Mutation(substanceScope(sub.id()), null, sub,
+                "Create substance", Instant.now(), null, Mutation.Category.STRUCTURAL));
         }
         var circuit = built.circuit();
         if (circuit != null) {
             state.dispatch(new Mutation(circuitScope(circuit.id()), null, circuit,
                 "Create circuit", Instant.now(), null, Mutation.Category.STRUCTURAL));
         }
-        var config = SimulationConfig.fromPhysics(params, template.referenceB0Tesla(),
+        var config = new SimulationConfig(
+            template.referenceB0Tesla(),
+            params.dtSeconds(),
             circuit != null ? circuit.id() : null);
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
@@ -381,6 +410,62 @@ public final class ProjectSessionViewModel {
         return createSequenceFromStarter(name, configId, SequenceStarterLibrary.defaultStarter());
     }
 
+    public SubstanceDocument createSubstance(String name, Substance template) {
+        var substance = template != null ? template : SubstanceStarterLibrary.defaultStarter().template();
+        var doc = new SubstanceDocument(
+            new ProjectNodeId("sub-" + UUID.randomUUID()), name, substance);
+        state.dispatch(new Mutation(substanceScope(doc.id()), null, doc,
+            "Create substance", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        return doc;
+    }
+
+    public void renameSubstance(ProjectNodeId subId, String newName) {
+        var current = state.current().substance(subId);
+        if (current == null) return;
+        var renamed = current.withName(newName);
+        state.dispatch(new Mutation(substanceScope(subId), current, renamed,
+            "Rename substance", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        selectNode(subId);
+    }
+
+    public void deleteSubstance(ProjectNodeId subId) {
+        var current = state.current().substance(subId);
+        if (current == null) return;
+        state.dispatch(new Mutation(substanceScope(subId), current, null,
+            "Delete substance", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (subId.equals(workspace.activeNodeId.get())) workspace.activeNodeId.set(null);
+        if (subId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
+    }
+
+    public ax.xz.mri.project.ProcedureDocument createProcedure(
+        String name,
+        String source
+    ) {
+        var doc = new ax.xz.mri.project.ProcedureDocument(
+            new ProjectNodeId("proc-" + UUID.randomUUID()), name, source);
+        state.dispatch(new Mutation(procScope(doc.id()), null, doc,
+            "Create procedure", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        return doc;
+    }
+
+    public void renameProcedure(ProjectNodeId procId, String newName) {
+        var current = state.current().procedure(procId);
+        if (current == null) return;
+        var renamed = current.withName(newName);
+        state.dispatch(new Mutation(procScope(procId), current, renamed,
+            "Rename procedure", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        selectNode(procId);
+    }
+
+    public void deleteProcedure(ProjectNodeId procId) {
+        var current = state.current().procedure(procId);
+        if (current == null) return;
+        state.dispatch(new Mutation(procScope(procId), current, null,
+            "Delete procedure", Instant.now(), null, Mutation.Category.STRUCTURAL));
+        if (procId.equals(workspace.activeNodeId.get())) workspace.activeNodeId.set(null);
+        if (procId.equals(inspector.inspectedNodeId.get())) inspector.inspectedNodeId.set(null);
+    }
+
     public SequenceDocument createSequenceFromStarter(String name, ProjectNodeId configId, SequenceStarter starter) {
         if (starter == null) starter = SequenceStarterLibrary.defaultStarter();
         var st = state.current();
@@ -388,7 +473,7 @@ public final class ProjectSessionViewModel {
         var config = configDoc != null ? configDoc.config() : null;
         CircuitDocument circuit = config != null ? st.circuit(config.circuitId()) : null;
 
-        var clipSeq = starter.build(config, circuit);
+        var clipSeq = starter.build(config, circuit, st);
         var doc = new SequenceDocument(
             new ProjectNodeId("seq-" + UUID.randomUUID()), name,
             clipSeq, configId, null
@@ -410,6 +495,8 @@ public final class ProjectSessionViewModel {
     private static Scope efScope(ProjectNodeId id)      { return Scope.indexed(Scope.root(), "eigenfields", id); }
     private static Scope circuitScope(ProjectNodeId id) { return Scope.indexed(Scope.root(), "circuits", id); }
     private static Scope hwScope(ProjectNodeId id)      { return Scope.indexed(Scope.root(), "hardware", id); }
+    private static Scope substanceScope(ProjectNodeId id) { return Scope.indexed(Scope.root(), "substances", id); }
+    private static Scope procScope(ProjectNodeId id)    { return Scope.indexed(Scope.root(), "procedures", id); }
 
     private static String uniqueName(java.util.Set<String> existing, String base) {
         if (!existing.contains(base)) return base;

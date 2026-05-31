@@ -1,45 +1,60 @@
 /* ============================================================================
- * MRI Studio — dense, desktop-app visual language
+ * MRI Studio — SolidWorks-grade desktop visual language
  *
- * A compact, information-rich workspace. Small type, thin borders,
- * desktop-style tabs, editable tables. Feels closer to EPIC / Office 2007 /
- * Windows 7 than to a modern web app.
+ * A compact, information-rich workspace. Restrained blue-grey palette,
+ * hairline borders, square chrome, no rounded pills. Reads like SolidWorks /
+ * IntelliJ / Blender — not like a web app or an iOS demo.
+ *
+ * Single source of truth for every colour, type size, and border weight.
+ * Downstream CSS files reference these tokens by name; never hardcode hex.
  * ============================================================================ */
 
 .root {
-    -fx-accent:             #0b5cad;
-    -fx-focus-color:        #0b5cad;
-    -fx-faint-focus-color:  rgba(11, 92, 173, 0.18);
+    -fx-accent:             #0f5fa6;
+    -fx-focus-color:        #0f5fa6;
+    -fx-faint-focus-color:  rgba(15, 95, 166, 0.16);
 
-    -studio-bg:             #eff1f4;
-    -studio-bg-subtle:      #e5e8ec;
-    -studio-surface:        #ffffff;
-    -studio-surface-muted:  #f4f5f7;
-    -studio-surface-hover:  #e7edf5;
-    -studio-surface-alt:    #fafbfc;
+    /* Surfaces — cool blue-grey, three levels deep ----------------------- */
+    -studio-bg:             #dee4ed;     /* app chrome / behind panes */
+    -studio-bg-subtle:      #d5dce6;     /* outer footer / sidebar gutter */
+    -studio-surface:        #ffffff;     /* pane bodies (lane area, canvas) */
+    -studio-surface-alt:    #f7f9fc;     /* alt rows, scroll gutters */
+    -studio-surface-muted:  #eef1f6;     /* toolbars, dock chrome, header bars */
+    -studio-surface-hover:  #e0e7f0;     /* hover tint */
+    -studio-surface-emboss: #ffffff;     /* raised inner panel (inspector card) */
+    -studio-surface-active: #c9d4e3;     /* selected row tint (chrome rows) */
 
-    -studio-border:         #c5cad1;
-    -studio-border-subtle:  #dde0e5;
-    -studio-border-strong:  #9aa2ad;
-    -studio-border-focus:   #0b5cad;
+    /* Lines — three weights of hairline ---------------------------------- */
+    -studio-border:         #a8b4c4;     /* primary hairline between regions */
+    -studio-border-subtle:  #c5cdd9;     /* divider inside a pane */
+    -studio-border-strong:  #5d6f88;     /* outline of a focused leaf */
+    -studio-border-focus:   #0f5fa6;     /* keyboard-focus ring */
 
-    -studio-text:           #1b1f24;
-    -studio-text-secondary: #3c434e;
-    -studio-text-tertiary:  #5c6571;
-    -studio-text-muted:     #8a919b;
+    /* Text --------------------------------------------------------------- */
+    -studio-text:           #2b3340;     /* primary */
+    -studio-text-secondary: #3a4554;     /* labels, body */
+    -studio-text-tertiary:  #5d6f88;     /* small-caps captions, axis ticks */
+    -studio-text-muted:     #8a96a8;     /* placeholder, disabled */
+    -studio-text-disabled:  #98a4b6;     /* explicit disabled (alias) */
     -studio-text-inverse:   #ffffff;
 
-    -studio-accent:         #0b5cad;
-    -studio-accent-hover:   #094f94;
-    -studio-accent-active:  #063d73;
-    -studio-accent-subtle:  rgba(11, 92, 173, 0.10);
-    -studio-accent-tint:    rgba(11, 92, 173, 0.18);
+    /* Accent — restrained CAD blue, not Office cobalt -------------------- */
+    -studio-accent:         #0f5fa6;     /* primary action / focus / selection */
+    -studio-accent-hover:   #0d5293;     /* darker on hover */
+    -studio-accent-active:  #0a4279;     /* darkest, pressed */
+    -studio-accent-subtle:  rgba(15, 95, 166, 0.10);
+    -studio-accent-tint:    #d4e2f1;     /* selected-row solid tint */
 
-    -studio-success:        #147a3f;
-    -studio-warning:        #a45a00;
-    -studio-danger:         #b42318;
-    -studio-danger-subtle:  rgba(180, 35, 24, 0.10);
+    /* Status — desaturated, not iOS ------------------------------------- */
+    -studio-success:        #4d7e3e;     /* legacy alias */
+    -studio-warning:        #b67500;     /* desaturated amber, NOT safety-orange */
+    -studio-danger:         #b3261e;
+    -studio-danger-subtle:  rgba(179, 38, 30, 0.10);
+    -studio-ok:             #4d7e3e;     /* plan-spec alias */
+    -studio-warn:           #b67500;     /* plan-spec alias */
+    -studio-error:          #b3261e;     /* plan-spec alias */
 
+    /* Type — single family, three sizes max, NO italics ------------------ */
     -fx-font-family: "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Helvetica Neue", system, sans-serif;
     -fx-font-size: 11px;
 }
@@ -86,9 +101,10 @@
     -fx-border-color: -studio-border;
     -fx-border-width: 1;
 }
+/* Active leaf: hairline accent, no glow. SolidWorks doesn't shadow active panes. */
 .workbench-pane:active {
     -fx-border-color: -studio-accent;
-    -fx-effect: dropshadow(gaussian, rgba(11, 92, 173, 0.14), 10, 0.10, 0, 1);
+    -fx-border-width: 1;
 }
 
 .pane-header {
@@ -774,6 +790,175 @@
     -fx-font-weight: bold;
     -fx-font-size: 11px;
     -fx-text-fill: -studio-accent;
+}
+
+/* ============================================================================
+ * Document-editor sections (SubstanceEditor / ProcedureEditor / EigenfieldEditor)
+ *
+ * Sectioned card grammar shared by every document-editor pane. Visual
+ * language matches SolidWorks / HFSS: hairline-bordered card, small-caps
+ * tracking header, hint underline, aligned label gutter, optional unit
+ * suffix.
+ * ============================================================================ */
+
+.editor-page-header {
+    -fx-padding: 8 12 8 12;
+    -fx-spacing: 8;
+    -fx-background-color: linear-gradient(to bottom, #f4f6f9, #e6eaf0);
+    -fx-border-color: transparent transparent -studio-border transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.editor-page-name      { -fx-font-size: 13px; -fx-font-weight: 600; -fx-text-fill: -studio-text; }
+.editor-page-subtitle  { -fx-font-size: 11px; -fx-text-fill: -studio-text-tertiary; }
+.editor-page-separator { -fx-text-fill: -studio-text-muted; -fx-padding: 0 2 0 2; }
+
+.editor-kind-badge {
+    -fx-font-size: 9.5px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text-inverse;
+    -fx-background-color: -studio-accent;
+    -fx-background-radius: 2;
+    -fx-padding: 2 6 2 6;
+}
+
+.editor-section-stack {
+    -fx-spacing: 10;
+    -fx-padding: 10 12 10 12;
+}
+
+.editor-section {
+    -fx-background-color: -studio-surface-emboss;
+    -fx-border-color: -studio-border-subtle;
+    -fx-border-width: 1;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+    -fx-padding: 8 10 10 10;
+    -fx-spacing: 4;
+}
+
+.editor-section-header {
+    -fx-font-size: 10.5px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text;
+    -fx-padding: 0 0 2 0;
+    -fx-letter-spacing: 0.4;
+}
+
+.editor-section-hint {
+    -fx-font-size: 10.5px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-padding: 0 0 6 0;
+}
+
+.editor-section-body {
+    -fx-spacing: 4;
+}
+
+.editor-section-divider {
+    -fx-background-color: -studio-border-subtle;
+    -fx-padding: 0;
+    -fx-min-height: 1;
+    -fx-max-height: 1;
+}
+
+.editor-field-row {
+    -fx-spacing: 8;
+    -fx-alignment: center-left;
+    -fx-padding: 2 0 2 0;
+}
+
+.editor-field-label {
+    -fx-font-size: 11px;
+    -fx-text-fill: -studio-text-secondary;
+}
+
+.editor-field-unit {
+    -fx-font-size: 10.5px;
+    -fx-text-fill: -studio-text-tertiary;
+}
+
+.editor-field {
+    -fx-font-size: 11px;
+    -fx-background-color: -studio-surface;
+    -fx-border-color: -studio-border-subtle;
+    -fx-border-width: 1;
+    -fx-background-radius: 2;
+    -fx-border-radius: 2;
+    -fx-padding: 3 6 3 6;
+}
+.editor-field:focused {
+    -fx-border-color: -studio-accent;
+}
+
+.editor-field-value {
+    -fx-font-size: 11px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-padding: 3 6 3 6;
+    -fx-background-color: -studio-surface-alt;
+    -fx-border-color: -studio-border-subtle;
+    -fx-border-width: 1;
+    -fx-background-radius: 2;
+    -fx-border-radius: 2;
+}
+
+/* ── Procedure pane visualisation cards ─────────────────────────────── */
+
+.viz-card {
+    -fx-background-color: -studio-surface-emboss;
+    -fx-border-color: -studio-border-subtle;
+    -fx-border-width: 1;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+    -fx-padding: 8 10 10 10;
+}
+
+.viz-card-title {
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text;
+    -fx-padding: 0 0 4 0;
+}
+
+/* JavaFX chart re-styling — clean, CAD-grade chrome. */
+.viz-card .chart {
+    -fx-padding: 0;
+    -fx-background-color: -studio-surface;
+}
+
+.viz-card .chart-plot-background {
+    -fx-background-color: -studio-surface;
+}
+
+.viz-card .chart-vertical-grid-lines,
+.viz-card .chart-horizontal-grid-lines {
+    -fx-stroke: -studio-border-subtle;
+    -fx-stroke-dash-array: 1 3;
+}
+
+.viz-card .axis {
+    -fx-tick-label-fill: -studio-text-tertiary;
+    -fx-tick-label-font-size: 10px;
+    -fx-font-size: 10px;
+}
+
+.viz-card .axis-label {
+    -fx-text-fill: -studio-text-secondary;
+    -fx-font-size: 10.5px;
+}
+
+.viz-card .chart-legend {
+    -fx-background-color: transparent;
+    -fx-padding: 2 4 2 4;
+}
+
+.viz-card .chart-legend-item {
+    -fx-text-fill: -studio-text-secondary;
+    -fx-font-size: 10.5px;
+}
+
+/* Series line widths — slightly thicker than the JavaFX default for legibility. */
+.viz-card .chart-series-line {
+    -fx-stroke-width: 1.6;
 }
 
 /* ============================================================================

@@ -1,0 +1,238 @@
+/* ============================================================================
+ * studio-widgets.css
+ *
+ * Shared stylesheet for the SolidWorks-grade widget kit under
+ * ax.xz.mri.ui.widget/. Each widget self-loads this stylesheet via
+ * Region.getUserAgentStylesheet(), so callers don't need to hook it up.
+ *
+ * Source of truth for every visual rule lives here; the Java side just
+ * applies style classes and pseudo-classes.
+ *
+ * Tokens (from studio.css):
+ *   -studio-bg / -studio-surface / -studio-surface-muted / -studio-surface-emboss
+ *   -studio-border / -studio-border-subtle / -studio-border-strong / -studio-border-focus
+ *   -studio-text / -studio-text-secondary / -studio-text-tertiary / -studio-text-muted
+ *   -studio-accent / -studio-accent-hover / -studio-accent-tint
+ * ============================================================================ */
+
+
+/* ── Icons ───────────────────────────────────────────────────────────────── */
+
+.studio-icon-vector .studio-icon-glyph {
+    -fx-fill: transparent;
+    -fx-stroke: -studio-text;
+    -fx-stroke-width: 1.4;
+    -fx-stroke-line-cap: round;
+    -fx-stroke-line-join: round;
+}
+.studio-icon.studio-icon-vector:hover .studio-icon-glyph,
+.command-button:selected .studio-icon-vector .studio-icon-glyph,
+.command-button:showing  .studio-icon-vector .studio-icon-glyph,
+.toggle-button:selected  .studio-icon-vector .studio-icon-glyph {
+    -fx-stroke: -studio-accent;
+}
+.studio-icon-vector.inverse .studio-icon-glyph { -fx-stroke: -studio-text-inverse; }
+.studio-icon-vector .studio-icon-glyph.filled {
+    -fx-fill: -studio-text;
+    -fx-stroke: none;
+}
+.studio-icon-vector:hover .studio-icon-glyph.filled,
+.command-button:selected .studio-icon-vector .studio-icon-glyph.filled,
+.command-button:showing  .studio-icon-vector .studio-icon-glyph.filled,
+.toggle-button:selected  .studio-icon-vector .studio-icon-glyph.filled {
+    -fx-fill: -studio-accent;
+}
+
+
+/* Carbon icons via Ikonli — `-fx-icon-color` is the FontIcon hook. One
+ * stroke weight, one ink. Hover / pressed / selected states promote to
+ * the studio accent so chrome state is read at a glance. */
+.studio-icon                         { -fx-icon-color: -studio-text; }
+.studio-icon:hover                   { -fx-icon-color: -studio-accent; }
+.studio-icon:disabled                { -fx-opacity: 0.4; }
+
+/* When inside an active/selected/pressed parent, invert to accent. */
+.toggle-button:selected .studio-icon,
+*:selected > .studio-icon,
+*:pressed  > .studio-icon,
+.command-button:selected .studio-icon,
+.command-button:showing  .studio-icon  { -fx-icon-color: -studio-accent; }
+
+/* "Inverse" variant — for icons on accent-coloured backgrounds (primary buttons). */
+.studio-icon.inverse                 { -fx-icon-color: -studio-text-inverse; }
+
+
+/* ── Command ribbon ──────────────────────────────────────────────────────── */
+
+.command-ribbon-bar {
+    -fx-background-color: linear-gradient(to bottom, #f3f5f9, #e6ebf2);
+    -fx-border-color: transparent transparent -studio-border transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 0;
+    -fx-spacing: 0;
+    -fx-alignment: center-left;
+}
+
+.command-ribbon-group {
+    -fx-padding: 2 8 2 8;
+    -fx-spacing: 0;
+    -fx-alignment: center;
+    -fx-border-color: transparent -studio-border-subtle transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+.command-ribbon-group.last { -fx-border-width: 0; }
+
+.command-ribbon-row    { -fx-spacing: 1; -fx-alignment: center; }
+
+.command-ribbon-caption {
+    -fx-font-size: 8px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-padding: 1 0 0 0;
+    -fx-letter-spacing: 0.6px;
+}
+
+
+/* ── Command button (square, used inside a ribbon) ───────────────────────── */
+
+.command-button {
+    -fx-background-color: transparent;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-border-color: transparent;
+    -fx-border-width: 1;
+    -fx-padding: 1;
+    -fx-min-width: 26;
+    -fx-min-height: 26;
+    -fx-pref-width: 26;
+    -fx-pref-height: 26;
+    -fx-cursor: hand;
+}
+.command-button:hover {
+    -fx-background-color: rgba(15, 95, 166, 0.10);
+    -fx-border-color: rgba(15, 95, 166, 0.35);
+}
+.command-button:focused {
+    -fx-border-color: -studio-accent;
+}
+.command-button:pressed,
+.command-button:selected,
+.command-button:showing {
+    -fx-background-color: rgba(15, 95, 166, 0.18);
+    -fx-border-color: -studio-accent;
+}
+.command-button:selected .studio-icon-glyph,
+.command-button:showing  .studio-icon-glyph {
+    -fx-stroke: -studio-accent;
+}
+.command-button:disabled { -fx-opacity: 0.35; }
+
+/* Popup variant — MenuButton has a wide native arrow that pushes the icon
+ * left and makes the hover background look mis-centred. Replace it with a
+ * tiny bottom-right chevron and centre the icon in the full button area. */
+.command-popup-button {
+    -fx-content-display: graphic-only;
+    -fx-alignment: center;
+}
+.command-popup-button > .arrow-button {
+    -fx-padding: 0;
+    -fx-min-width: 0;
+    -fx-pref-width: 0;
+    -fx-max-width: 0;
+}
+.command-popup-button > .arrow-button > .arrow { -fx-shape: null; -fx-padding: 0; }
+.command-popup-button > .label {
+    -fx-content-display: graphic-only;
+    -fx-alignment: center;
+    -fx-padding: 0;
+}
+
+/* Primary-action variant (Save / Run). */
+.command-button.primary {
+    -fx-background-color: linear-gradient(to bottom, #2073c1, #0d5293);
+    -fx-border-color: -studio-accent-active;
+    -fx-padding: 0 10 0 10;
+    -fx-min-height: 24;
+    -fx-pref-height: 24;
+    -fx-min-width: -fx-pref-width;
+    -fx-pref-width: -1;
+}
+.command-button.primary > .label,
+.command-button.primary {
+    -fx-text-fill: -studio-text-inverse;
+    -fx-font-weight: 700;
+    -fx-font-size: 10px;
+}
+.command-button.primary:hover {
+    -fx-background-color: linear-gradient(to bottom, #2a82d4, #0f5fa6);
+}
+.command-button.primary:pressed {
+    -fx-background-color: -studio-accent-active;
+}
+
+
+/* ── Route chip ──────────────────────────────────────────────────────────── */
+
+.route-chip {
+    -fx-background-color: -studio-surface;
+    -fx-background-radius: 0;
+    -fx-border-color: -studio-border;
+    -fx-border-width: 1;
+    -fx-border-radius: 0;
+    -fx-padding: 1 6 1 4;
+    -fx-min-height: 18;
+    -fx-pref-height: 18;
+    -fx-alignment: center-left;
+    -fx-spacing: 4;
+    -fx-cursor: hand;
+}
+.route-chip:hover    { -fx-border-color: -studio-border-strong; -fx-background-color: -studio-surface-muted; }
+.route-chip:disabled { -fx-opacity: 0.45; }
+
+.route-chip-dot {
+    -fx-background-color: -studio-text-muted;
+    -fx-min-width: 6; -fx-min-height: 6;
+    -fx-pref-width: 6; -fx-pref-height: 6;
+    -fx-max-width: 6; -fx-max-height: 6;
+    -fx-background-radius: 3;
+}
+.route-chip.routed .route-chip-dot     { -fx-background-color: -studio-accent; }
+.route-chip.routed.context-hw .route-chip-dot { -fx-background-color: #b67500; }
+
+.route-chip-context {
+    -fx-font-size: 8px;
+    -fx-font-weight: 700;
+    -fx-letter-spacing: 0.6px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-padding: 0 2 0 0;
+}
+.route-chip-name {
+    -fx-font-size: 10px;
+    -fx-text-fill: -studio-text;
+}
+.route-chip:disabled .route-chip-name,
+.route-chip.unrouted .route-chip-name {
+    -fx-text-fill: -studio-text-muted;
+}
+
+
+/* ── Context badge (sim/hw pill on probe rows) ──────────────────────────── */
+
+.context-badge {
+    -fx-background-color: -studio-accent;
+    -fx-background-radius: 2;
+    -fx-padding: 1 4 1 4;
+    -fx-min-width: 22;
+    -fx-pref-width: -1;
+    -fx-alignment: center;
+}
+.context-badge.context-sim { -fx-background-color: -studio-accent; }
+.context-badge.context-hw  { -fx-background-color: #b67500; }
+.context-badge .label {
+    -fx-font-size: 8px;
+    -fx-font-weight: 700;
+    -fx-text-fill: -studio-text-inverse;
+    -fx-letter-spacing: 0.6px;
+}
+
+

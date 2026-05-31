@@ -1,9 +1,10 @@
 package ax.xz.mri.ui.viewmodel;
 
 import ax.xz.mri.model.scenario.RunResult;
-import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.sequence.SequenceBakery;
+import ax.xz.mri.model.simulation.SignalTrace;
+import ax.xz.mri.service.simulation.compiled.CompiledSimulation;
 import ax.xz.mri.state.Autosaver;
 import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.state.ProjectStateIO;
@@ -11,6 +12,10 @@ import ax.xz.mri.state.RecordSurgery;
 import ax.xz.mri.state.UnifiedStateManager;
 import ax.xz.mri.ui.model.IsochromatCollectionModel;
 import ax.xz.mri.ui.model.IsochromatSelectionModel;
+import ax.xz.mri.ui.edit.EditSession;
+import ax.xz.mri.ui.sim.SimDispatcher;
+import ax.xz.mri.ui.sim.SimRunner;
+import ax.xz.mri.ui.time.TimeAxis;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 
@@ -31,11 +36,10 @@ public class StudioSession {
     public final ProjectStateIO projectIO = new ProjectStateIO();
     /** Memoised baker for {@code (clipSequence, circuit) → segments + pulse}. */
     public final SequenceBakery bakery = new SequenceBakery();
-    public final ViewportViewModel viewport = new ViewportViewModel();
+    public final TimeAxis timeAxis = new TimeAxis();
     public final SphereViewModel sphere = new SphereViewModel();
     public final GeometryViewModel geometry = new GeometryViewModel();
     public final MagnetisationColouringViewModel colouring = new MagnetisationColouringViewModel();
-    public final TimelineViewModel timeline = new TimelineViewModel(viewport);
     public final DockingViewModel docking = new DockingViewModel();
     public final IsochromatSelectionModel selection = new IsochromatSelectionModel();
     public final IsochromatCollectionModel points = new IsochromatCollectionModel(selection);
@@ -43,8 +47,6 @@ public class StudioSession {
     public final DerivedComputationViewModel derived = new DerivedComputationViewModel();
     public final GeometryShadingService geometryShading = new GeometryShadingService();
     public final ReferenceFrameViewModel reference = new ReferenceFrameViewModel();
-    public final HeatMapViewModel phaseMapZ = new HeatMapViewModel("\u03c6(z, t)", new double[]{-6, -3, 0, 3, 6}, true);
-    public final HeatMapViewModel phaseMapR = new HeatMapViewModel("\u03c6(r, t)", new double[]{0, 10, 20, 30}, false);
     public final TracePlotViewModel tracePhase =
         new TracePlotViewModel("Phase \u03c6", "\u00b0", -180, 180, new double[]{-180, -90, 0, 90, 180}, TracePlotViewModel.PlotKind.PHASE);
     public final TracePlotViewModel tracePolar =
@@ -54,7 +56,7 @@ public class StudioSession {
     public final MessagesViewModel messages = new MessagesViewModel();
 
     /** The active sequence editing session, or null when not editing a sequence. */
-    public final ObjectProperty<SequenceEditSession> activeEditSession = new SimpleObjectProperty<>(null);
+    public final ObjectProperty<EditSession> activeEditSession = new SimpleObjectProperty<>(null);
 
     public StudioSession() {
         var surgery = new RecordSurgery();
@@ -73,16 +75,12 @@ public class StudioSession {
         reference.setErrorSink(ex -> messages.logError("ReferenceFrame", ex.getMessage(), ex));
         project.setErrorSink(ex -> messages.logWarning("Project", "Auto-save failed: " + ex.getMessage()));
 
-        viewport.tC.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
+        timeAxis.cursor.time.addListener((obs, oldValue, newValue) -> refreshGeometryShading());
         reference.enabled.addListener((obs, oldValue, newValue) -> {
             refreshReferenceFrame();
             refreshGeometryShading();
         });
-        reference.r.addListener((obs, oldValue, newValue) -> {
-            refreshReferenceFrame();
-            refreshGeometryShading();
-        });
-        reference.z.addListener((obs, oldValue, newValue) -> {
+        reference.position.addListener((obs, oldValue, newValue) -> {
             refreshReferenceFrame();
             refreshGeometryShading();
         });
@@ -102,13 +100,20 @@ public class StudioSession {
      * isochromat resimulation, derived field computations, reference-frame
      * refresh) — those panes show a "Spatial data unavailable" placeholder.
      */
-    public void loadRunResult(RunResult result) {
+    /**
+     * Sets all analysis state in one shot for a fresh run. {@code precomputedPrimary}
+     * is the simulator's already-computed trace; supplying it lets
+     * {@link DerivedComputationViewModel#recompute} skip a redundant full
+     * grid Bloch sweep. Pass {@code null} for hardware runs and importers
+     * that don't have a precomputed trace.
+     */
+    public void loadRunResult(RunResult result, SignalTrace precomputedPrimary) {
         document.runResult.set(result);
         if (result instanceof RunResult.Simulation sim) {
-            updateViewportBoundsPreservePosition(sim.output());
-            points.setContext(sim.output(), sim.pulse());
+            updateViewportBoundsPreservePosition(sim.simulation());
+            points.setContext(sim.simulation(), sim.pulse());
             points.resimulateAll();
-            derived.recompute(sim.output(), sim.pulse());
+            derived.recompute(sim.simulation(), sim.pulse(), precomputedPrimary);
             refreshReferenceFrame();
             refreshGeometryShading();
         } else if (result instanceof RunResult.Hardware hw) {
@@ -120,26 +125,20 @@ public class StudioSession {
         }
     }
 
-    /**
-     * Backwards-compat convenience for callers that still produce a raw
-     * {@link SimulationOutput} + pulse pair. Wraps in a
-     * {@link RunResult.Simulation} and delegates to
-     * {@link #loadRunResult(RunResult)}.
-     */
-    public void loadSimulationResult(SimulationOutput data, List<PulseSegment> pulse) {
-        loadRunResult(new RunResult.Simulation(data, pulse));
+    /** Convenience for hardware runs / importers that don't have a precomputed trace. */
+    public void loadRunResult(RunResult result) {
+        loadRunResult(result, null);
     }
 
     /** Capture the full tool window state for the current document. */
     public DocumentSnapshot captureToolSnapshot() {
         return new DocumentSnapshot(
-            viewport.captureSnapshot(),
+            timeAxis.snapshot(),
             sphere.captureSnapshot(),
             geometry.zCenter.get(),
             geometry.halfHeight.get(),
             reference.enabled.get(),
-            reference.r.get(),
-            reference.z.get(),
+            reference.position.get(),
             reference.trajectory.get(),
             java.util.List.copyOf(points.entries),
             new java.util.LinkedHashSet<>(selection.selectedIds),
@@ -152,16 +151,15 @@ public class StudioSession {
     /** Restore tool window state from a document's saved snapshot. */
     public void restoreToolSnapshot(DocumentSnapshot snap) {
         if (snap == null) return;
-        // Viewport + sphere
-        viewport.restoreSnapshot(snap.viewport());
+        // Time axis + sphere
+        timeAxis.restore(snap.timeAxis());
         sphere.restoreSnapshot(snap.sphere());
         // Geometry
         geometry.zCenter.set(snap.geoZCenter());
         geometry.halfHeight.set(snap.geoHalfHeight());
         // Reference frame
         reference.enabled.set(snap.refEnabled());
-        reference.r.set(snap.refR());
-        reference.z.set(snap.refZ());
+        reference.position.set(snap.refPosition());
         reference.trajectory.set(snap.refTrajectory());
         // Points + selection
         points.entries.setAll(snap.points());
@@ -182,10 +180,10 @@ public class StudioSession {
     public void pushResultForTabSwitch(RunResult result) {
         document.runResult.set(result);
         if (result instanceof RunResult.Simulation sim
-                && sim.output() != null && sim.pulse() != null) {
-            points.setContext(sim.output(), sim.pulse());
+                && sim.simulation() != null && sim.pulse() != null) {
+            points.setContext(sim.simulation(), sim.pulse());
             points.resimulateAll();
-            derived.recompute(sim.output(), sim.pulse());
+            derived.recompute(sim.simulation(), sim.pulse());
             refreshReferenceFrame();
             refreshGeometryShading();
         } else if (result instanceof RunResult.Hardware hw) {
@@ -196,9 +194,48 @@ public class StudioSession {
         }
     }
 
-    /** Backwards-compat alias used by the legacy tab-switch caller. */
-    public void pushDataForTabSwitch(SimulationOutput data, java.util.List<PulseSegment> pulse) {
-        pushResultForTabSwitch(data == null ? null : new RunResult.Simulation(data, pulse));
+    /**
+     * Build a dispatcher for the given editor session, wired against this
+     * studio's bakery, project repo, messages pane, time axis, and the unified
+     * pane-loading entry point. The dispatcher itself is dependency-free; the
+     * wiring code below is the only place that knows how to translate edit
+     * state into a fresh {@link ax.xz.mri.ui.sim.SimRequest}.
+     */
+    public SimDispatcher newSimDispatcher(EditSession editSession) {
+        var runner = new SimRunner(bakery, timeAxis.generation);
+        java.util.function.Supplier<ax.xz.mri.ui.sim.SimRequest> requestSupplier = () -> {
+            var config = editSession.activeConfig.get();
+            var doc = editSession.toDocument();
+            if (config == null || doc == null) return null;
+            var configDoc = editSession.activeConfigDoc.get();
+            String name = configDoc != null ? configDoc.name() : "(unnamed)";
+            return new ax.xz.mri.ui.sim.SimRequest(name, doc, config, project.project(),
+                timeAxis.generation.current());
+        };
+        var dispatcher = new SimDispatcher(requestSupplier, runner, timeAxis.generation,
+            result -> {
+                editSession.lastSimulationTraces.set(result.traces());
+                // Pass the primary trace through so derived.recompute doesn't
+                // run a second full-grid sweep when a probe trace is already
+                // sitting on the SimResult.
+                loadRunResult(new RunResult.Simulation(result.simulation(), result.pulse()),
+                    result.traces() == null ? null : result.traces().primary());
+            },
+            (message, failure) -> {
+                var configDoc = editSession.activeConfigDoc.get();
+                String configName = configDoc != null ? configDoc.name() : "(unnamed)";
+                messages.logError("Simulation",
+                    "Simulation failed for config '" + configName + "': " + message, failure);
+            });
+        editSession.revision.addListener((obs, o, n) -> dispatcher.markDirty());
+        editSession.activeConfig.addListener((obs, o, n) -> dispatcher.markDirty());
+        editSession.activeConfigDoc.addListener((obs, o, n) -> {
+            if (n != null) editSession.applyActiveConfig(n.config());
+        });
+        project.explorer.contentRevision.addListener((obs, o, n) -> {
+            if (editSession.activeConfig.get() != null) dispatcher.markDirty();
+        });
+        return dispatcher;
     }
 
     public void dispose() {
@@ -208,33 +245,34 @@ public class StudioSession {
         reference.dispose();
     }
 
-    private void updateViewportBoundsPreservePosition(SimulationOutput data) {
-        if (data == null || data.field() == null || data.field().segments == null) {
-            viewport.setMaxTimePreservePosition(1000);
-            return;
-        }
-        double total = data.field().segments.stream()
+    private void updateViewportBoundsPreservePosition(CompiledSimulation simulation) {
+        if (simulation == null || simulation.segments() == null) return;
+        double simTotal = simulation.segments().stream()
             .mapToDouble(segment -> segment.durationMicros())
             .sum();
-        viewport.setMaxTimePreservePosition(total);
+        // Never shrink the domain on a sim result — the sequence document's
+        // totalDuration (set via EditSession.open) is authoritative for the
+        // editor's domain, and a sim that simulated a sub-range mustn't
+        // collapse the visible timeline to that sub-range.
+        if (simTotal > timeAxis.domain.maxTime.get()) {
+            timeAxis.domain.maxTime.set(simTotal);
+        }
     }
 
     private void updateViewportBoundsForHardware(List<PulseSegment> pulse) {
-        if (pulse == null || pulse.isEmpty()) {
-            viewport.setMaxTimePreservePosition(1000);
-            return;
-        }
-        // Without segment timing on a hardware run we approximate from step count;
-        // the device sample period is captured per-result by the plugin.
+        if (pulse == null || pulse.isEmpty()) return;
         int steps = pulse.stream().mapToInt(p -> p.steps().size()).sum();
-        viewport.setMaxTimePreservePosition(Math.max(1000, steps));
+        if (steps > timeAxis.domain.maxTime.get()) {
+            timeAxis.domain.maxTime.set(steps);
+        }
     }
 
     private void refreshGeometryShading() {
-        geometryShading.request(geometry, document.simulationOutput.get(), document.currentPulse.get(), viewport.tC.get(), reference);
+        geometryShading.request(geometry, document.simulation.get(), document.currentPulse.get(),
+            timeAxis.cursor.time.get(), reference);
     }
 
     private void refreshReferenceFrame() {
-        reference.refresh(document.simulationOutput.get(), document.currentPulse.get());
+        reference.refresh(document.simulation.get(), document.currentPulse.get());
     }
 }

@@ -1,7 +1,7 @@
 package ax.xz.mri.ui.eigenfield;
 
-import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
-import ax.xz.mri.model.simulation.dsl.ScriptCompileException;
+import ax.xz.mri.dsl.EigenfieldEngine;
+import ax.xz.mri.dsl.ScriptCompileException;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.state.DocumentEditor;
 import ax.xz.mri.state.Mutation;
@@ -30,6 +30,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
@@ -57,12 +58,27 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
     private final TextField unitsField = new TextField();
     private final Label statusLabel = new Label("Ready");
     private final Button compileButton = new Button("Compile");
+    /** Full-line band painted over {@link #scriptEditor} at the compile-error line. */
+    private final Region errorMarker = new Region();
+    private final StackPane scriptStack = new StackPane();
+    private static final double LINE_HEIGHT_PX = 14.5;
+    private static final double EDITOR_TOP_PAD_PX = 4;
 
     private final EigenfieldPreviewCanvas preview = new EigenfieldPreviewCanvas();
 
     private final Timeline compileDebounce = new Timeline();
     private boolean suppressScriptListener;
     private Runnable onTitleChanged;
+    /**
+     * Set after {@link #hydrateFromDocument()} and consumed by the next
+     * successful {@link #compileScript()}: the first compile of a freshly-
+     * loaded document auto-detects an appropriate half-extent for the
+     * preview canvas so eigenfields with sub-micron or kilometre-scale
+     * features render visibly out of the box. Subsequent recompiles do
+     * <em>not</em> override the user's manual scale choice — they only
+     * re-bind the script.
+     */
+    private boolean autoFitOnNextCompile;
 
     public EigenfieldEditorPane(PaneContext paneContext, EigenfieldDocument document) {
         super(paneContext);
@@ -115,6 +131,7 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         setPaneContent(body);
 
         hydrateFromDocument();
+        autoFitOnNextCompile = true;
         compileScript();
     }
 
@@ -166,6 +183,24 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         scriptEditor.setPrefColumnCount(60);
         scriptEditor.textProperty().addListener((obs, o, n) -> onScriptEdited());
 
+        errorMarker.setBackground(new javafx.scene.layout.Background(
+            new javafx.scene.layout.BackgroundFill(
+                javafx.scene.paint.Color.web("#b3261e", 0.18), null, null)));
+        errorMarker.setBorder(new javafx.scene.layout.Border(
+            new javafx.scene.layout.BorderStroke(
+                javafx.scene.paint.Color.web("#b3261e", 0.65),
+                javafx.scene.layout.BorderStrokeStyle.SOLID,
+                null, new javafx.scene.layout.BorderWidths(0, 0, 0, 3))));
+        errorMarker.setMouseTransparent(true);
+        errorMarker.setVisible(false);
+        errorMarker.setPrefHeight(LINE_HEIGHT_PX);
+        errorMarker.setMinHeight(LINE_HEIGHT_PX);
+        errorMarker.setMaxHeight(LINE_HEIGHT_PX);
+        StackPane.setAlignment(errorMarker, Pos.TOP_LEFT);
+        errorMarker.prefWidthProperty().bind(scriptEditor.widthProperty().subtract(16));
+        scriptStack.getChildren().setAll(scriptEditor, errorMarker);
+        VBox.setVgrow(scriptStack, Priority.ALWAYS);
+
         compileButton.setOnAction(e -> compileScript());
         compileButton.setFocusTraversable(false);
 
@@ -181,8 +216,8 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         help.setStyle("-fx-text-fill: #707070; -fx-font-size: 10.5;");
         help.setPadding(new Insets(6, 0, 0, 0));
 
-        var editorBox = new VBox(4, header, scriptEditor, statusRow, help);
-        VBox.setVgrow(scriptEditor, Priority.ALWAYS);
+        var editorBox = new VBox(4, header, scriptStack, statusRow, help);
+        VBox.setVgrow(scriptStack, Priority.ALWAYS);
         editorBox.setPadding(new Insets(4));
         return editorBox;
     }
@@ -210,10 +245,46 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
         densitySlider.valueProperty().addListener((obs, o, n) ->
             preview.samplesPerAxisProperty().set(n.intValue()));
 
-        var extentSlider = new Slider(0.02, 0.5, preview.halfExtentMProperty().get());
-        extentSlider.setPrefWidth(120);
-        extentSlider.valueProperty().addListener((obs, o, n) ->
-            preview.halfExtentMProperty().set(n.doubleValue()));
+        // Log-scale half-extent slider: slider value = log10(extent / 1 m), so
+        // the range [-12, 2] covers 1 pm to 100 m — wide enough for any
+        // eigenfield from a sub-nanometre NV spin texture to a metre-scale
+        // Helmholtz pair. Linear sliders can't span that.
+        double initialLog = Math.log10(Math.max(preview.halfExtentMProperty().get(), 1e-12));
+        var extentSlider = new Slider(-12, 2, initialLog);
+        extentSlider.setPrefWidth(160);
+        extentSlider.setShowTickMarks(false);
+        var extentValueLabel = new Label();
+        extentValueLabel.setMinWidth(64);
+        extentValueLabel.setStyle("-fx-font-family: monospace; -fx-text-fill: -studio-text-secondary;");
+        Runnable refreshLabel = () -> {
+            var pref = ax.xz.mri.util.SiFormat.pickPrefix(
+                Math.max(preview.halfExtentMProperty().get(), 1e-15), "m");
+            double display = preview.halfExtentMProperty().get() * pref.scale();
+            extentValueLabel.setText(String.format("±%.2f %s", display, pref.label()));
+        };
+        // Slider → property (user dragging the slider).
+        boolean[] slaving = {false};
+        extentSlider.valueProperty().addListener((obs, o, n) -> {
+            if (slaving[0]) return;
+            slaving[0] = true;
+            preview.halfExtentMProperty().set(Math.pow(10, n.doubleValue()));
+            refreshLabel.run();
+            slaving[0] = false;
+        });
+        // Property → slider (auto-fit or external set).
+        preview.halfExtentMProperty().addListener((obs, o, n) -> {
+            if (slaving[0]) return;
+            slaving[0] = true;
+            extentSlider.setValue(Math.log10(Math.max(n.doubleValue(), 1e-12)));
+            refreshLabel.run();
+            slaving[0] = false;
+        });
+        refreshLabel.run();
+
+        var autoFitBtn = new Button("Auto-fit");
+        autoFitBtn.setTooltip(new javafx.scene.control.Tooltip(
+            "Detect a half-extent that frames the script's dominant spatial feature"));
+        autoFitBtn.setOnAction(e -> preview.autoFitHalfExtent());
 
         var colourCheck = new CheckBox("Colour by |B|");
         colourCheck.selectedProperty().bindBidirectional(preview.colourByMagnitudeProperty());
@@ -229,7 +300,7 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
             new Separator(Orientation.VERTICAL),
             new Label("Samples"), densitySlider,
             new Separator(Orientation.VERTICAL),
-            new Label("Half-extent (m)"), extentSlider,
+            new Label("Half-extent"), extentSlider, extentValueLabel, autoFitBtn,
             new Separator(Orientation.VERTICAL),
             colourCheck, boxCheck, axesCheck);
         toolbar.setAlignment(Pos.CENTER_LEFT);
@@ -252,13 +323,24 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
     private void hydrateFromDocument() {
         suppressScriptListener = true;
         try {
-            nameField.setText(document.name());
-            descriptionField.setText(document.description() == null ? "" : document.description());
-            unitsField.setText(document.units());
-            scriptEditor.setText(document.script());
+            // Only setText when the value actually changed. TextArea.setText
+            // resets the caret to position 0 even when the new value matches
+            // the current — typing a single character would otherwise yank
+            // the cursor back to the top of the script every keystroke.
+            setIfChanged(nameField, document.name());
+            setIfChanged(descriptionField, document.description() == null ? "" : document.description());
+            setIfChanged(unitsField, document.units());
+            setIfChanged(scriptEditor, document.script());
         } finally {
             suppressScriptListener = false;
         }
+    }
+
+    private static void setIfChanged(TextField field, String value) {
+        if (!java.util.Objects.equals(field.getText(), value)) field.setText(value);
+    }
+    private static void setIfChanged(TextArea area, String value) {
+        if (!java.util.Objects.equals(area.getText(), value)) area.setText(value);
     }
 
     private void onScriptEdited() {
@@ -293,24 +375,41 @@ public final class EigenfieldEditorPane extends WorkbenchPane {
     private void compileScript() {
         String source = document.script();
         try {
-            var compiled = EigenfieldScriptEngine.compile(source);
+            var compiled = EigenfieldEngine.compile(source);
             try {
                 compiled.evaluate(0, 0, 0);
             } catch (Throwable evalFail) {
                 setStatus("Runtime error at origin: " + evalFail.getMessage(), true);
                 preview.scriptProperty().set(null);
+                clearErrorMarker();
                 return;
             }
             preview.scriptProperty().set(compiled);
             setStatus("Compiled.", false);
+            clearErrorMarker();
+            if (autoFitOnNextCompile) {
+                autoFitOnNextCompile = false;
+                preview.autoFitHalfExtent();
+            }
         } catch (ScriptCompileException ex) {
             preview.scriptProperty().set(null);
             setStatus(ex.shortMessage() + "  (line " + ex.line() + ", col " + ex.column() + ")", true);
+            markErrorAtLine(ex.line());
         } catch (Throwable t) {
             preview.scriptProperty().set(null);
             setStatus("Compilation failed: " + t.getMessage(), true);
+            clearErrorMarker();
         }
     }
+
+    private void markErrorAtLine(int line) {
+        if (line < 1) { errorMarker.setVisible(false); return; }
+        double y = EDITOR_TOP_PAD_PX + (line - 1) * LINE_HEIGHT_PX;
+        StackPane.setMargin(errorMarker, new Insets(y, 0, 0, 8));
+        errorMarker.setVisible(true);
+    }
+
+    private void clearErrorMarker() { errorMarker.setVisible(false); }
 
     private void setStatus(String text, boolean error) {
         statusLabel.setText(text);

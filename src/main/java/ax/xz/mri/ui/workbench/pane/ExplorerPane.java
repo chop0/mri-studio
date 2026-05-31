@@ -137,7 +137,9 @@ public final class ExplorerPane extends WorkbenchPane {
 
     private ContextMenu buildContextMenu(ExplorerEntry entry) {
         if (entry.synthetic() || entry.nodeId() == null) return null;
+        var V = ax.xz.mri.ui.menu.ContextMenuVocabulary.class;
         var menu = new ContextMenu();
+
         var open = new MenuItem("Open");
         open.setOnAction(event -> paneContext.session().project.openNode(entry.nodeId()));
         menu.getItems().add(open);
@@ -146,46 +148,55 @@ public final class ExplorerPane extends WorkbenchPane {
         var node = repo.node(entry.nodeId());
 
         if (node != null && node.kind() == ProjectNodeKind.SEQUENCE) {
-            var rename = new MenuItem("Rename Sequence");
-            rename.setOnAction(event -> renameSequence(entry.nodeId()));
-            menu.getItems().add(rename);
-
-            var delete = new MenuItem("Delete Sequence");
-            delete.setOnAction(event -> {
-                paneContext.session().project.selectNode(entry.nodeId());
-                paneContext.controller().commandRegistry().execute(CommandId.DELETE_SEQUENCE);
-            });
-            menu.getItems().add(delete);
-        }
-
-        if (node != null && node.kind() == ProjectNodeKind.SIMULATION_CONFIG) {
-            var rename = new MenuItem("Rename Config");
-            rename.setOnAction(event -> renameSimConfig(entry.nodeId()));
-            menu.getItems().add(rename);
-
-            var duplicate = new MenuItem("Duplicate Config");
-            duplicate.setOnAction(event -> {
-                var copy = paneContext.session().project.duplicateSimConfig(entry.nodeId());
-                if (copy != null) paneContext.session().project.openNode(copy.id());
-            });
-            menu.getItems().add(duplicate);
-
-            var delete = new MenuItem("Delete Config");
-            delete.setOnAction(event -> paneContext.session().project.deleteSimConfig(entry.nodeId()));
-            menu.getItems().add(delete);
-        }
-
-        if (node != null && node.kind() == ProjectNodeKind.EIGENFIELD) {
-            var rename = new MenuItem("Rename Eigenfield");
-            rename.setOnAction(event -> renameEigenfield(entry.nodeId()));
-            menu.getItems().add(rename);
-
-            var delete = new MenuItem("Delete Eigenfield");
-            delete.setOnAction(event -> paneContext.session().project.deleteEigenfield(entry.nodeId()));
-            menu.getItems().add(delete);
+            menu.getItems().addAll(
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.RENAME.item(() -> renameSequence(entry.nodeId())),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DELETE.item(() -> {
+                    paneContext.session().project.selectNode(entry.nodeId());
+                    paneContext.controller().commandRegistry().execute(CommandId.DELETE_SEQUENCE);
+                }));
+        } else if (node != null && node.kind() == ProjectNodeKind.SIMULATION_CONFIG) {
+            menu.getItems().addAll(
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.RENAME.item(() -> renameSimConfig(entry.nodeId())),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DUPLICATE.item(() -> {
+                    var copy = paneContext.session().project.duplicateSimConfig(entry.nodeId());
+                    if (copy != null) paneContext.session().project.openNode(copy.id());
+                }),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DELETE.item(
+                    () -> paneContext.session().project.deleteSimConfig(entry.nodeId())));
+        } else if (node != null && node.kind() == ProjectNodeKind.EIGENFIELD) {
+            menu.getItems().addAll(
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.RENAME.item(() -> renameEigenfield(entry.nodeId())),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DELETE.item(
+                    () -> paneContext.session().project.deleteEigenfield(entry.nodeId())));
+        } else if (node != null && node.kind() == ProjectNodeKind.SUBSTANCE) {
+            menu.getItems().addAll(
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.RENAME.item(() -> renameSubstance(entry.nodeId())),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DELETE.item(() -> {
+                    paneContext.session().project.selectNode(entry.nodeId());
+                    paneContext.controller().commandRegistry().execute(CommandId.DELETE_SUBSTANCE);
+                }));
+        } else if (node != null && node.kind() == ProjectNodeKind.PROCEDURE) {
+            menu.getItems().addAll(
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.RENAME.item(() -> renameProcedure(entry.nodeId())),
+                ax.xz.mri.ui.menu.ContextMenuVocabulary.DELETE.item(() -> {
+                    paneContext.session().project.selectNode(entry.nodeId());
+                    paneContext.controller().commandRegistry().execute(CommandId.DELETE_PROCEDURE);
+                }));
         }
 
         return menu;
+    }
+
+    private void renameProcedure(ProjectNodeId procId) {
+        var repository = paneContext.session().state.current();
+        var doc = repository.procedure(procId);
+        if (doc == null) return;
+        var dialog = new TextInputDialog(doc.name());
+        dialog.setTitle("Rename Procedure");
+        dialog.setHeaderText("Rename procedure");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
+            paneContext.session().project.renameProcedure(procId, value));
     }
 
     private void renameSequence(ProjectNodeId sequenceId) {
@@ -222,5 +233,17 @@ public final class ExplorerPane extends WorkbenchPane {
         dialog.setContentText("Name:");
         dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
             paneContext.session().project.renameEigenfield(eigenfieldId, value));
+    }
+
+    private void renameSubstance(ProjectNodeId subId) {
+        var repository = paneContext.session().state.current();
+        var node = repository.node(subId);
+        if (node == null) return;
+        var dialog = new TextInputDialog(node.name());
+        dialog.setTitle("Rename Substance");
+        dialog.setHeaderText("Rename substance");
+        dialog.setContentText("Name:");
+        dialog.showAndWait().map(String::trim).filter(value -> !value.isBlank()).ifPresent(value ->
+            paneContext.session().project.renameSubstance(subId, value));
     }
 }

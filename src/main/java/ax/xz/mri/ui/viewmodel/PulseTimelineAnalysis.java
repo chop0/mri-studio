@@ -1,8 +1,8 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.SignalTrace;
+import ax.xz.mri.service.simulation.compiled.CompiledSimulation;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -15,10 +15,11 @@ public final class PulseTimelineAnalysis {
     private PulseTimelineAnalysis() {
     }
 
-    public static Analysis compute(SimulationOutput data, List<PulseSegment> pulse, SignalTrace signalTrace) {
-        if (data == null || data.field() == null || data.field().segments == null || pulse == null) {
+    public static Analysis compute(CompiledSimulation simulation, List<PulseSegment> pulse, SignalTrace signalTrace) {
+        if (simulation == null || simulation.segments() == null || pulse == null) {
             return EMPTY;
         }
+        var segments = simulation.segments();
 
         var segmentWindows = new ArrayList<TimeWindow>();
         var rfWindows = new ArrayList<TimeWindow>();
@@ -28,8 +29,8 @@ public final class PulseTimelineAnalysis {
         Boolean windowIsRf = null;
         double windowStart = 0.0;
 
-        for (int segmentIndex = 0; segmentIndex < data.field().segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
-            var segment = data.field().segments.get(segmentIndex);
+        for (int segmentIndex = 0; segmentIndex < segments.size() && segmentIndex < pulse.size(); segmentIndex++) {
+            var segment = segments.get(segmentIndex);
             var steps = pulse.get(segmentIndex).steps();
             double segmentStart = tMicros;
 

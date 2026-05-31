@@ -8,6 +8,8 @@ import ax.xz.mri.model.sequence.ClipShape;
 import ax.xz.mri.model.sequence.SignalClip;
 import ax.xz.mri.model.sequence.Track;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.substance.ContinuousMagnetisation;
+import ax.xz.mri.state.ProjectState;
 import ax.xz.mri.ui.wizard.WizardStep;
 
 import java.util.ArrayList;
@@ -30,8 +32,9 @@ public final class SequenceStarterLibrary {
         "cp", "Carr-Purcell (CP)",
         "90 excitation on x, then 180 refocusing pulses on x. Sensitive to B1 inhomogeneity.",
         false);
+    private static final SequenceStarter NV_RAMSEY = new NvRamseyStarter();
 
-    private static final List<SequenceStarter> STARTERS = List.of(BLANK, CPMG, CP);
+    private static final List<SequenceStarter> STARTERS = List.of(BLANK, CPMG, CP, NV_RAMSEY);
 
     public static List<SequenceStarter> all() { return STARTERS; }
 
@@ -52,10 +55,36 @@ public final class SequenceStarterLibrary {
         @Override public String id() { return "blank"; }
         @Override public String name() { return "Blank"; }
         @Override public String description() { return "Empty timeline with one track per channel."; }
-        @Override public ClipSequence build(SimulationConfig config, CircuitDocument circuit) {
+        @Override public ClipSequence build(SimulationConfig config, CircuitDocument circuit, ProjectState state) {
             var tracks = ClipBaker.defaultTracksFor(circuit);
             return new ClipSequence(DEFAULT_DT_MICROS * 10, 1000.0, tracks, List.of());
         }
+    }
+
+    /**
+     * Resolve γ from the first continuous-magnetisation substance referenced
+     * by a Substance block in the circuit. Throws when no such substance
+     * exists — pulse-duration math without a real γ is meaningless and
+     * silently defaulting to a proton constant would hide the fact that the
+     * starter is targeting the wrong sample (e.g. dropping a CPMG sequence
+     * on an NV-only circuit).
+     */
+    private static double gammaFromCircuitOrThrow(CircuitDocument circuit, ProjectState state) {
+        if (circuit == null || state == null) {
+            throw new IllegalStateException(
+                "Sequence starter requires a circuit + project state to resolve γ from a substance");
+        }
+        for (var c : circuit.components()) {
+            if (c instanceof CircuitComponent.Substance block) {
+                var doc = state.substance(block.substanceDocId());
+                if (doc != null && doc.substance() instanceof ContinuousMagnetisation cm) {
+                    return cm.gammaRadPerSecPerTesla();
+                }
+            }
+        }
+        throw new IllegalStateException(
+            "Sequence starter could not resolve a ContinuousMagnetisation substance "
+            + "in circuit '" + circuit.name() + "' — add one before creating a Carr-Purcell-style sequence");
     }
 
     private static final class CarrPurcellStarter implements SequenceStarter {
@@ -83,15 +112,15 @@ public final class SequenceStarterLibrary {
         }
 
         @Override
-        public ClipSequence build(SimulationConfig config, CircuitDocument circuit) {
+        public ClipSequence build(SimulationConfig config, CircuitDocument circuit, ProjectState state) {
             int nEchoes = step != null ? step.getEchoCount() : CarrPurcellConfigStep.DEFAULT_ECHO_COUNT;
             double echoSpacingMicros = step != null
                 ? step.getEchoSpacingMicros() : CarrPurcellConfigStep.DEFAULT_ECHO_SPACING_MICROS;
-            return buildEchoTrain(config, circuit, refocusOnQuadrature, nEchoes, echoSpacingMicros);
+            return buildEchoTrain(config, circuit, state, refocusOnQuadrature, nEchoes, echoSpacingMicros);
         }
     }
 
-    private static ClipSequence buildEchoTrain(SimulationConfig config, CircuitDocument circuit,
+    private static ClipSequence buildEchoTrain(SimulationConfig config, CircuitDocument circuit, ProjectState state,
                                                boolean refocusOnQuadrature, int nEchoes, double echoSpacingMicros) {
         var tracks = ClipBaker.defaultTracksFor(circuit);
         if (config == null || circuit == null) {
@@ -118,7 +147,11 @@ public final class SequenceStarterLibrary {
         }
 
         double b1Max = Math.max(Math.abs(iSrc.maxAmplitude()), Math.abs(qSrc.maxAmplitude()));
-        double gamma = Math.abs(config.gamma());
+        // γ comes from the substance the circuit actually targets — no
+        // silent proton fallback. A CPMG-style starter on an NV-only
+        // circuit throws, which is the right failure: the user should
+        // pick a sequence that matches the sample.
+        double gamma = gammaFromCircuitOrThrow(circuit, state);
         double t90 = computeT90Micros(gamma, b1Max);
         double t180 = 2 * t90;
         double tau = Math.max(t180, echoSpacingMicros) / 2.0;
@@ -180,6 +213,87 @@ public final class SequenceStarterLibrary {
         return new SignalClip(
             null, trackId, new ClipShape.Constant(),
             startMicros, durationMicros, amplitude,
-            0, durationMicros);
+            0, durationMicros, false);
+    }
+
+    /**
+     * NV Ramsey: pump → π/2 → free precession τ → π/2 → read. Drives the MW
+     * I envelope into a single-quadrature π/2 pulse pair and toggles the Laser
+     * source for the pump and read windows. The read clicks differ from the
+     * pump clicks because the second π/2 projects the accumulated Larmor phase
+     * back onto the S_z axis where the optical contrast lives.
+     */
+    private static final class NvRamseyStarter implements SequenceStarter {
+        /** π/2 pulse width — chosen so γ_NV · A_I · t_π/2 = π/2 at A_I = 89 µT. */
+        private static final double T_PI_HALF_US = 0.1;     // 100 ns
+        private static final double MW_AMPLITUDE_T = 8.9e-5;  // ≈ 89 µT
+        private static final double PUMP_US = 3.0;
+        private static final double READ_US = 3.0;
+        private static final double DARK_US = 0.01;          // 10 ns settling
+        private static final double DEFAULT_TAU_US = 1.0;
+
+        @Override public String id() { return "nv-ramsey"; }
+        @Override public String name() { return "NV Ramsey"; }
+        @Override public String description() {
+            return "NV Ramsey magnetometry: pump, 90, free precession tau, 90, read. "
+                + "Drives Laser + MW I/Q tracks on the NV-diamond circuit.";
+        }
+
+        @Override
+        public ClipSequence build(SimulationConfig config, CircuitDocument circuit, ProjectState state) {
+            var tracks = ClipBaker.defaultTracksFor(circuit);
+            if (circuit == null) {
+                return new ClipSequence(0.01, 100.0, tracks, List.of());
+            }
+
+            var laserSrc = findSourceByName(circuit, "Laser");
+            String laserTrack = laserSrc != null ? trackIdFor(tracks, laserSrc.name(), 0) : null;
+
+            // MW I/Q sources sit behind the MW Modulator. Walk the first Modulator's
+            // in0/in1 the way the CP starter does, but bound by name to avoid grabbing
+            // a different modulator if the circuit ever has more than one.
+            var mwMod = firstModulator(circuit);
+            CircuitComponent.VoltageSource mwI = null, mwQ = null;
+            if (mwMod != null) {
+                mwI = CircuitComponent.Modulator.inputSource(mwMod, "in0", circuit);
+                mwQ = CircuitComponent.Modulator.inputSource(mwMod, "in1", circuit);
+            }
+            String mwITrack = mwI != null ? trackIdFor(tracks, mwI.name(), 0) : null;
+            String mwQTrack = mwQ != null ? trackIdFor(tracks, mwQ.name(), 0) : null;
+
+            // If any required track is missing, fall back to a blank timeline so
+            // the wizard still produces a valid sequence document.
+            if (laserTrack == null || mwITrack == null) {
+                return new ClipSequence(0.01, 100.0, tracks, List.of());
+            }
+
+            double cursor = 0;
+            var clips = new ArrayList<SignalClip>();
+
+            // Pump.
+            clips.add(constantClip(laserTrack, cursor, PUMP_US, 1.0));
+            cursor += PUMP_US + DARK_US;
+
+            // First π/2 on MW I.
+            clips.add(constantClip(mwITrack, cursor, T_PI_HALF_US, MW_AMPLITUDE_T));
+            cursor += T_PI_HALF_US;
+
+            // Free precession τ.
+            cursor += DEFAULT_TAU_US;
+
+            // Second π/2 on MW I.
+            clips.add(constantClip(mwITrack, cursor, T_PI_HALF_US, MW_AMPLITUDE_T));
+            cursor += T_PI_HALF_US + DARK_US;
+
+            // Read.
+            clips.add(constantClip(laserTrack, cursor, READ_US, 1.0));
+            cursor += READ_US;
+
+            double total = Math.max(cursor + 1, 10);
+            // 1 ns dt resolves both the MW envelope hand-off and the ~300 ns NV
+            // optical-pump constant cleanly. Keep it fine — the timeline is short.
+            double dt = 0.001;
+            return new ClipSequence(dt, total, tracks, clips);
+        }
     }
 }

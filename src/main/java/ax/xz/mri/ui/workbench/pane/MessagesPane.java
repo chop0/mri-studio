@@ -117,9 +117,11 @@ public final class MessagesPane extends WorkbenchPane {
         if (total == 0) {
             setPaneStatus("No messages");
         } else {
-            setPaneStatus(total + " message" + (total == 1 ? "" : "s")
-                + " — " + errors + " error" + (errors == 1 ? "" : "s")
-                + ", " + warns + " warning" + (warns == 1 ? "" : "s"));
+            setPaneStatus(
+                total + " message" + (total == 1 ? "" : "s"),
+                errors + " error" + (errors == 1 ? "" : "s"),
+                warns + " warning" + (warns == 1 ? "" : "s")
+            );
         }
     }
 

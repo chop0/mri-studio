@@ -2,6 +2,8 @@ package ax.xz.mri.ui.workbench.pane;
 
 import ax.xz.mri.ui.model.IsochromatEntry;
 import ax.xz.mri.ui.theme.StudioTheme;
+import ax.xz.mri.ui.timeline.scrub.ScrubStrip;
+import ax.xz.mri.ui.timeline.scrub.TimeTickFormatter;
 import ax.xz.mri.ui.viewmodel.ReferenceFrameUtil;
 import ax.xz.mri.ui.viewmodel.TracePlotViewModel;
 import ax.xz.mri.ui.workbench.PaneContext;
@@ -11,6 +13,9 @@ import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.TextAlignment;
 
@@ -26,13 +31,11 @@ import static ax.xz.mri.ui.theme.StudioTheme.UI_BOLD_10;
 
 /** Combined angular trace pane containing phase and polar traces side-by-side. */
 public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
-    private static final double OVERVIEW_H = 10;
-    private static final double OVERVIEW_GAP = 6;
     private static final double LEGEND_H = 16;
     private static final double TITLE_H = 14;
     private static final double PAD_LEFT = 40;
     private static final double PAD_RIGHT = 8;
-    private static final double PAD_TOP = 14 + OVERVIEW_H + OVERVIEW_GAP + LEGEND_H + TITLE_H;
+    private static final double PAD_TOP = 14 + LEGEND_H + TITLE_H;
     private static final double PAD_BOTTOM = 18;
     private static final double PLOT_GAP = 14;
 
@@ -49,7 +52,7 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     ) {
     }
 
-    private final AxisScrubBar.Interaction overviewInteraction;
+    protected final ScrubStrip scrubStrip = new ScrubStrip();
     private int hoveredPlot = -1;
     private double hoveredTimeMicros;
     private double hoveredMouseX;
@@ -59,55 +62,61 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     public PhaseTracesWorkbenchPane(PaneContext paneContext) {
         super(paneContext);
         setPaneTitle("Phase Traces");
-        var viewport = paneContext.session().viewport;
-        overviewInteraction = new AxisScrubBar.Interaction(
-            AxisScrubBar.Orientation.HORIZONTAL,
-            AxisScrubBar.WindowModel.of(
-                () -> 0,
-                () -> Math.max(viewport.maxTime.get(), 1),
-                viewport.tS::get, viewport.tE::get,
-                viewport::setAnalysisWindow,
-                viewport::zoomAnalysisWindowAround,
-                viewport::fitAnalysisToData,
-                null
-            )
-        );
+        var ta = paneContext.session().timeAxis;
+
+        scrubStrip.style.set(ScrubStrip.Style.OVERVIEW);
+        scrubStrip.priority.set(ScrubStrip.InteractionPriority.WINDOW);
+        scrubStrip.windowEditable.set(true);
+        scrubStrip.markerEditable.set(false);
+        scrubStrip.tickFormatter.set(TimeTickFormatter.INSTANCE);
+        scrubStrip.showTicks.set(false);
+        scrubStrip.domainStart.set(0);
+        scrubStrip.domainEnd.bind(javafx.beans.binding.Bindings.createDoubleBinding(
+            () -> Math.max(1, ta.domain.maxTime.get()), ta.domain.maxTime));
+        scrubStrip.windowStart.bindBidirectional(ta.analysis.start);
+        scrubStrip.windowEnd  .bindBidirectional(ta.analysis.end);
+        scrubStrip.marker.bind(ta.cursor.time);
+        scrubStrip.minWindowSpan.set(1);
+        scrubStrip.onReset.set(ta.analysis::fit);
+        scrubStrip.onZoom.set(ta.analysis::zoomAround);
+
+        Runnable rebuildSpans = () -> {
+            scrubStrip.spans.clear();
+            for (var sp : RfSpans.compute(
+                    paneContext.session().document.simulation.get(),
+                    paneContext.session().document.currentPulse.get(),
+                    Color.web("#1565c0"), 0.20)) {
+                scrubStrip.spans.add(new ScrubStrip.Span(sp.start(), sp.end(), sp.colour(), sp.opacity()));
+            }
+        };
+        rebuildSpans.run();
+        paneContext.session().document.simulation.addListener((obs, o, n) -> rebuildSpans.run());
+        paneContext.session().document.currentPulse.addListener((obs, o, n) -> rebuildSpans.run());
+
+        var canvasHolder = new StackPane(canvas);
+        var content = new VBox(scrubStrip, canvasHolder);
+        VBox.setVgrow(canvasHolder, Priority.ALWAYS);
+        setPaneContent(content);
 
         bindRedraw(
             paneContext.session().points.entries,
             paneContext.session().selection.selectedIds,
-            paneContext.session().viewport.tS,
-            paneContext.session().viewport.tE,
-            paneContext.session().viewport.tC,
-            paneContext.session().viewport.maxTime,
+            paneContext.session().timeAxis.analysis.start,
+            paneContext.session().timeAxis.analysis.end,
+            paneContext.session().timeAxis.cursor.time,
+            paneContext.session().timeAxis.domain.maxTime,
             paneContext.session().document.currentPulse,
-            paneContext.session().document.simulationOutput,
+            paneContext.session().document.simulation,
             paneContext.session().reference.enabled,
-            paneContext.session().reference.r,
-            paneContext.session().reference.z,
+            paneContext.session().reference.position,
             paneContext.session().reference.trajectory
         );
 
         canvas.setOnMousePressed(event -> {
             if (!event.isPrimaryButtonDown()) return;
-            if (overviewInteraction.handlePress(overviewBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateStatus();
-                scheduleRedraw();
-                return;
-            }
             moveCursor(event.getX(), event.getY());
         });
-        canvas.setOnMouseDragged(event -> {
-            if (overviewInteraction.handleDrag(overviewBounds(), event)) {
-                updateHover(event.getX(), event.getY());
-                updateStatus();
-                scheduleRedraw();
-                return;
-            }
-            moveCursor(event.getX(), event.getY());
-        });
-        canvas.setOnMouseReleased(event -> overviewInteraction.handleRelease());
+        canvas.setOnMouseDragged(event -> moveCursor(event.getX(), event.getY()));
         canvas.setOnMouseMoved(event -> {
             updateHover(event.getX(), event.getY());
             updateStatus();
@@ -115,12 +124,6 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         canvas.setOnMouseExited(event -> {
             hoveredPlot = -1;
             scheduleRedraw();
-        });
-        canvas.setOnScroll(event -> {
-            if (overviewInteraction.handleScroll(overviewBounds(), event)) {
-                updateStatus();
-                scheduleRedraw();
-            }
         });
         canvas.setOnContextMenuRequested(event -> {
             var menu = buildContextMenu(event.getX(), event.getY());
@@ -132,24 +135,6 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
     protected void paint(GraphicsContext g, double width, double height) {
         g.setFill(BG);
         g.fillRect(0, 0, width, height);
-
-        AxisScrubBar.draw(
-            g,
-            overviewBounds(width),
-            AxisScrubBar.Spec.horizontal(
-                0,
-                Math.max(paneContext.session().viewport.maxTime.get(), 1),
-                paneContext.session().viewport.tS.get(),
-                paneContext.session().viewport.tE.get(),
-                AxisScrubBar.rfSpans(
-                    paneContext.session().document.simulationOutput.get(),
-                    paneContext.session().document.currentPulse.get(),
-                    Color.web("#1565c0"),
-                    0.20
-                ),
-                List.of(new AxisScrubBar.Marker(paneContext.session().viewport.tC.get(), CUR, 0.85, 1.0))
-            )
-        );
 
         var plots = plotRects(width, height);
         var referenceTrajectory = paneContext.session().reference.enabled.get()
@@ -168,10 +153,10 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         ax.xz.mri.model.simulation.Trajectory referenceTrajectory,
         boolean hovered
     ) {
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         double tSpan = tMax - tMin;
-        double cursorTime = paneContext.session().viewport.tC.get();
+        double cursorTime = paneContext.session().timeAxis.cursor.time.get();
 
         g.setTextAlign(TextAlignment.RIGHT);
         for (double tick : viewModel.ticks()) {
@@ -309,10 +294,10 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         int plotIndex = plotIndexAt(mouseX, mouseY);
         if (plotIndex < 0) return;
         var rect = plotRects(canvas.getWidth(), canvas.getHeight())[plotIndex];
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         double time = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
-        paneContext.session().viewport.setCursor(time);
+        paneContext.session().timeAxis.cursor.scrubTo(time);
     }
 
     private void updateHover(double mouseX, double mouseY) {
@@ -326,8 +311,8 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             return;
         }
         var rect = plotRects(canvas.getWidth(), canvas.getHeight())[next];
-        double tMin = paneContext.session().viewport.tS.get();
-        double tMax = Math.max(paneContext.session().viewport.tE.get(), tMin + 1);
+        double tMin = paneContext.session().timeAxis.analysis.start.get();
+        double tMax = Math.max(paneContext.session().timeAxis.analysis.end.get(), tMin + 1);
         hoveredMouseX = mouseX;
         hoveredMouseY = mouseY;
         hoveredTimeMicros = tMin + (mouseX - rect.x()) / Math.max(1, rect.width()) * (tMax - tMin);
@@ -342,26 +327,30 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
             .count();
         if (hoveredTarget != null) {
             String label = hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
-            setPaneStatus(String.format(
-                "%s | t=%.1f \u03bcs | %s=%s | M=(%.3f, %.3f, %.3f) | (r=%.1f mm, z=%.1f mm)",
+            var p = hoveredTarget.entry().position();
+            setPaneStatus(
                 hoveredTarget.entry().name(),
-                hoveredTarget.timeMicros(),
-                label,
-                formatPlotValue(label, hoveredTarget.value()),
-                hoveredTarget.mx(),
-                hoveredTarget.my(),
-                hoveredTarget.mz(),
-                hoveredTarget.entry().r(),
-                hoveredTarget.entry().z()
-            ));
+                String.format("t=%.1f \u03bcs", hoveredTarget.timeMicros()),
+                String.format("%s=%s", label, formatPlotValue(label, hoveredTarget.value())),
+                String.format("M=(%.3f, %.3f, %.3f)",
+                    hoveredTarget.mx(), hoveredTarget.my(), hoveredTarget.mz()),
+                String.format("(%.1f, %.1f, %.1f) mm", p.x() * 1e3, p.y() * 1e3, p.z() * 1e3)
+            );
             return;
         }
         if (hoveredPlot < 0) {
-            setPaneStatus(String.format("cursor=%.1f \u03bcs | %d traces visible", paneContext.session().viewport.tC.get(), visible));
+            setPaneStatus(
+                String.format("cursor=%.1f \u03bcs", paneContext.session().timeAxis.cursor.time.get()),
+                String.format("%d traces visible", visible)
+            );
             return;
         }
         String label = hoveredPlot == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
-        setPaneStatus(String.format("%s | t=%.1f \u03bcs | %d traces visible", label, hoveredTimeMicros, visible));
+        setPaneStatus(
+            label,
+            String.format("t=%.1f \u03bcs", hoveredTimeMicros),
+            String.format("%d traces visible", visible)
+        );
     }
 
     private void drawLegend(GraphicsContext g, double width) {
@@ -416,26 +405,14 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
         };
     }
 
-    private AxisScrubBar.Bounds overviewBounds() {
-        return overviewBounds(canvas.getWidth());
-    }
-
-    private static AxisScrubBar.Bounds overviewBounds(double width) {
-        return new AxisScrubBar.Bounds(PAD_LEFT, 2, Math.max(1, width - PAD_LEFT - PAD_RIGHT), OVERVIEW_H);
-    }
-
     private static int niceTick(double span) {
         return span > 5000 ? 2000 : span > 2000 ? 1000 : span > 800 ? 200 : span > 300 ? 100 : 50;
     }
 
     private ContextMenu buildContextMenu(double mouseX, double mouseY) {
         var menu = new ContextMenu();
-        if (overviewBounds().contains(mouseX, mouseY)) {
-            var overview = new MenuItem("Overview");
-            overview.setDisable(true);
-            menu.getItems().addAll(overview, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
-            return menu;
-        }
+        var resetItem = new MenuItem("Zoom Out to Full Range");
+        resetItem.setOnAction(e -> paneContext.session().timeAxis.analysis.fit());
         if (hoveredTarget != null) {
             String label = hoveredTarget.plotIndex() == 0 ? paneContext.session().tracePhase.title() : paneContext.session().tracePolar.title();
             var title = new MenuItem(label + ": " + hoveredTarget.entry().name());
@@ -447,13 +424,13 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
                 : "Show " + hoveredTarget.entry().name());
             toggle.setOnAction(actionEvent -> paneContext.session().points.toggleVisibility(hoveredTarget.entry().id()));
             var setCursor = new MenuItem("Set Cursor Here");
-            setCursor.setOnAction(actionEvent -> paneContext.session().viewport.setCursor(hoveredTarget.timeMicros()));
-            menu.getItems().addAll(title, new SeparatorMenuItem(), select, toggle, setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+            setCursor.setOnAction(actionEvent -> paneContext.session().timeAxis.cursor.scrubTo(hoveredTarget.timeMicros()));
+            menu.getItems().addAll(title, new SeparatorMenuItem(), select, toggle, setCursor, new SeparatorMenuItem(), resetItem);
             return menu;
         }
         var setCursor = new MenuItem("Set Cursor Here");
         setCursor.setOnAction(actionEvent -> moveCursor(mouseX, mouseY));
-        menu.getItems().addAll(setCursor, new SeparatorMenuItem(), overviewInteraction.newResetMenuItem());
+        menu.getItems().addAll(setCursor, new SeparatorMenuItem(), resetItem);
         return menu;
     }
 
@@ -512,7 +489,11 @@ public class PhaseTracesWorkbenchPane extends CanvasWorkbenchPane {
                 ),
                 String.format("Mx = %.3f, My = %.3f", hoveredTarget.mx(), hoveredTarget.my()),
                 String.format("Mz = %.3f", hoveredTarget.mz()),
-                String.format("r = %.1f mm, z = %.1f mm", hoveredTarget.entry().r(), hoveredTarget.entry().z())
+                String.format(
+                    "pos = (%.1f, %.1f, %.1f) mm",
+                    hoveredTarget.entry().position().x() * 1e3,
+                    hoveredTarget.entry().position().y() * 1e3,
+                    hoveredTarget.entry().position().z() * 1e3)
             )
         );
     }

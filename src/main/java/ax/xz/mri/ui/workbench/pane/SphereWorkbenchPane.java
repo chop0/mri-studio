@@ -46,12 +46,11 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
             paneContext.session().sphere.phi,
             paneContext.session().sphere.zoom,
             paneContext.session().sphere.showProjection,
-            paneContext.session().viewport.tS,
-            paneContext.session().viewport.tE,
-            paneContext.session().viewport.tC,
+            paneContext.session().timeAxis.analysis.start,
+            paneContext.session().timeAxis.analysis.end,
+            paneContext.session().timeAxis.cursor.time,
             paneContext.session().reference.enabled,
-            paneContext.session().reference.r,
-            paneContext.session().reference.z,
+            paneContext.session().reference.position,
             paneContext.session().reference.trajectory
         );
 
@@ -120,9 +119,9 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
             g.setGlobalAlpha(1);
         }
 
-        double windowStart = paneContext.session().viewport.tS.get();
-        double windowEnd = paneContext.session().viewport.tE.get();
-        double cursorTime = paneContext.session().viewport.tC.get();
+        double windowStart = paneContext.session().timeAxis.analysis.start.get();
+        double windowEnd = paneContext.session().timeAxis.analysis.end.get();
+        double cursorTime = paneContext.session().timeAxis.cursor.time.get();
         boolean showProjection = paneContext.session().sphere.showProjection.get();
         var referenceTrajectory = paneContext.session().reference.enabled.get()
             ? paneContext.session().reference.trajectory.get()
@@ -249,18 +248,16 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
         double phi = paneContext.session().sphere.phi.get();
         double zoom = paneContext.session().sphere.zoom.get();
         var hit = findNearestEntry(mouseX, mouseY);
-        String suffix = hit != null ? " | selected: " + hit.name() : "";
+        var segments = new java.util.ArrayList<String>(4);
+        segments.add(String.format("\u03b8=%.1f\u00b0 \u03c6=%.1f\u00b0 zoom=%.0f%%",
+            Math.toDegrees(theta), Math.toDegrees(phi), zoom * 100));
+        if (hit != null) segments.add("selected: " + hit.name());
         if (paneContext.session().reference.enabled.get()) {
-            suffix += String.format(
-                " | basis=(%.1f, %.1f)",
-                paneContext.session().reference.r.get(),
-                paneContext.session().reference.z.get()
-            );
+            var p = paneContext.session().reference.position.get();
+            segments.add(String.format("basis=(%.1f, %.1f, %.1f) mm",
+                p.x() * 1e3, p.y() * 1e3, p.z() * 1e3));
         }
-        setPaneStatus(String.format(
-            "\u03b8=%.1f\u00b0 \u03c6=%.1f\u00b0 zoom=%.0f%%%s",
-            Math.toDegrees(theta), Math.toDegrees(phi), zoom * 100, suffix
-        ));
+        setPaneStatus(segments.toArray(new String[0]));
     }
 
     private ContextMenu buildBackgroundMenu() {
@@ -313,7 +310,7 @@ public class SphereWorkbenchPane extends CanvasWorkbenchPane {
         double scale = Math.min(width, height) * 0.37 * paneContext.session().sphere.zoom.get();
         double centreX = width / 2;
         double centreY = height / 2;
-        double cursorTime = paneContext.session().viewport.tC.get();
+        double cursorTime = paneContext.session().timeAxis.cursor.time.get();
         var referenceTrajectory = paneContext.session().reference.enabled.get()
             ? paneContext.session().reference.trajectory.get()
             : null;

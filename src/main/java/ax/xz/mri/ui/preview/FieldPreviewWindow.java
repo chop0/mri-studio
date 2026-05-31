@@ -2,8 +2,8 @@ package ax.xz.mri.ui.preview;
 
 import ax.xz.mri.model.circuit.CircuitComponent;
 import ax.xz.mri.model.simulation.Vec3;
-import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
-import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
+import ax.xz.mri.dsl.EigenfieldScript;
+import ax.xz.mri.dsl.EigenfieldEngine;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.service.circuit.path.CoilPath;
 import ax.xz.mri.service.circuit.path.FieldPreview;
@@ -59,7 +59,7 @@ public final class FieldPreviewWindow {
         String compileError = null;
         try {
             shape = eigenfield != null
-                ? EigenfieldScriptEngine.compile(eigenfield.script())
+                ? EigenfieldEngine.compile(eigenfield.script())
                 : (x, y, z) -> Vec3.ZERO;
         } catch (Throwable t) {
             shape = (x, y, z) -> Vec3.ZERO;

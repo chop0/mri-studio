@@ -1,16 +1,16 @@
 package ax.xz.mri.ui.workbench;
 
-import ax.xz.mri.model.scenario.SimulationOutput;
 import ax.xz.mri.model.sequence.PulseSegment;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.service.simulation.compiled.CompiledSimulation;
 import ax.xz.mri.project.HardwareConfigDocument;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.ui.viewmodel.DocumentSnapshot;
 import ax.xz.mri.ui.viewmodel.HardwareRunSession;
-import ax.xz.mri.ui.viewmodel.SequenceEditSession;
-import ax.xz.mri.ui.viewmodel.SequenceSimulationSession;
+import ax.xz.mri.ui.edit.EditSession;
+import ax.xz.mri.ui.sim.SimDispatcher;
 import ax.xz.mri.ui.viewmodel.StudioSession;
-import ax.xz.mri.ui.workbench.pane.SequenceEditorPane;
+import ax.xz.mri.ui.pane.SequenceEditorPane;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
@@ -18,29 +18,24 @@ import javafx.scene.control.Label;
 import javafx.scene.layout.HBox;
 
 import java.util.List;
-import java.util.Set;
 
 /**
  * Editor provider for sequences. Content: inline config summary + DAW editor.
  * Timeline is a global tool window (not per-doc — avoids duplicate AnimationTimers).
  */
 public final class SequenceEditorProvider implements DocumentEditorProvider {
-	private static final Set<PaneId> RELEVANT = Set.of(
-		PaneId.TIMELINE, PaneId.CROSS_SECTION, PaneId.SPHERE,
-		PaneId.PHASE_MAP_Z, PaneId.PHASE_MAP_R,
-		PaneId.TRACE_PHASE, PaneId.TRACE_POLAR, PaneId.TRACE_MAGNITUDE);
 
 	private final SequenceDocument document;
 	public final SequenceEditorPane editorPane;
-	public final SequenceEditSession editSession;
-	public final SequenceSimulationSession simSession;
+	public final EditSession editSession;
+	public final SimDispatcher simSession;
 	public final HardwareRunSession hardwareSession;
 	private final javafx.scene.layout.BorderPane root;
 	private final HBox configStripContainer;
 	private final StudioSession sessionRef;
 
 	// Cached simulation result — restored on tab switch instead of re-simulating
-	public SimulationOutput cachedSimulationOutput;
+	public CompiledSimulation cachedSimulation;
 	public List<PulseSegment> cachedPulse;
 
 	public SequenceEditorProvider(SequenceDocument document, StudioSession session,
@@ -48,7 +43,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		this.document = document;
 		this.editorPane = new SequenceEditorPane(new PaneContext(session, controller, PaneId.SEQUENCE_EDITOR));
 		this.editSession = editorPane.editSession();
-		this.simSession = new SequenceSimulationSession(editSession, session);
+		this.simSession = session.newSimDispatcher(editSession);
 		this.hardwareSession = new HardwareRunSession(editSession, session);
 
 		editorPane.open(document);
@@ -61,15 +56,17 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		// and degrade gracefully if the id refers to a deleted config.
 		editSession.activeHardwareConfigId.set(document.preferredHardwareConfigId());
 
-		// Wire the edit session's config association to the sim session.
-		// When activeSimConfigId changes (via undo/redo or setActiveSimConfig),
-		// load the corresponding config into the sim session for re-simulation.
+		// Wire the edit session's config association. When activeSimConfigId
+		// changes (via undo/redo or setActiveSimConfig), point the edit session
+		// at the corresponding doc; the dispatcher's listener cascade picks
+		// up the change and triggers a debounced sim — no explicit simulate()
+		// call needed (it would queue a duplicate task on the executor).
 		editSession.activeSimConfigId.addListener((obs, oldId, newId) -> {
 			if (newId != null) {
 				var repo = session.state.current();
 				var configDoc = repo.node(newId);
 				if (configDoc instanceof ax.xz.mri.project.SimulationConfigDocument sc) {
-					simSession.loadConfig(sc);
+					editSession.activeConfigDoc.set(sc);
 				}
 			}
 		});
@@ -84,7 +81,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		this.sessionRef = session;
 		rebuildConfigStrip();
 		session.project.explorer.structureRevision.addListener((obs, o, n) -> rebuildConfigStrip());
-		simSession.activeConfig.addListener((obs, o, n) -> rebuildConfigStrip());
+		editSession.activeConfig.addListener((obs, o, n) -> rebuildConfigStrip());
 
 		// Config strip on top, DAW editor fills remaining space (BorderPane guarantees this)
 		root = new javafx.scene.layout.BorderPane();
@@ -98,8 +95,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 		configStripContainer.setPadding(new Insets(2, 6, 2, 6));
 		configStripContainer.getStyleClass().setAll("shell-tool-strip");
 
-		// Read from the sim session's active config (most up-to-date, including live edits)
-		var cfg = simSession.activeConfig.get();
+		var cfg = editSession.activeConfig.get();
 		if (cfg == null) {
 			configStripContainer.getChildren().add(new Label("No simulation config"));
 		} else {
@@ -107,8 +103,7 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 			int sourceCount = circuit == null ? 0 : circuit.voltageSources().size();
 			configStripContainer.getChildren().addAll(
 				new Label("B\u2080: " + String.format("%.4f T", cfg.referenceB0Tesla())),
-				new Label("T\u2081: " + String.format("%.0f ms", cfg.t1Ms())),
-				new Label("T\u2082: " + String.format("%.0f ms", cfg.t2Ms())),
+				new Label("dt: " + ax.xz.mri.util.SiFormat.time(cfg.dtSeconds() * 1e6)),
 				new Label(sourceCount + " source" + (sourceCount == 1 ? "" : "s"))
 			);
 			var activeConfigId = editSession.activeSimConfigId.get();
@@ -122,21 +117,24 @@ public final class SequenceEditorProvider implements DocumentEditorProvider {
 	}
 
 	@Override public Node editorContent() { return root; }
-	@Override public Set<PaneId> relevantToolWindows() { return RELEVANT; }
 
 	@Override
 	public void activate(StudioSession session) {
 		session.activeEditSession.set(editSession);
-		if (cachedSimulationOutput != null) {
-			session.pushDataForTabSwitch(cachedSimulationOutput, cachedPulse);
+		if (cachedSimulation != null) {
+			session.pushResultForTabSwitch(
+				new ax.xz.mri.model.scenario.RunResult.Simulation(cachedSimulation, cachedPulse));
 		} else {
-			simSession.simulate();
+			// Debounced — coalesces with any sim already triggered by the
+			// constructor's activeSimConfigId listener cascade so we don't
+			// run the full grid Bloch sweep twice on tab open.
+			simSession.markDirty();
 		}
 	}
 
 	@Override
 	public DocumentSnapshot captureState(StudioSession session) {
-		cachedSimulationOutput = session.document.simulationOutput.get();
+		cachedSimulation = session.document.simulation.get();
 		cachedPulse = session.document.currentPulse.get();
 		return session.captureToolSnapshot();
 	}

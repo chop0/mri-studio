@@ -42,8 +42,21 @@ public final class ExplorerTreeBuilder {
         }
         if (!eigenfields.getChildren().isEmpty()) root.getChildren().add(eigenfields);
 
+        var substances = branch("Substances", null, StudioIconKind.SIMULATION);
+        for (var subId : repository.substanceIds()) {
+            substances.getChildren().add(leaf(repository.node(subId), StudioIconKind.SIMULATION));
+        }
+        if (!substances.getChildren().isEmpty()) root.getChildren().add(substances);
+
+        var procedures = branch("Procedures", null, StudioIconKind.SIMULATION);
+        for (var procId : repository.procedureIds()) {
+            procedures.getChildren().add(leaf(repository.node(procId), StudioIconKind.SIMULATION));
+        }
+        if (!procedures.getChildren().isEmpty()) root.getChildren().add(procedures);
+
         root.setExpanded(true);
         sequences.setExpanded(true);
+        procedures.setExpanded(true);
         return root;
     }
 
@@ -55,7 +68,7 @@ public final class ExplorerTreeBuilder {
     private static StudioIconKind iconFor(ProjectNodeKind kind) {
         return switch (kind) {
             case SEQUENCE -> StudioIconKind.SEQUENCE;
-            case SIMULATION_CONFIG, CIRCUIT, HARDWARE_CONFIG -> StudioIconKind.SIMULATION;
+            case SIMULATION_CONFIG, CIRCUIT, HARDWARE_CONFIG, SUBSTANCE, PROCEDURE -> StudioIconKind.SIMULATION;
             case EIGENFIELD -> StudioIconKind.EIGENFIELD;
         };
     }

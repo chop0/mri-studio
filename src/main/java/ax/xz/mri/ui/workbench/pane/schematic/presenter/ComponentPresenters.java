@@ -43,6 +43,8 @@ public final class ComponentPresenters {
             case CircuitComponent.Mixer dc -> new MixerPresenter(dc);
             case CircuitComponent.Modulator mod -> new ModulatorPresenter(mod);
             case CircuitComponent.VoltageMetadata meta -> new VoltageMetadataPresenter(meta);
+            case CircuitComponent.Substance sub -> new SubstancePresenter(sub);
+            case CircuitComponent.OpticalCounter oc -> new OpticalCounterPresenter(oc);
         };
     }
 
@@ -111,7 +113,26 @@ public final class ComponentPresenters {
                 () -> new CircuitComponent.ShuntCapacitor(newId("cshunt"), "Cp", 1e-9)),
             new ComponentPaletteEntry("Parallel (shunt to ground)", "Inductor (parallel)",
                 "Shunt inductance to ground",
-                () -> new CircuitComponent.ShuntInductor(newId("lshunt"), "Lp", 1e-6))
+                () -> new CircuitComponent.ShuntInductor(newId("lshunt"), "Lp", 1e-6)),
+
+            // Substance — a SubstanceDocument placed in the FOV. Wire the
+            // linked doc in the inspector after dropping; magnetic coupling
+            // to coils is implicit / ambient. NV variants expose laser_on
+            // (control) and clicks_red (optical) ports.
+            new ComponentPaletteEntry("Substances", "Substance (continuous magnetisation)",
+                "¹H or similar Bloch ensemble in the FOV — implicit magnetic coupling, no ports",
+                () -> new CircuitComponent.Substance(newId("sub"), "Substance " + shortId(),
+                    new ax.xz.mri.project.ProjectNodeId("substance-unlinked"),
+                    CircuitComponent.Substance.Kind.CONTINUOUS_MAGNETISATION)),
+            new ComponentPaletteEntry("Substances", "Substance (NV diamond)",
+                "NV-centre ensemble — exposes laser_on (control) + clicks_red (optical) ports",
+                () -> new CircuitComponent.Substance(newId("sub"), "Diamond " + shortId(),
+                    new ax.xz.mri.project.ProjectNodeId("substance-unlinked"),
+                    CircuitComponent.Substance.Kind.NV)),
+            new ComponentPaletteEntry("Substances", "Optical counter",
+                "Photon counter — wire its 'in' port from a substance's optical output",
+                () -> new CircuitComponent.OpticalCounter(newId("oc"), "Counter " + shortId(),
+                    0.85, 0.0, 0L))
         );
     }
 

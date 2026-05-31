@@ -1,5 +1,7 @@
 package ax.xz.mri.ui.wizard;
 
+import ax.xz.mri.ui.tutorial.UiAnchor;
+import ax.xz.mri.ui.tutorial.UiAnchors;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.geometry.Insets;
@@ -38,7 +40,14 @@ public class NameStep implements WizardStep {
 	@Override public String title() { return stepTitle; }
 	@Override public Node content() { return root; }
 	@Override public BooleanBinding validProperty() { return valid; }
-	@Override public void onEnter() { field.requestFocus(); field.selectAll(); }
+	@Override public void onEnter() {
+		field.requestFocus();
+		field.selectAll();
+		// Whatever wizard's name step is currently active becomes the live
+		// WIZARD_NAME_INPUT tutorial anchor. Latest-wins; the runner ignores
+		// stale (scene == null) entries once the wizard closes.
+		UiAnchors.register(UiAnchor.WIZARD_NAME_INPUT, field);
+	}
 
 	public String getValue() { return field.getText().trim(); }
 

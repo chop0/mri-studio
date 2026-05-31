@@ -1,0 +1,221 @@
+/* ============================================================================
+ * Timeline element library
+ *
+ * Per-element files would scatter the chrome across many tiny stylesheets;
+ * we keep all timeline-internal selectors together so a single read tells
+ * the whole visual story.
+ * ============================================================================ */
+
+/* ── Kill animations on chrome ──────────────────────────────────
+ * ControlsFX widgets ship with default slide/fade animations that read as
+ * "marketing demo" rather than "professional desktop tool". Snap = instant.
+ */
+.toggle-switch { -thumb-move-animation-time: 0; }
+.split-pane > .split-pane-divider { -fx-animation-duration: 0; }
+.context-menu, .menu-item .label, .combo-box-popup .list-view {
+    -fx-animation-duration: 0;
+    -fx-fade-in-duration: 0ms;
+}
+
+/* ── Tool palette ─────────────────────────────────────────────────
+ * Icon-over-label pictorial buttons; matches the canvas-rendered ink
+ * tone of the icons themselves so the buttons read as part of the chrome.
+ */
+.seq-tool-palette .seq-tool-button {
+    -fx-padding: 2 4 1 4;
+    -fx-min-height: 32;
+    -fx-pref-height: 32;
+    -fx-font-size: 9px;
+    -fx-text-fill: -studio-text-tertiary;
+    -fx-background-radius: 0;
+    -fx-graphic-text-gap: 0;
+}
+.seq-tool-palette .seq-tool-button:selected {
+    -fx-text-fill: -studio-text;
+    -fx-background-color: -studio-accent-tint;
+}
+.seq-tool-palette .seq-tool-button:hover {
+    -fx-background-color: -studio-surface-hover;
+}
+.seq-tool-palette .seq-tool-button:selected:hover {
+    -fx-background-color: -studio-accent-tint;
+}
+
+.timeline-root            { -fx-background-color: -studio-bg; }
+.timeline-root .lane-scroll {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+.timeline-root .lane-scroll > .viewport { -fx-background-color: transparent; }
+.timeline-root .track-lane-row { -fx-spacing: 0; }
+.timeline-root .lane-stack-host {
+    -fx-background-color: -studio-surface;
+    -fx-border-color: -studio-border-subtle;
+    -fx-border-width: 0 0 0 1;
+}
+.timeline-root .lane-stack { -fx-spacing: 0; }
+.timeline-root .lane-overlay { -fx-background-color: transparent; }
+
+/* ── Track lanes & headers ───────────────────────────────────────── */
+
+.track-lane {
+    -fx-background-color: -studio-surface;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.track-lane:hover     { -fx-background-color: derive(-studio-surface, -2%); }
+
+/* Subtle zebra stripe for visual rhythm in long lane stacks — alternating
+   lanes pick up a slightly cooler tone via JavaFX's :nth-child equivalent
+   isn't available, so the parent's stripe class drives this. The TimelineRoot
+   adds .track-lane-stripe to even-indexed lanes after each rebuild. */
+.track-lane.track-lane-stripe { -fx-background-color: -studio-surface-muted; }
+
+.track-lane .rubber-band {
+    -fx-fill: rgba(11, 92, 173, 0.10);
+    -fx-stroke: -studio-accent;
+    -fx-stroke-width: 1;
+    -fx-stroke-dash-array: 4 3;
+}
+
+.track-header-column {
+    -fx-background-color: -studio-surface-muted;
+    -fx-border-color: transparent -studio-border-subtle transparent transparent;
+    -fx-border-width: 0 1 0 0;
+    -fx-spacing: 0;
+}
+
+.track-header {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.track-header:drag-over {
+    -fx-background-color: -studio-accent-tint;
+    -fx-border-color: -studio-accent transparent -studio-accent transparent;
+    -fx-border-width: 1 0 1 0;
+}
+
+/* Coloured rail on the left edge — track identity at a glance. */
+.track-colour-rail {
+    -fx-background-color: -studio-text-tertiary;
+}
+
+.track-header .track-name {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 1 2 1 2;
+    -fx-text-fill: -studio-text;
+    -fx-font-size: 11px;
+    -fx-font-weight: 600;
+}
+.track-header .track-name:focused {
+    -fx-background-color: -studio-surface;
+    -fx-border-color: -studio-accent;
+    -fx-border-width: 1;
+}
+.track-header .track-collapse-chevron {
+    -fx-padding: 0;
+}
+.track-header:collapsed { -fx-opacity: 0.7; }
+
+/* ── Top strips (viewport mini + DAW main) ──────────────────────────
+ *
+ * Two stacked strips above the lane area. The mini strip sets what's
+ * visible; the DAW strip sets the playback range and houses the cursor.
+ */
+
+.timeline-top-strips {
+    -fx-spacing: 0;
+    -fx-background-color: -studio-surface-muted;
+    -fx-border-color: transparent transparent -studio-border transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.viewport-mini-row {
+    -fx-spacing: 0;
+    -fx-min-height: 18;
+    -fx-pref-height: 18;
+    -fx-max-height: 18;
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.viewport-mini-strip { -fx-background-color: transparent; }
+
+.daw-strip-row {
+    -fx-spacing: 0;
+    -fx-min-height: 36;
+    -fx-pref-height: 36;
+}
+.daw-scrub-strip { -fx-background-color: transparent; }
+
+.time-axis-gutter { -fx-background-color: -studio-surface-muted; }
+
+/* ── Cursor overlay ─────────────────────────────────────────────── */
+
+.cursor-overlay .cursor-line {
+    -fx-stroke: #e06000;
+    -fx-stroke-width: 1.4;
+    -fx-stroke-dash-array: 6 3;
+}
+
+/* ── Snap chip ──────────────────────────────────────────────────── */
+
+.snap-chip .snap-line {
+    -fx-stroke: #a45a00;
+    -fx-stroke-width: 1;
+    -fx-stroke-dash-array: 3 3;
+}
+.snap-chip .snap-readout {
+    -fx-background-color: -studio-bg;
+    -fx-text-fill: -studio-text;
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-padding: 1 4 1 4;
+    -fx-background-radius: 2;
+    -fx-border-color: #a45a00;
+    -fx-border-width: 1;
+    -fx-border-radius: 2;
+}
+
+/* ── Output band ────────────────────────────────────────────────── */
+
+.output-band {
+    -fx-background-color: -studio-surface-muted;
+    -fx-border-color: -studio-border transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+.output-row {
+    -fx-border-color: transparent transparent -studio-border-subtle transparent;
+    -fx-border-width: 0 0 1 0;
+}
+.output-row-label {
+    -fx-padding: 4 8 4 8;
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-text-fill: -studio-text-secondary;
+    -fx-background-color: transparent;
+    -fx-border-color: transparent -studio-border-subtle transparent transparent;
+    -fx-border-width: 0 1 0 0;
+}
+.output-row-label.sim { -fx-text-fill: #0b5cad; }
+.output-row-label.hw  { -fx-text-fill: #a45a00; }
+.output-row-plot { -fx-background-color: white; }
+.output-row-plot.hw { -fx-background-color: derive(white, -2%); }
+
+/* ── Overview bar ───────────────────────────────────────────────── */
+
+.overview-bar {
+    -fx-background-color: -studio-surface-muted;
+    -fx-border-color: -studio-border transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+.overview-bar .overview-viewport {
+    -fx-fill: rgba(11, 92, 173, 0.18);
+    -fx-stroke: -studio-accent;
+    -fx-stroke-width: 1;
+}
+.overview-bar .overview-cursor {
+    -fx-stroke: #e06000;
+    -fx-stroke-width: 1.4;
+}

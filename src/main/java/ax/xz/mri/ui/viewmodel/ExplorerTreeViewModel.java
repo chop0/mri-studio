@@ -14,7 +14,7 @@ import javafx.beans.property.SimpleObjectProperty;
  * the explorer pane. {@link #contentRevision} bumps when a node's
  * <em>content</em> changes in place — a schematic edit, a sim-config
  * tweak — and is what downstream consumers (e.g.
- * {@link SequenceSimulationSession}) listen to so they invalidate caches
+ * {@link SimDispatcher}) listen to so they invalidate caches
  * and re-simulate. The two are separate so in-place edits don't force
  * expensive tree rebuilds.
  */

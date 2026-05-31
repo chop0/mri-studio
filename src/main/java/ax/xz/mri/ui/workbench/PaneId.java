@@ -7,16 +7,15 @@ public enum PaneId {
     SPHERE("Bloch Sphere"),
     CROSS_SECTION("Cross-sectional geometry"),
     POINTS("Points of Interest"),
-    TIMELINE("Timeline"),
-    PHASE_MAP_Z("Phase Map Z"),
-    PHASE_MAP_R("Phase Map R"),
     TRACE_PHASE("Phase Trace"),
     TRACE_POLAR("Polar Trace"),
     TRACE_MAGNITUDE("Magnitude Trace"),
     MESSAGES("Messages"),
     SEQUENCE_EDITOR("Sequence Editor"),
     SIM_CONFIG_EDITOR("Simulation Config"),
-    EIGENFIELD_EDITOR("Eigenfield Editor");
+    EIGENFIELD_EDITOR("Eigenfield Editor"),
+    PROCEDURE_EDITOR("Procedure Editor"),
+    SUBSTANCE_EDITOR("Substance");
 
     private final String title;
 

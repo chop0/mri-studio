@@ -1,0 +1,49 @@
+/* ============================================================================
+ * ScrubStrip — single visual language for every scrub-bar in the studio.
+ *
+ * Two style variants apply via the .scrub-strip-ribbon / .scrub-strip-overview
+ * pseudo-classes added by the ScrubStrip Region. Hover/dragging state on the
+ * inner Nodes drive subtle interactive feedback.
+ * ============================================================================ */
+
+.scrub-strip { -fx-background-color: transparent; }
+
+/* Window body (selection band) */
+.scrub-strip .scrub-window {
+    -fx-fill: rgba(15, 95, 166, 0.18);
+    -fx-stroke: rgba(15, 95, 166, 0.65);
+    -fx-stroke-width: 1;
+    -fx-stroke-type: inside;
+}
+.scrub-strip:dragging .scrub-window {
+    -fx-fill: rgba(15, 95, 166, 0.28);
+}
+
+/* Window edges — invisible hit targets that pick up CSS hover state */
+.scrub-strip .scrub-window-edge {
+    -fx-background-color: transparent;
+}
+.scrub-strip .scrub-window-edge:hover {
+    -fx-background-color: rgba(15, 95, 166, 0.55);
+}
+
+/* Marker (cursor handle) — studio accent triangle. No safety-orange,
+ * no dropshadow — both read as iOS / cute, neither right for a CAD app.
+ * A 1.5 px white inset stroke provides contrast against any window-rect tint. */
+.scrub-strip .scrub-marker {
+    -fx-fill: -studio-accent;
+    -fx-stroke: white;
+    -fx-stroke-width: 1;
+}
+.scrub-strip .scrub-marker:hover {
+    -fx-fill: -studio-accent-hover;
+}
+
+/* RIBBON variant — taller, marker emphasised, window tinted lighter so the
+   cursor reads as primary affordance. */
+.scrub-strip-ribbon .scrub-window { -fx-fill: rgba(15, 95, 166, 0.10); }
+
+/* OVERVIEW variant — shorter, window emphasised. */
+.scrub-strip-overview { -fx-pref-height: 18; }
+.scrub-strip-overview .scrub-window { -fx-fill: rgba(15, 95, 166, 0.24); }
+.scrub-strip-overview .scrub-marker { -fx-fill: -studio-accent; }

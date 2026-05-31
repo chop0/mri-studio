@@ -16,7 +16,6 @@ import java.util.List;
 public abstract class CanvasWorkbenchPane extends WorkbenchPane {
     protected final ResizableCanvas canvas = new ResizableCanvas();
     private final List<Runnable> disposers = new ArrayList<>();
-    private ContextMenu activeContextMenu;
     private boolean dirty;
 
     private final AnimationTimer timer = new AnimationTimer() {
@@ -38,8 +37,8 @@ public abstract class CanvasWorkbenchPane extends WorkbenchPane {
         canvas.setOnResized(this::scheduleRedraw);
         canvas.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, event -> {
             paneContext.activate();
-            if (activeContextMenu != null && activeContextMenu.isShowing() && event.isPrimaryButtonDown()) {
-                activeContextMenu.hide();
+            if (event.isPrimaryButtonDown()) {
+                ax.xz.mri.ui.menu.ActiveContextMenu.hide();
             }
         });
         timer.start();
@@ -59,10 +58,9 @@ public abstract class CanvasWorkbenchPane extends WorkbenchPane {
     }
 
     protected final void showCanvasContextMenu(ContextMenu menu, double screenX, double screenY) {
-        if (activeContextMenu != null) activeContextMenu.hide();
-        activeContextMenu = menu;
-        menu.setAutoHide(true);
-        menu.show(canvas, screenX, screenY);
+        // Single global hand-off — hides any previously-shown menu in the
+        // studio (timeline, output rows, explorer tree, …) before showing.
+        ax.xz.mri.ui.menu.ActiveContextMenu.show(menu, canvas, screenX, screenY);
     }
 
     @Override

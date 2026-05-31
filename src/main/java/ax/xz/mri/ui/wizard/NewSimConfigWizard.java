@@ -28,6 +28,17 @@ public final class NewSimConfigWizard {
 
 		var physicsStep = new PhysicsParamsStep();
 
+		// Seed physics defaults from the initially-selected template, then
+		// re-seed whenever the user switches templates. The wizard auto-
+		// selects the first item (EMPTY) on construction, so a deliberate
+		// pick of NV_CENTRE_DIAMOND drops in micron-scale FOVs without the
+		// user having to retype them.
+		var initialTemplate = templateStep.getValue();
+		if (initialTemplate != null) physicsStep.applyDefaults(initialTemplate.defaultPhysics());
+		templateStep.selectedItemProperty().addListener((obs, oldT, newT) -> {
+			if (newT != null && newT != oldT) physicsStep.applyDefaults(newT.defaultPhysics());
+		});
+
 		// Build the wizard with all possible steps.
 		// The template config step is a delegating wrapper that shows the selected
 		// template's config step, or a "no configuration needed" placeholder.

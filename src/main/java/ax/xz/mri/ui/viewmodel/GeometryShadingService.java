@@ -1,63 +1,46 @@
 package ax.xz.mri.ui.viewmodel;
 
-import ax.xz.mri.model.scenario.SimulationOutput;
-import ax.xz.mri.model.sequence.PulseSegment;
-import ax.xz.mri.model.simulation.MagnetisationState;
-import ax.xz.mri.model.simulation.Trajectory;
-import ax.xz.mri.service.simulation.BlochSimulator;
-import javafx.application.Platform;
+import module ax.xz.mri;
+import module javafx.graphics;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
- * Background computer for geometry shading snapshots.
+ * Background computer for the geometry-pane shading snapshot.
  *
- * <p>Samples a (r, z) grid of magnetisation states at the cursor time, shapes
- * them into a shading snapshot, and delivers it on the UI thread.
+ * <p>Samples a 2-D grid on the active {@link SlicePlane} at the cursor time,
+ * shapes the result into a {@link GeometryShadingSnapshot}, and delivers it
+ * on the UI thread. The plane is arbitrary — the service has no idea
+ * whether it's sampling a {@code z = 0} half-plane, the equatorial plane,
+ * or a tilted slice through an NV array. That's the point of Part 8.
  *
- * <h2>Density</h2>
- * The grid uses {@value #RADIAL_SAMPLES} radial samples — matching the Phase
- * Map R resolution — so the rendered shading agrees with what Phase Map R and
- * directly-placed isochromats show at off-axis points.
+ * <p>Substance gating: when no {@link ax.xz.mri.model.substance.ContinuousMagnetisation
+ * continuous-magnetisation substance} is in the FOV, the per-voxel sweep
+ * would render only thermal-equilibrium samples (no real data). The
+ * service short-circuits and clears the snapshot in that case; the pane
+ * paints a status placeholder.
  *
  * <h2>Cost model</h2>
- * <ul>
- *   <li><b>First request per (data, pulse):</b> a parallel pre-warm walks
- *       every grid point end-to-end once, populating the simulator's cursor
- *       cache. This MUST run to completion, independent of the scrub
- *       generation — if it's interrupted by rapid scrubbing, the cursor
- *       cache stays empty and every scrub falls back to a full t=0-to-cursor
- *       walk, which appears as "shading never updates".</li>
- *   <li><b>Subsequent scrubs:</b> each point walks at most one checkpoint
- *       interval (≤ 64 steps) from the nearest cached state. Grid-wide cost
- *       is well under 10 ms on a warm cache.</li>
- *   <li><b>Cancellation:</b> only the snapshot compute is cancellable. It
- *       checks generation between rows and aborts early when a newer request
- *       lands, so continuous dragging doesn't let stale snapshot work queue.</li>
- * </ul>
+ * Each sample is one {@link CompiledSimulation#singleSpinStateAt} call.
+ * The first scrub at a fresh (simulation, pulse) populates the simulator's
+ * trajectory LRU; subsequent scrubs across the same simulation re-use the
+ * cache. Snapshot compute checks generation between rows so continuous
+ * dragging doesn't queue stale work.
  */
 public class GeometryShadingService {
-    private static final int RADIAL_SAMPLES = 20;
-    private static final double INNER_Z_STEP = 0.25;
-    private static final double MID_Z_STEP = 1.0;
-    private static final int OUTER_BANDS = 16;
+    private static final int SAMPLES_U = 24;
+    private static final int SAMPLES_V = 32;
 
-	private final Executor executor;
+    private final Executor executor;
     private final Consumer<Runnable> uiDispatcher;
     private final Runnable disposer;
     private final AtomicLong generation = new AtomicLong();
-    private final ExecutorService prewarmPool;
-
-    /** Identity tag of the most recently warmed (field, pulse) pair. 0 = never warmed. */
-    private volatile int warmedDataTag = 0;
 
     public GeometryShadingService() {
         this(createExecutor(), Platform::runLater, null);
@@ -67,23 +50,32 @@ public class GeometryShadingService {
         this.executor = executor;
         this.uiDispatcher = uiDispatcher;
         this.disposer = disposer != null ? disposer : () -> { };
-        int cores = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-        this.prewarmPool = Executors.newFixedThreadPool(cores, r -> {
-            var t = new Thread(r, "geometry-shading-warm");
-            t.setDaemon(true);
-            return t;
-        });
     }
 
     public void request(
         GeometryViewModel geometry,
-        SimulationOutput data,
+        CompiledSimulation simulation,
         List<PulseSegment> pulse,
         double cursorTimeMicros,
         ReferenceFrameViewModel reference
     ) {
         long currentGeneration = generation.incrementAndGet();
-        if (data == null || pulse == null) {
+        if (simulation == null || pulse == null) {
+            geometry.shadingSnapshot.set(null);
+            geometry.shadingComputing.set(false);
+            geometry.statusMessage.set("");
+            return;
+        }
+        // Substance gating — see class doc.
+        if (simulation.primaryContinuousMagnetisation() == null) {
+            geometry.shadingSnapshot.set(null);
+            geometry.shadingComputing.set(false);
+            geometry.statusMessage.set("");
+            return;
+        }
+
+        var plane = geometry.slicePlane.get();
+        if (plane == null) {
             geometry.shadingSnapshot.set(null);
             geometry.shadingComputing.set(false);
             geometry.statusMessage.set("");
@@ -92,25 +84,15 @@ public class GeometryShadingService {
 
         geometry.shadingComputing.set(true);
         executor.execute(() -> {
-            // Snapshot compute can still be superseded; pre-warm cannot.
-            if (currentGeneration != generation.get()) {
-                // Even if superseded, finish pre-warming (it's useful for the *newer*
-                // request that superseded us). The newer request will overwrite our
-                // snapshot anyway, so skip the compute.
-                ensureWarmed(data, pulse);
-                return;
-            }
+            if (currentGeneration != generation.get()) return;
             try {
-                ensureWarmed(data, pulse);
-
                 var snapshot = computeSnapshot(
-                    data,
-                    pulse,
+                    simulation, plane,
                     cursorTimeMicros,
                     reference != null && reference.enabled.get() ? reference.trajectory.get() : null,
                     currentGeneration
                 );
-                if (snapshot == null) return;  // snapshot compute was superseded
+                if (snapshot == null) return;
                 uiDispatcher.accept(() -> {
                     if (currentGeneration != generation.get()) return;
                     geometry.shadingSnapshot.set(snapshot);
@@ -135,10 +117,6 @@ public class GeometryShadingService {
         });
     }
 
-    /**
-     * Cancel any in-flight shading work and drop the current snapshot. Used
-     * when the active result switches to a hardware run with no spatial state.
-     */
     public void clear(GeometryViewModel geometry) {
         generation.incrementAndGet();
         uiDispatcher.accept(() -> {
@@ -150,96 +128,48 @@ public class GeometryShadingService {
 
     public void dispose() {
         disposer.run();
-        prewarmPool.shutdownNow();
     }
 
-    /**
-     * If this (data, pulse) pair hasn't been pre-warmed yet, do so now.
-     * Runs to completion — pre-warm is NOT cancellable by generation advances.
-     */
-    private void ensureWarmed(SimulationOutput data, List<PulseSegment> pulse) {
-        int dataTag = System.identityHashCode(data.field()) ^ System.identityHashCode(pulse);
-        if (warmedDataTag == dataTag) return;
-        prewarmCursorCache(data, pulse);
-        warmedDataTag = dataTag;
-    }
-
-    /**
-     * Walk every grid point once from t=0 to the end of the sequence, in
-     * parallel across CPU cores. This populates BlochSimulator's cursor cache
-     * with checkpoints so subsequent {@code simulateTo} calls are cheap.
-     *
-     * <p>Runs unconditionally to completion — the inner tasks must not early-exit
-     * based on {@link #generation}, because skipping the work would leave the
-     * cursor cache empty and every future scrub would start from scratch.
-     */
-    private void prewarmCursorCache(SimulationOutput data, List<PulseSegment> pulse) {
-        var field = data.field();
-        if (field.segments == null || field.segments.isEmpty()) return;
-        double acc = 0;
-        for (var seg : field.segments) acc += seg.durationMicros();
-        final double totalMicros = acc;
-        var zSamples = buildZSamples(field.zMm[field.zMm.length - 1]);
-        double rMax = field.rMm[field.rMm.length - 1];
-
-        int total = RADIAL_SAMPLES * zSamples.size();
-        var latch = new CountDownLatch(total);
-        for (int radialIndex = 0; radialIndex < RADIAL_SAMPLES; radialIndex++) {
-            final double rMm = (double) radialIndex / (RADIAL_SAMPLES - 1) * rMax;
-            for (int zIndex = 0; zIndex < zSamples.size(); zIndex++) {
-                final double zMm = zSamples.get(zIndex);
-                prewarmPool.execute(() -> {
-                    try {
-                        BlochSimulator.simulateTo(data, rMm, zMm, pulse, totalMicros);
-                    } finally {
-                        latch.countDown();
-                    }
-                });
-            }
-        }
-        try {
-            latch.await();
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /**
-     * @return the snapshot, or {@code null} if the computation was superseded by a
-     *         newer request and aborted early.
-     */
     private GeometryShadingSnapshot computeSnapshot(
-        SimulationOutput data,
-        List<PulseSegment> pulse,
+        CompiledSimulation simulation,
+        SlicePlane plane,
         double cursorTimeMicros,
         Trajectory referenceTrajectory,
         long myGeneration
     ) {
-        var field = data.field();
-        var zSamples = buildZSamples(field.zMm[field.zMm.length - 1]);
-        double rMax = field.rMm[field.rMm.length - 1];
-        int zCount = zSamples.size();
+        // Pick (u, v) sampling extents from the substance bounding box —
+        // the half-extent along each plane axis guarantees the plane's
+        // intersection with the bounded box is always fully covered.
+        // Anything outside still samples cleanly because singleSpinStateAt
+        // accepts any 3-D point.
+        var fov = substanceHalfExtent(simulation);
+        double halfU = halfExtentAlong(plane.u(), fov);
+        double halfV = halfExtentAlong(plane.v(), fov);
+        var uSamples = buildSamples(-halfU, halfU, SAMPLES_U);
+        var vSamples = buildSamples(-halfV, halfV, SAMPLES_V);
 
-        var cells = new GeometryShadingSnapshot.CellSample[RADIAL_SAMPLES][zCount];
+        var cells = new GeometryShadingSnapshot.CellSample[SAMPLES_U][SAMPLES_V];
 
         double sumMx = 0;
         double sumMy = 0;
-        double[][] mx = new double[RADIAL_SAMPLES][zCount];
-        double[][] my = new double[RADIAL_SAMPLES][zCount];
-        double[][] mp = new double[RADIAL_SAMPLES][zCount];
-        double[][] phase = new double[RADIAL_SAMPLES][zCount];
+        double[][] mx = new double[SAMPLES_U][SAMPLES_V];
+        double[][] my = new double[SAMPLES_U][SAMPLES_V];
+        double[][] mp = new double[SAMPLES_U][SAMPLES_V];
+        double[][] phase = new double[SAMPLES_U][SAMPLES_V];
         MagnetisationState referenceState = referenceTrajectory != null
             ? referenceTrajectory.stepStateAt(cursorTimeMicros) : null;
 
-        for (int radialIndex = 0; radialIndex < RADIAL_SAMPLES; radialIndex++) {
+        for (int i = 0; i < SAMPLES_U; i++) {
             if (myGeneration != generation.get()) return null;
-            double rMm = (double) radialIndex / (RADIAL_SAMPLES - 1) * rMax;
-            for (int zIndex = 0; zIndex < zCount; zIndex++) {
-                var state = BlochSimulator.simulateTo(data, rMm, zSamples.get(zIndex), pulse, cursorTimeMicros);
-                mx[radialIndex][zIndex] = state.mx();
-                my[radialIndex][zIndex] = state.my();
-                mp[radialIndex][zIndex] = state.mPerp();
-                phase[radialIndex][zIndex] = ReferenceFrameUtil.relativePhaseDeg(state.phaseDeg(), referenceState);
+            double u = uSamples.get(i);
+            for (int j = 0; j < SAMPLES_V; j++) {
+                double v = vSamples.get(j);
+                Vec3 position = plane.sampleAt(u, v);
+                var state = simulation.singleSpinStateAt(position, cursorTimeMicros);
+                mx[i][j] = state.mx();
+                my[i][j] = state.my();
+                mp[i][j] = state.mPerp();
+                phase[i][j] = ReferenceFrameUtil.relativePhaseDeg(state.phaseDeg(), referenceState);
                 sumMx += state.mx();
                 sumMy += state.my();
             }
@@ -249,40 +179,58 @@ public class GeometryShadingService {
         double ux = sumNorm > 1e-9 ? sumMx / sumNorm : 0;
         double uy = sumNorm > 1e-9 ? sumMy / sumNorm : 0;
 
-        for (int radialIndex = 0; radialIndex < RADIAL_SAMPLES; radialIndex++) {
-            for (int zIndex = 0; zIndex < zCount; zIndex++) {
-                double signalProjection = Math.max(0, mx[radialIndex][zIndex] * ux + my[radialIndex][zIndex] * uy);
-                cells[radialIndex][zIndex] =
-                    new GeometryShadingSnapshot.CellSample(phase[radialIndex][zIndex], mp[radialIndex][zIndex], signalProjection);
+        for (int i = 0; i < SAMPLES_U; i++) {
+            for (int j = 0; j < SAMPLES_V; j++) {
+                double signalProjection = Math.max(0, mx[i][j] * ux + my[i][j] * uy);
+                cells[i][j] = new GeometryShadingSnapshot.CellSample(
+                    phase[i][j], mp[i][j], signalProjection);
             }
         }
 
-        return new GeometryShadingSnapshot(zSamples, cells);
+        return new GeometryShadingSnapshot(plane, uSamples, vSamples, cells);
     }
 
-    private static List<Double> buildZSamples(double zMax) {
-        var set = new HashSet<Double>();
-        double inner = Math.min(12, zMax);
-        double mid = Math.min(20, zMax);
-        for (double z = -inner; z <= inner + 1e-6; z += INNER_Z_STEP) set.add(round3(z));
-        for (double z = -mid; z <= mid + 1e-6; z += MID_Z_STEP) set.add(round3(z));
-        if (zMax > mid) {
-            double step = (zMax - mid) / OUTER_BANDS;
-            for (int index = 0; index <= OUTER_BANDS; index++) {
-                double z = mid + index * step;
-                set.add(round3(z));
-                set.add(round3(-z));
-            }
+    /**
+     * Half-extent of the axis-aligned bounding box that contains every
+     * substance in the simulation. Falls back to 1 mm cubed when no
+     * substance has a non-trivial extent (e.g. an empty schematic) so the
+     * shading sweep still gets a non-degenerate sampling box.
+     */
+    private static Vec3 substanceHalfExtent(CompiledSimulation sim) {
+        double hx = 0, hy = 0, hz = 0;
+        for (var s : sim.substances()) {
+            var h = s.halfExtent();
+            hx = Math.max(hx, h.x());
+            hy = Math.max(hy, h.y());
+            hz = Math.max(hz, h.z());
         }
-        set.add(-zMax);
-        set.add(zMax);
-        var result = new ArrayList<>(set);
-        result.sort(Double::compareTo);
-        return result;
+        return new Vec3(
+            hx > 0 ? hx : 1e-3,
+            hy > 0 ? hy : 1e-3,
+            hz > 0 ? hz : 1e-3);
     }
 
-    private static double round3(double value) {
-        return Math.round(value * 1000) / 1000.0;
+    /**
+     * Maximum {@code |axis · x|} for any {@code x} inside the substance
+     * half-extents — the corner of the bounded box farthest from the
+     * origin along that axis.
+     */
+    private static double halfExtentAlong(Vec3 axis, Vec3 fov) {
+        return Math.abs(axis.x()) * fov.x()
+             + Math.abs(axis.y()) * fov.y()
+             + Math.abs(axis.z()) * fov.z();
+    }
+
+    private static List<Double> buildSamples(double min, double max, int n) {
+        var out = new ArrayList<Double>(n);
+        if (n == 1 || min == max) {
+            out.add((min + max) / 2);
+            return out;
+        }
+        for (int i = 0; i < n; i++) {
+            out.add(min + (max - min) * i / (n - 1));
+        }
+        return out;
     }
 
     private static ExecutorService createExecutor() {

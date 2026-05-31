@@ -1,5 +1,7 @@
 package ax.xz.mri.ui.wizard;
 
+import ax.xz.mri.ui.tutorial.UiAnchor;
+import ax.xz.mri.ui.tutorial.UiAnchors;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.SimpleIntegerProperty;
@@ -76,6 +78,30 @@ public final class WizardDialog<T> {
 		stage.showAndWait();
 		return finished ? Optional.ofNullable(result) : Optional.empty();
 	}
+
+	/**
+	 * Test-only: expose the wizard's root node so previews can snapshot it
+	 * without going through the modal stage. The caller takes ownership of
+	 * displaying it (or just calling {@code snapshot()} on it).
+	 */
+	public javafx.scene.Parent contentForPreview() {
+		return (javafx.scene.Parent) stage.getScene().getRoot();
+	}
+
+	/** Test-only: programmatically navigate to a step (0-indexed). */
+	public void navigateToForPreview(int stepIndex) { navigateTo(stepIndex); }
+
+	/** Test-only: detach modality so the stage can be shown without blocking. */
+	public void makeNonModalForPreview() {
+		stage.hide();
+		stage.initModality(Modality.NONE);
+	}
+
+	/** Test-only: open the stage. Use after {@link #makeNonModalForPreview()}. */
+	public void showNonBlockingForPreview() { stage.show(); }
+
+	/** Test-only: close the preview stage. */
+	public void closeForPreview() { stage.close(); }
 
 	// --- UI construction ---
 
@@ -156,6 +182,14 @@ public final class WizardDialog<T> {
 			if (resultFactory != null) result = resultFactory.get();
 			stage.close();
 		});
+
+		// Tutorial anchors \u2014 latest wizard wins, and the TutorialRunner
+		// ignores stale entries whose scene has gone null on close, so no
+		// explicit unregister is needed.
+		UiAnchors.register(UiAnchor.WIZARD_CANCEL, cancelBtn);
+		UiAnchors.register(UiAnchor.WIZARD_BACK, backBtn);
+		UiAnchors.register(UiAnchor.WIZARD_NEXT, nextBtn);
+		UiAnchors.register(UiAnchor.WIZARD_FINISH, finishBtn);
 
 		// Bind Next/Finish disable to current step validity
 		currentIndex.addListener((obs, oldVal, newVal) -> {

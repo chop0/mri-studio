@@ -5,12 +5,9 @@ import ax.xz.mri.ui.viewmodel.StudioSession;
 import ax.xz.mri.ui.workbench.pane.HardwareConfigEditorPane;
 import javafx.scene.Node;
 
-import java.util.Set;
-
 /**
- * Editor provider for hardware configs. Hosts a full-page
- * {@link HardwareConfigEditorPane} as the workspace tab content; no
- * analysis tool windows are relevant.
+ * Editor provider for hardware configs. The editor pane fills the document
+ * tab on its own — there is no separate analysis chrome to coordinate.
  */
 public final class HardwareConfigEditorProvider implements DocumentEditorProvider {
     private final HardwareConfigDocument configDoc;
@@ -24,15 +21,12 @@ public final class HardwareConfigEditorProvider implements DocumentEditorProvide
     }
 
     @Override public Node editorContent() { return editorPane; }
-    @Override public Set<PaneId> relevantToolWindows() { return Set.of(); }
 
     @Override
     public void activate(StudioSession session) {
         session.activeEditSession.set(null);
         // Preserve last analysis data — editing a hardware config doesn't replace the run result.
     }
-
-    @Override public void dispose() {}
 
     public HardwareConfigDocument configDoc() { return configDoc; }
     public HardwareConfigEditorPane editorPane() { return editorPane; }
