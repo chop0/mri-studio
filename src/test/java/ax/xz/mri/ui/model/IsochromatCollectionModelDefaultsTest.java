@@ -124,7 +124,7 @@ class IsochromatCollectionModelDefaultsTest {
     private static CompiledSimulation compileNvOnly(List<NvCentre> centres) {
         var geom = new NvArrayGeometry(NvArrayShape.CUSTOM, centres.size(), 1e-6, 50e-9,
             NvAxis.AXIS_PLUS_Z, 0L, centres);
-        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L, 0.0);
+        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L);
         var doc = new CircuitDocument(new ProjectNodeId("c"), "C",
             List.<CircuitComponent>of(), List.of(), CircuitLayout.empty());
         List<Substance> substances = List.of(ensemble);

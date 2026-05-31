@@ -60,7 +60,6 @@ public final class SubstanceEditorPane extends WorkbenchPane {
     private ToggleGroup toolGroup;
     private ComboBox<NvAxis> nvAxisCombo;
     private TextField nvSeedField;
-    private TextField nvThresholdNmField;
     private ComboBox<ConstraintOption> constraintCombo;
     private ComboBox<EigenfieldOption> eigenfieldCombo;
     private Label nvCentreCountLabel;
@@ -161,8 +160,8 @@ public final class SubstanceEditorPane extends WorkbenchPane {
             case NvEnsemble nv -> {
                 headerBadge.setText("NV");
                 headerSubtitle.setText(String.format(
-                    "%d centres · cluster cut-off %.0f nm",
-                    nv.centres().size(), nv.interactionThresholdMetres() * 1e9));
+                    "%d centres · %.0f nm deep",
+                    nv.centres().size(), nv.arrayGeometry().depthMetres() * 1e9));
             }
         }
     }
@@ -351,12 +350,15 @@ public final class SubstanceEditorPane extends WorkbenchPane {
     }
 
     private SectionCard buildNvShotsCard(NvEnsemble nv) {
-        nvSeedField        = EditorSection.longField(nv.shotSeed(),                             v -> applyNvShotsEdit());
-        nvThresholdNmField = EditorSection.doubleField(nv.interactionThresholdMetres() * 1e9,   v -> applyNvShotsEdit());
+        nvSeedField = EditorSection.longField(nv.shotSeed(), v -> applyNvShotsEdit());
 
         var card = EditorSection.section("Shots");
-        card.addRow("Seed",            nvSeedField);
-        card.addRow("Cluster cut-off", nvThresholdNmField, "nm");
+        card.addRow("Seed", nvSeedField);
+        var hint = new Label("How NV centres couple (independent vs dipolar clusters) "
+            + "is a simulation-method choice on the simulation config, not the substance.");
+        hint.setStyle("-fx-text-fill: -studio-text-tertiary; -fx-font-size: 10;");
+        hint.setWrapText(true);
+        card.addNode(hint);
         return card;
     }
 
@@ -548,8 +550,7 @@ public final class SubstanceEditorPane extends WorkbenchPane {
             currentAxis(),
             nv.arrayGeometry().seed(),
             List.copyOf(next));
-        var nextSubstance = new NvEnsemble(
-            nextGeom, nv.physics(), nv.shotSeed(), nv.interactionThresholdMetres());
+        var nextSubstance = new NvEnsemble(nextGeom, nv.physics(), nv.shotSeed());
         if (Objects.equals(nextSubstance, nv)) return;
         editor.apply(d -> d.withSubstance(nextSubstance), "Edit NV centres");
     }
@@ -616,11 +617,8 @@ public final class SubstanceEditorPane extends WorkbenchPane {
         if (suppressFormListeners) return;
         if (!(document.substance() instanceof NvEnsemble nv)) return;
         try {
-            long seed       = parseLong(nvSeedField.getText(), nv.shotSeed());
-            double threshNm = parseDouble(nvThresholdNmField.getText(), nv.interactionThresholdMetres() * 1e9);
-            if (!(threshNm >= 0)) { setStatus("Cut-off must be ≥ 0", true); return; }
-            var nextSubstance = new NvEnsemble(
-                nv.arrayGeometry(), nv.physics(), seed, threshNm * 1e-9);
+            long seed = parseLong(nvSeedField.getText(), nv.shotSeed());
+            var nextSubstance = new NvEnsemble(nv.arrayGeometry(), nv.physics(), seed);
             if (Objects.equals(nextSubstance, nv)) return;
             editor.apply(d -> d.withSubstance(nextSubstance), "Edit NV shots");
             setStatus("", false);

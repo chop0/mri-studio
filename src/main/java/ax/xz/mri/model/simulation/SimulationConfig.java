@@ -27,13 +27,20 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 public record SimulationConfig(
     double referenceB0Tesla,
     double dtSeconds,
-    ProjectNodeId circuitId
+    ProjectNodeId circuitId,
+    SimulationMethods methods
 ) {
     public SimulationConfig {
         if (!Double.isFinite(referenceB0Tesla))
             throw new IllegalArgumentException("referenceB0Tesla must be finite, got " + referenceB0Tesla);
         if (!(dtSeconds > 0) || !Double.isFinite(dtSeconds))
             throw new IllegalArgumentException("dtSeconds must be a finite positive value, got " + dtSeconds);
+        if (methods == null) methods = SimulationMethods.defaults();
+    }
+
+    /** Convenience: default ({@linkplain SimulationMethods#defaults() independent-NV}) methods. */
+    public SimulationConfig(double referenceB0Tesla, double dtSeconds, ProjectNodeId circuitId) {
+        this(referenceB0Tesla, dtSeconds, circuitId, SimulationMethods.defaults());
     }
 
     @JsonIgnore
@@ -42,14 +49,18 @@ public record SimulationConfig(
     }
 
     public SimulationConfig withReferenceB0Tesla(double v) {
-        return new SimulationConfig(v, dtSeconds, circuitId);
+        return new SimulationConfig(v, dtSeconds, circuitId, methods);
     }
 
     public SimulationConfig withDtSeconds(double v) {
-        return new SimulationConfig(referenceB0Tesla, v, circuitId);
+        return new SimulationConfig(referenceB0Tesla, v, circuitId, methods);
     }
 
     public SimulationConfig withCircuitId(ProjectNodeId v) {
-        return new SimulationConfig(referenceB0Tesla, dtSeconds, v);
+        return new SimulationConfig(referenceB0Tesla, dtSeconds, v, methods);
+    }
+
+    public SimulationConfig withMethods(SimulationMethods v) {
+        return new SimulationConfig(referenceB0Tesla, dtSeconds, circuitId, v);
     }
 }

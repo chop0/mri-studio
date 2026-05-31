@@ -75,7 +75,7 @@ class SubstanceProjectIoTest {
 
     private static SubstanceDocument sampleNvDoc() {
         var geom = new NvArrayGeometry(NvArrayShape.LINEAR_X_RANDOM, 16, 1e-6, 50e-9, NvAxis.AXIS_PLUS_Z, 7L);
-        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L, 0.0);
+        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L);
         return new SubstanceDocument(new ProjectNodeId("sub-io-test"), "Disk test", ensemble);
     }
 }

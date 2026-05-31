@@ -276,7 +276,7 @@ class IsochromatCollectionInteractionTest {
             new NvCentre(0.5e-6, 0, -50e-9, NvAxis.AXIS_PLUS_Z));
         var geom = new NvArrayGeometry(NvArrayShape.CUSTOM, centres.size(), 1e-6, 50e-9,
             NvAxis.AXIS_PLUS_Z, 0L, centres);
-        List<Substance> substances = List.of(new NvEnsemble(geom, NvPhysics.defaults(), 0L, 0.0));
+        List<Substance> substances = List.of(new NvEnsemble(geom, NvPhysics.defaults(), 0L));
         return CompiledSimulation.compile(new CompiledSimulation.CompileRequest(doc, ax.xz.mri.state.ProjectState.empty(),
             substances, List.<Segment>of(), List.<PulseSegment>of(), 0.01));
     }

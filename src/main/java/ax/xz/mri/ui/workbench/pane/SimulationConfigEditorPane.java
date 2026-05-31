@@ -365,6 +365,22 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
         nyquist.getStyleClass().add("cfg-row-hint");
         box.getChildren().add(nyquist);
 
+        // NV interaction model — only relevant when the circuit hosts an NV
+        // ensemble. How NVs couple is a method property of the config, not of
+        // the substance (which is pure physical truth).
+        if (resolveSubstances().stream().anyMatch(d -> d.substance() instanceof NvEnsemble)) {
+            box.getChildren().add(sectionTitle("NV interaction model"));
+            box.getChildren().add(rowLabelled("Max cluster size",
+                numberField(1, 6, 1).decimals(0).bindBidirectional(store.nvMaxClusterSize), ""));
+            box.getChildren().add(rowLabelled("Coupling cutoff",
+                numberField(0, 500, 5).decimals(0).bindBidirectional(store.nvCouplingCutoffNm), "nm"));
+            var nvHint = new Label("Centres within the cutoff evolve as a joint quantum cluster carrying "
+                + "their dipolar coupling; the cap bounds joint size so cost stays linear. 1 = independent classical NVs.");
+            nvHint.getStyleClass().add("cfg-row-hint");
+            nvHint.setWrapText(true);
+            box.getChildren().add(nvHint);
+        }
+
         return box;
     }
 
@@ -398,6 +414,11 @@ public final class SimulationConfigEditorPane extends WorkbenchPane {
     /** Switch the editor's tab control to the Schematic tab. */
     public void selectSchematicTab() {
         tabs.getSelectionModel().select(schematicTab);
+    }
+
+    /** Switch the editor's tab control to the Reference tab (rotating frame + NV method). */
+    public void selectReferenceTab() {
+        tabs.getSelectionModel().select(referenceTab);
     }
 
     /**

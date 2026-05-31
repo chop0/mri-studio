@@ -1,8 +1,13 @@
 package ax.xz.mri.project;
 
+import ax.xz.mri.model.simulation.NvSimulationMethod;
+import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.SimulationMethods;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -59,5 +64,37 @@ class ProjectSerialiserTest {
         assertEquals(eigen.script(), restored.script());
         assertEquals(eigen.units(), restored.units());
         assertEquals(eigen, restored);
+    }
+
+    @Test
+    void jsonRoundTripPreservesNvSimulationMethod() throws Exception {
+        var serialiser = new ProjectSerialiser();
+        var method = new NvSimulationMethod.ClusteredQubitHamiltonian(3, 25e-9);
+        var config = new SimulationConfig(0.01, 1e-9, new ProjectNodeId("circuit-1"),
+            new SimulationMethods(method));
+        var doc = new SimulationConfigDocument(new ProjectNodeId("simcfg-1"), "NV diamond", config);
+        var path = tempDir.resolve("simcfg.json");
+        serialiser.writeJson(path, doc);
+        var restored = serialiser.readJson(path, SimulationConfigDocument.class);
+        assertEquals(doc, restored);
+        assertEquals(method, restored.config().methods().nv(),
+            "Clustered-qubit method (cap + cutoff) must survive the JSON round-trip");
+    }
+
+    @Test
+    void legacySimConfigWithoutMethodsLoadsAsIndependent() throws Exception {
+        var serialiser = new ProjectSerialiser();
+        var config = new SimulationConfig(0.01, 1e-9, new ProjectNodeId("circuit-1"));
+        var doc = new SimulationConfigDocument(new ProjectNodeId("simcfg-2"), "Legacy", config);
+        var path = tempDir.resolve("legacy.json");
+        serialiser.writeJson(path, doc);
+        // Strip the methods node to mimic a pre-Part-14 project file.
+        var mapper = serialiser.mapper();
+        var tree = mapper.readTree(path.toFile());
+        ((ObjectNode) tree.get("config")).remove("methods");
+        Files.writeString(path, mapper.writeValueAsString(tree));
+        var restored = serialiser.readJson(path, SimulationConfigDocument.class);
+        assertEquals(NvSimulationMethod.independent(), restored.config().methods().nv(),
+            "A config file without a methods block must default to the independent NV technique");
     }
 }

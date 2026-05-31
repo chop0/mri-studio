@@ -277,9 +277,7 @@ public final class InspectorPane extends WorkbenchPane {
                         new Label("Kind: NV ensemble"),
                         new Label("Centres: " + geom.n() + " (" + geom.shape() + ")"),
                         new Label("Depth: " + String.format("%.0f nm", geom.depthMetres() * 1e9)),
-                        new Label("Shot seed: " + nv.shotSeed()),
-                        new Label("Interaction threshold: "
-                            + String.format("%.2f nm", nv.interactionThresholdMetres() * 1e9)));
+                        new Label("Shot seed: " + nv.shotSeed()));
                 }
                 case ContinuousMagnetisation cm -> content.getChildren().addAll(
                     new Label("Kind: continuous magnetisation"),

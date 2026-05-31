@@ -25,6 +25,14 @@ public final class ConfigStore {
     public final ObjectProperty<ProjectNodeId> circuitId = new SimpleObjectProperty<>();
 
     /**
+     * NV simulation-method knobs (only meaningful when the circuit references an
+     * NV ensemble). The cap bounds how many NVs couple jointly; the cutoff
+     * (in nm) decides which pairs couple. Cap 1 ⇒ independent classical NVs.
+     */
+    public final IntegerProperty nvMaxClusterSize = new SimpleIntegerProperty(1);
+    public final DoubleProperty nvCouplingCutoffNm = new SimpleDoubleProperty(0);
+
+    /**
      * γ to use when computing {@link #larmorHz}. Owned by the editor pane —
      * it walks the project state to find the substance the circuit
      * references and pushes its gyromagnetic ratio here. {@code NaN} means
@@ -54,6 +62,8 @@ public final class ConfigStore {
             return v > 0 ? c.withDtSeconds(v) : c;
         }));
         circuitId.addListener((obs, o, n) -> rebuild(c -> c.withCircuitId(n)));
+        nvMaxClusterSize.addListener((obs, o, n) -> rebuild(this::applyNvMethod));
+        nvCouplingCutoffNm.addListener((obs, o, n) -> rebuild(this::applyNvMethod));
 
         config.addListener((obs, oldC, newC) -> {
             if (syncing || newC == null) return;
@@ -90,5 +100,18 @@ public final class ConfigStore {
         referenceB0Tesla.set(c.referenceB0Tesla());
         dtSeconds.set(c.dtSeconds());
         circuitId.set(c.circuitId());
+        if (c.methods() != null
+            && c.methods().nv() instanceof NvSimulationMethod.ClusteredQubitHamiltonian h) {
+            nvMaxClusterSize.set(h.maxClusterSize());
+            nvCouplingCutoffNm.set(h.couplingCutoffMetres() * 1e9);
+        }
+    }
+
+    /** Rebuild the config's NV method from the current cap + cutoff knobs. */
+    private SimulationConfig applyNvMethod(SimulationConfig c) {
+        int cap = Math.max(1, nvMaxClusterSize.get());
+        double cutoffM = Math.max(0, nvCouplingCutoffNm.get()) * 1e-9;
+        return c.withMethods(new SimulationMethods(
+            new NvSimulationMethod.ClusteredQubitHamiltonian(cap, cutoffM)));
     }
 }

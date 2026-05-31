@@ -26,6 +26,7 @@ import ax.xz.mri.state.Scope;
 import ax.xz.mri.state.UnifiedStateManager;
 import ax.xz.mri.model.simulation.PhysicsParams;
 import ax.xz.mri.model.simulation.SimulationConfig;
+import ax.xz.mri.model.simulation.SimulationMethods;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -384,7 +385,8 @@ public final class ProjectSessionViewModel {
         var config = new SimulationConfig(
             template.referenceB0Tesla(),
             params.dtSeconds(),
-            circuit != null ? circuit.id() : null);
+            circuit != null ? circuit.id() : null,
+            new SimulationMethods(template.nvSimulationMethod()));
         var doc = new SimulationConfigDocument(
             new ProjectNodeId("simcfg-" + UUID.randomUUID()), name, config);
         state.dispatch(new Mutation(simScope(doc.id()), null, doc,

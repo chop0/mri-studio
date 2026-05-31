@@ -34,7 +34,7 @@ class SubstanceEditorInteractionTest {
         var geom = new NvArrayGeometry(
             NvArrayShape.LINEAR_X_UNIFORM, 4, 1e-6, 50e-9,
             NvAxis.AXIS_PLUS_Z, 0L);
-        var nv = new NvEnsemble(geom, NvPhysics.defaults(), 0L, 0.0);
+        var nv = new NvEnsemble(geom, NvPhysics.defaults(), 0L);
         return new SubstanceDocument(
             new ProjectNodeId("sub-" + java.util.UUID.randomUUID()), "NV Diamond", nv);
     }

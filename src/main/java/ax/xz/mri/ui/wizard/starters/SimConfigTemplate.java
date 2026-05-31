@@ -47,12 +47,24 @@ public enum SimConfigTemplate {
     },
     NV_CENTRE_DIAMOND("NV centre diamond",
             "Linear NV array biased by a Helmholtz B0, sensing a buried dipole-pair sample. Low-field (10 mT) diamond regime.") {
+        private NvDiamondConfigStep step;
+
         @Override public CircuitStarter circuitStarter() { return CircuitStarterLibrary.byId("nv-diamond").orElseThrow(); }
 
         /** Low-field diamond regime — 10 mT is comfortably above the ground-state-level-crossing at 102 mT/2. */
         @Override public double referenceB0Tesla() { return 0.01; }
 
-        @Override public WizardStep configStep() { return null; }
+        @Override
+        public WizardStep configStep() {
+            if (step == null) step = new NvDiamondConfigStep();
+            return step;
+        }
+
+        @Override
+        public NvSimulationMethod nvSimulationMethod() {
+            configStep();                 // ensure the step exists
+            return step.simulationMethod();
+        }
 
         /** dt = 1 ns resolves NV Rabi pulses at ~MHz Rabi frequencies cleanly. */
         @Override public PhysicsParams defaultPhysics() { return new PhysicsParams(1e-9); }
@@ -72,6 +84,14 @@ public enum SimConfigTemplate {
     public abstract CircuitStarter circuitStarter();
     public abstract double referenceB0Tesla();
     public abstract WizardStep configStep();
+
+    /**
+     * The NV simulation technique this template configures. Defaults to the
+     * fully-independent classical model; the NV-diamond template overrides it
+     * from its {@link NvDiamondConfigStep}. Harmless (and ignored) for
+     * templates with no NV substance.
+     */
+    public NvSimulationMethod nvSimulationMethod() { return NvSimulationMethod.independent(); }
 
     /** Default integration step the wizard's physics step opens with. */
     public abstract PhysicsParams defaultPhysics();

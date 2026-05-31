@@ -13,6 +13,7 @@ import ax.xz.mri.model.sequence.Segment;
 import ax.xz.mri.model.simulation.FieldSymmetry;
 import ax.xz.mri.model.simulation.MagnetisationState;
 import ax.xz.mri.model.simulation.MultiProbeSignalTrace;
+import ax.xz.mri.model.simulation.NvSimulationMethod;
 import ax.xz.mri.model.simulation.SignalTrace;
 import ax.xz.mri.model.simulation.SignalTrace.Point;
 import ax.xz.mri.model.simulation.Trajectory;
@@ -170,12 +171,21 @@ public final class CompiledSimulation {
         List<Substance> substances,
         List<Segment> segments,
         List<PulseSegment> pulse,
-        double b0Ref
+        double b0Ref,
+        NvSimulationMethod nvMethod
     ) {
         public CompileRequest {
             substances = substances == null ? List.of() : List.copyOf(substances);
             segments = segments == null ? List.of() : List.copyOf(segments);
             pulse = pulse == null ? List.of() : List.copyOf(pulse);
+            if (nvMethod == null) nvMethod = NvSimulationMethod.independent();
+        }
+
+        /** Independent-NV (classical Bloch) method — the default when none is given. */
+        public CompileRequest(CircuitDocument circuit, ProjectState repository,
+                              List<Substance> substances, List<Segment> segments,
+                              List<PulseSegment> pulse, double b0Ref) {
+            this(circuit, repository, substances, segments, pulse, b0Ref, NvSimulationMethod.independent());
         }
     }
 
@@ -210,7 +220,7 @@ public final class CompiledSimulation {
         var stateOffset = new int[kernels.length];
         int fusedSize = 0;
         for (int i = 0; i < kernels.length; i++) {
-            kernels[i] = compileSubstance(req.substances().get(i), grid);
+            kernels[i] = compileSubstance(req.substances().get(i), grid, req.nvMethod());
             stateOffset[i] = fusedSize;
             fusedSize += kernels[i].stateSize();
         }
@@ -456,10 +466,16 @@ public final class CompiledSimulation {
 
     /* ── Substance dispatch (compile time) ─────────────────────────── */
 
-    private static CompiledSubstance compileSubstance(Substance s, SpatialGrid grid) {
+    private static CompiledSubstance compileSubstance(Substance s, SpatialGrid grid, NvSimulationMethod nvMethod) {
         return switch (s) {
             case ContinuousMagnetisation cm -> new BlochKernel(cm, grid);
-            case NvEnsemble nv -> new NvKernel(nv, NvClusterUnion.union(nv));
+            case NvEnsemble nv -> {
+                int[][] clusters = switch (nvMethod) {
+                    case NvSimulationMethod.ClusteredQubitHamiltonian h ->
+                        NvClusterUnion.union(nv.centres(), h.couplingCutoffMetres(), h.maxClusterSize());
+                };
+                yield new NvKernel(nv, clusters);
+            }
         };
     }
 

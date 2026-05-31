@@ -36,7 +36,7 @@ public final class SimulationCompiler {
         var substances = buildSubstances(circuit, repository);
         return CompiledSimulation.compile(new CompiledSimulation.CompileRequest(
             circuit, repository, substances, segments, pulse,
-            cfg.referenceB0Tesla()
+            cfg.referenceB0Tesla(), cfg.methods().nv()
         ));
     }
 

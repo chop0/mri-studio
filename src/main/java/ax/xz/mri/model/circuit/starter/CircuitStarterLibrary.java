@@ -15,6 +15,7 @@ import ax.xz.mri.model.circuit.Wire;
 import ax.xz.mri.model.nv.NvArrayGeometry;
 import ax.xz.mri.model.nv.NvArrayShape;
 import ax.xz.mri.model.nv.NvAxis;
+import ax.xz.mri.model.nv.NvCentre;
 import ax.xz.mri.model.nv.NvPhysics;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.dsl.EigenfieldStarterLibrary;
@@ -274,16 +275,21 @@ public final class CircuitStarterLibrary {
             var gradXCoil = new Coil(new ComponentId("coil-grad-x"), "Grad X Coil", gradXEigen.id(),
                 0, coilR, coilSensitivity);
 
-            // Fresh diamond substance — 16 NV centres in a 1-µm linear array.
+            // Fresh diamond substance — 16 NV centres at 50 nm depth: a 15-NV
+            // linear array spanning 1 µm plus one close partner forming a tight
+            // ~15 nm dimer near the middle. Under the NV template's default
+            // coupling cutoff (30 nm) that dimer is the one pair the simulator
+            // evolves as a joint quantum cluster; every other NV stays an
+            // independent singleton — a crisp "couple some, not all" example.
+            var centres = diamondCentres();
             var diamondDoc = new SubstanceDocument(
                 new ProjectNodeId("substance-" + java.util.UUID.randomUUID()),
                 name + " diamond",
                 new NvEnsemble(
-                    new NvArrayGeometry(NvArrayShape.LINEAR_X_UNIFORM, 16, 1e-6, 50e-9,
-                        NvAxis.AXIS_PLUS_Z, 0L),
+                    new NvArrayGeometry(NvArrayShape.CUSTOM, centres.size(), 1e-6, 50e-9,
+                        NvAxis.AXIS_PLUS_Z, 0L, centres),
                     NvPhysics.defaults(),
-                    0L,
-                    0.0));
+                    0L));
 
             var substanceBlock = new CircuitComponent.Substance(
                 new ComponentId("sub-diamond"), "Diamond",
@@ -324,6 +330,29 @@ public final class CircuitStarterLibrary {
                 newEigenfields,
                 List.of(diamondDoc));
         }
+    }
+
+    /**
+     * The NV-diamond template's centres: the 16-NV uniform line spanning 1 µm
+     * at 50 nm depth (≈62.5 nm spacing — the classic sparse, effectively
+     * independent array), <em>plus</em> one extra centre placed 15 nm off NV #8.
+     * Under the template's default coupling cutoff (30 nm) exactly that pair
+     * forms a dipolar-coupled quantum cluster while the other sixteen stay
+     * independent singletons — a visible "couple some, not all" demonstration
+     * that leaves the sparse line's positions (and the adaptive-reconstruction
+     * sampling) untouched.
+     */
+    private static List<NvCentre> diamondCentres() {
+        int n = 16;
+        double length = 1e-6, depth = 50e-9, step = length / n;
+        double x0 = -length / 2.0 + step / 2.0;       // mirrors NvArrayGeometry.linearXUniform()
+        var centres = new ArrayList<NvCentre>(n + 1);
+        for (int i = 0; i < n; i++) {
+            centres.add(new NvCentre(x0 + i * step, 0.0, depth, NvAxis.AXIS_PLUS_Z));
+        }
+        // Close partner 15 nm (in +y) off NV #8 — the one dipolar-coupled dimer.
+        centres.add(new NvCentre(x0 + 8 * step, 15e-9, depth, NvAxis.AXIS_PLUS_Z));
+        return centres;
     }
 
     /**

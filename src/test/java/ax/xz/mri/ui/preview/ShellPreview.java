@@ -176,6 +176,28 @@ public final class ShellPreview extends Application {
             "open the Low-field MRI sim config — Substance section shows Water (γ, T1, T2)",
             () -> shell.controller().session().project.openNode(simConfig.id())));
 
+        steps.add(new Step("13b-nv-sim-config-method",
+            "open the NV sim config — Reference tab shows the 'NV interaction model' section (Max cluster size 3 + Coupling cutoff)",
+            () -> {
+                session.project.openNode(nvConfig.id());
+                javafx.application.Platform.runLater(() -> {
+                    var pane = (ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane) lookupNode(
+                        shell, ax.xz.mri.ui.workbench.pane.SimulationConfigEditorPane.class, n -> true);
+                    if (pane != null) pane.selectReferenceTab();
+                });
+            }));
+
+        // Standalone snapshot of the NV-diamond wizard's interaction-model step
+        // (Max cluster size defaults to 3; coupling cutoff in nm). Wrapped in a
+        // themed scene so the section styling resolves.
+        var nvMethodStep = SimConfigTemplate.NV_CENTRE_DIAMOND.configStep();
+        var nvMethodRoot = themed(scene, (javafx.scene.Parent) nvMethodStep.content());
+        var nvMethodStepPreview = new Step("13c-nv-method-wizard-step",
+            "New Sim Config wizard — NV interaction-model step (Max cluster size 3 by default)",
+            nvMethodStep::onEnter);
+        nvMethodStepPreview.snapshotAltRoot(nvMethodRoot);
+        steps.add(nvMethodStepPreview);
+
         steps.add(new Step("14-bloch-substance-editor",
             "open the Water substance editor — Bloch form, no 3-D viewport",
             () -> {
@@ -311,6 +333,21 @@ public final class ShellPreview extends Application {
 
     private static void addStylesheet(Scene scene, java.net.URL url) {
         if (url != null) scene.getStylesheets().add(url.toExternalForm());
+    }
+
+    /**
+     * Wrap a detached node in a padded container inside a throwaway Scene that
+     * shares the main scene's stylesheets, so its CSS classes resolve when
+     * snapshotted standalone. Returns the container to snapshot.
+     */
+    private static javafx.scene.Parent themed(Scene mainScene, javafx.scene.Parent node) {
+        var box = new javafx.scene.layout.StackPane(node);
+        box.setPadding(new javafx.geometry.Insets(16));
+        box.setStyle("-fx-background-color: #eff1f4;");
+        box.setPrefWidth(440);
+        var s = new Scene(box);
+        s.getStylesheets().addAll(mainScene.getStylesheets());
+        return box;
     }
 
     /**

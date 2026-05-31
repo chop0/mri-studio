@@ -35,29 +35,21 @@ import java.util.Set;
  * scenarios) is the substance's private property, seeded from
  * {@link #shotSeed}.
  *
- * <p>{@link #interactionThresholdMetres} controls NV–NV interaction
- * tiering: pairs closer than this distance are grouped into a joint
- * cluster by the compile-time union-find and simulated with a sparse
- * Hamiltonian over within-cluster dipolar couplings. The default of
- * 0 disables interactions (independent-NV fast path = cluster size 1).
+ * <p>How NVs are simulated — independently, or jointly in dipolar-coupled
+ * clusters — is <em>not</em> a property of this substance: it is a numerical
+ * method choice on the {@link ax.xz.mri.model.simulation.SimulationConfig}
+ * (see {@link ax.xz.mri.model.simulation.NvSimulationMethod}). The substance
+ * is pure physical truth — positions + {@link NvPhysics}.
  */
 public record NvEnsemble(
     NvArrayGeometry arrayGeometry,
     NvPhysics physics,
-    long shotSeed,
-    double interactionThresholdMetres
+    long shotSeed
 ) implements Substance {
 
     public NvEnsemble {
         if (arrayGeometry == null) throw new IllegalArgumentException("NvEnsemble.arrayGeometry must be non-null");
         if (physics == null) throw new IllegalArgumentException("NvEnsemble.physics must be non-null");
-        if (!(interactionThresholdMetres >= 0))
-            throw new IllegalArgumentException("NvEnsemble.interactionThresholdMetres must be non-negative");
-    }
-
-    /** Independent-NV (interaction-free) ensemble. */
-    public NvEnsemble(NvArrayGeometry arrayGeometry, NvPhysics physics, long shotSeed) {
-        this(arrayGeometry, physics, shotSeed, 0.0);
     }
 
     @Override public SpinKind spinKind() { return SpinKind.NV; }
@@ -119,19 +111,15 @@ public record NvEnsemble(
         };
     }
 
-    public NvEnsemble withInteractionThreshold(double v) {
-        return new NvEnsemble(arrayGeometry, physics, shotSeed, v);
-    }
-
     public NvEnsemble withShotSeed(long v) {
-        return new NvEnsemble(arrayGeometry, physics, v, interactionThresholdMetres);
+        return new NvEnsemble(arrayGeometry, physics, v);
     }
 
     public NvEnsemble withArrayGeometry(NvArrayGeometry g) {
-        return new NvEnsemble(g, physics, shotSeed, interactionThresholdMetres);
+        return new NvEnsemble(g, physics, shotSeed);
     }
 
     public NvEnsemble withPhysics(NvPhysics p) {
-        return new NvEnsemble(arrayGeometry, p, shotSeed, interactionThresholdMetres);
+        return new NvEnsemble(arrayGeometry, p, shotSeed);
     }
 }

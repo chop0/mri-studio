@@ -133,7 +133,7 @@ class Geometry3DCanvasTest {
     private static CompiledSimulation nvOnlySim() {
         var geom = new NvArrayGeometry(NvArrayShape.LINEAR_X_UNIFORM, 4, 1e-6, 50e-9,
             NvAxis.AXIS_PLUS_Z, 0L);
-        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L, 0.0);
+        var ensemble = new NvEnsemble(geom, NvPhysics.defaults(), 0L);
         var doc = new CircuitDocument(new ProjectNodeId("c"), "C",
             List.of(), List.of(), CircuitLayout.empty());
         List<Substance> substances = List.of(ensemble);

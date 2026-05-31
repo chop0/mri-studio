@@ -38,13 +38,12 @@ public final class SubstanceStarterLibrary {
             "nv-ensemble-linear-16",
             "Bulk-diamond NV (16-centre linear array)",
             "16 NV centres uniformly spaced over 1 µm at 50 nm depth, axis [+z]. "
-            + "Independent NV (zero interaction threshold). NV physics at defaults.",
+            + "NV physics at defaults; how centres couple is a simulation-method choice.",
             new NvEnsemble(
                 new NvArrayGeometry(NvArrayShape.LINEAR_X_UNIFORM, 16, 1e-6, 50e-9,
                     NvAxis.AXIS_PLUS_Z, 0L),
                 NvPhysics.defaults(),
-                0L,
-                0.0
+                0L
             )
         )
     );
