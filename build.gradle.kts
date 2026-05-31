@@ -63,16 +63,10 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
 }
 
-// The .proto schema is owned by the C-server repo dir; both sides codegen
-// from the same file so the wire contract can never drift.
-sourceSets {
-    main {
-        proto {
-            srcDir("../mri-rp-server/proto")
-        }
-    }
-}
-
+// The RedPitaya wire schema lives in-repo at src/main/proto (the protobuf
+// plugin's default location), so the build is self-contained — local dev and
+// CI both codegen from this committed copy. The matching C-server consumes
+// the same file; keep the two in sync when the wire contract changes.
 protobuf {
     protoc {
         artifact = "com.google.protobuf:protoc:3.25.5"

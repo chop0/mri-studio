@@ -1,0 +1,207 @@
+syntax = "proto3";
+
+package redpitaya;
+
+option java_package = "ax.xz.mri.hardware.builtin.redpitaya.proto";
+option java_multiple_files = true;
+
+// =========================================================================
+// Wire framing (out-of-schema):
+//   [ uint32 little-endian length ][ Command or Reply protobuf bytes ]
+//
+// Direction:
+//   host -> device: a single Command per frame
+//   device -> host: a single Reply per frame
+//
+// One client at a time. The server services one client to completion before
+// accepting another.
+//
+// Schema evolution rules: append fields with strictly-increasing tag
+// numbers; never reuse or renumber. New Command / Reply variants extend the
+// `oneof body`. Both sides skip unknown fields (proto3 default).
+// =========================================================================
+
+// ---- Top-level envelopes -----------------------------------------------
+
+message Command {
+  oneof body {
+    Hello      hello       = 1;
+    BeginRun   begin_run   = 2;
+    TxBlock    tx_block    = 3;
+    GpioEvent  gpio_event  = 4;
+    EndRun     end_run     = 5;
+    Abort      abort       = 6;
+    GetDiag    get_diag    = 7;
+  }
+}
+
+message Reply {
+  oneof body {
+    HelloAck   hello_ack   = 1;
+    Ack        ack         = 2;
+    RunResult  run_result  = 3;
+    DiagReply  diag_reply  = 4;
+    Error      error       = 5;
+  }
+}
+
+// ---- Lifecycle ----------------------------------------------------------
+
+message Hello {
+  uint32 client_proto_major = 1;
+  uint32 client_proto_minor = 2;
+}
+
+message HelloAck {
+  uint32 server_proto_major = 1;
+  uint32 server_proto_minor = 2;
+  string git_sha            = 3;
+  uint64 build_unix_time    = 4;
+}
+
+// Generic ack; returned for fire-and-forget commands like GpioEvent / Abort
+// when the server has nothing better to say. RunResult / DiagReply are
+// preferred when there's real data to return.
+message Ack {
+  string note = 1;
+}
+
+message Error {
+  string  message = 1;
+  ErrorCode code  = 2;
+}
+
+enum ErrorCode {
+  ERR_UNSPECIFIED       = 0;
+  ERR_PROTOCOL          = 1;  // wire-level: bad frame, bad sequence
+  ERR_VERSION_MISMATCH  = 2;  // host major != server major
+  ERR_BUSY              = 3;  // another run is in progress
+  ERR_RX_TOO_BIG        = 4;  // BeginRun would exceed DDR3 capture cap
+  ERR_BAD_PARAM         = 5;  // RunSetup carries an invalid value
+  ERR_HARDWARE          = 6;  // librp call failed
+  ERR_UNSUPPORTED       = 7;  // command not implemented by this server
+  ERR_ABORTED           = 8;  // client requested Abort mid-run
+}
+
+// ---- Run setup (extension point: add fields with new tag numbers) -------
+
+message RunSetup {
+  double tx_carrier_hz = 1;
+  double rx_carrier_hz = 2;
+  uint32 decimation    = 3;
+  TxOutput tx_output   = 4;
+  float  tx_gain       = 5;
+  // Pin used as the ADC capture window: rising edge starts, falling edge
+  // ends. PIN_UNSPECIFIED means "no gate; capture for the full run".
+  PinId  rx_gate_pin   = 6;
+}
+
+enum TxOutput {
+  TX_OUTPUT_UNSPECIFIED = 0;
+  TX_OUT1 = 1;
+  TX_OUT2 = 2;
+}
+
+// E1-connector GPIO pins. Tag numbers are stable; their meaning matches
+// librp's rp_dpin_t mapping done server-side. PIN_UNSPECIFIED is the proto3
+// default and means "none / unset".
+enum PinId {
+  PIN_UNSPECIFIED = 0;
+  DIO0_P = 1;
+  DIO1_P = 2;
+  DIO2_P = 3;
+  DIO3_P = 4;
+  DIO4_P = 5;
+  DIO5_P = 6;
+  DIO6_P = 7;
+  DIO7_P = 8;
+  DIO0_N = 9;
+  DIO1_N = 10;
+  DIO2_N = 11;
+  DIO3_N = 12;
+  DIO4_N = 13;
+  DIO5_N = 14;
+  DIO6_N = 15;
+  DIO7_N = 16;
+}
+
+// ---- Run lifecycle ------------------------------------------------------
+
+message BeginRun {
+  RunSetup setup        = 1;
+  uint64 total_samples  = 2;
+  double dt_seconds     = 3;
+  // Debug-only: the channel ids the host believes it is driving.
+  // The server does not dispatch off these strings; channel meaning is
+  // encoded by message type (TxBlock for I/Q, GpioEvent for pins).
+  repeated string channel_slot_ids = 4;
+}
+
+message TxBlock {
+  // Baseband samples, in [-1, 1]. Sent in arbitrary block sizes back-to-
+  // back to keep the DAC FIFO fed. i and q must have equal length.
+  repeated float i = 1 [packed = true];
+  repeated float q = 2 [packed = true];
+}
+
+message GpioEvent {
+  uint64 sample_index = 1;
+  PinId  pin          = 2;
+  bool   state        = 3;
+}
+
+message EndRun {}
+message Abort  {}
+
+// ---- Run result ---------------------------------------------------------
+
+message RunResult {
+  RxTrace rx = 1;
+  // Repeated typed metrics for things like tx_samples_sent,
+  // gpio_events_fired, dac_underruns, adc_overflows. Keys are stable
+  // strings; older clients ignore unknown keys.
+  repeated Metric metrics = 2;
+}
+
+message RxTrace {
+  // Time of the first sample relative to BeginRun, in microseconds.
+  // Equals zero when no rx_gate_pin was set.
+  uint64 first_sample_us = 1;
+  // 1 / effective baseband rate, in microseconds.
+  double sample_period_us = 2;
+  repeated float i = 3 [packed = true];
+  repeated float q = 4 [packed = true];
+}
+
+message Metric {
+  string key       = 1;
+  ParamValue value = 2;
+}
+
+// ---- Diagnostics --------------------------------------------------------
+
+message GetDiag {}
+
+message DiagReply {
+  // v1 fact keys: model, mac, kernel, uptime_s, cpu_temp_c,
+  // link_speed_mbps, adc_overflows_since_boot, dac_underruns_since_boot.
+  // Unknown keys propagate to the diagnostics UI as-is.
+  repeated DeviceFact facts = 1;
+}
+
+message DeviceFact {
+  string key       = 1;
+  ParamValue value = 2;
+}
+
+// ---- Generic value type used by Metric and DeviceFact -------------------
+
+message ParamValue {
+  oneof v {
+    bool   b   = 1;
+    sint64 i   = 2;
+    double d   = 3;
+    string s   = 4;
+    bytes  raw = 5;
+  }
+}
