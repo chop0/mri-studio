@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 
-/** Adaptive 2-point calibrated Ramsey scan; I-optimal action selection + iterated EKF over a Lorentzian GP prior on Bz(x). */
+/** Adaptive 2-point calibrated Ramsey scan; coarse-to-fine gradient warmup + I-optimal action selection + iterated EKF over a Lorentzian GP prior on Bz(x). */
 class NvAdaptiveCoherent implements Script {
 
     static final double GAMMA = 2.0 * PI * 28.024e9;             // rad / (s · T)
@@ -23,6 +23,17 @@ class NvAdaptiveCoherent implements Script {
     static final long   SHOTS    = 50_000L;
     static final int    N_ITER   = 2500;
     static final int    N_EVAL   = 200;
+
+    // Coarse-to-fine warmup. The Ramsey readout M = (1/N) Σ sin(γτ(B + g·x) + θ)
+    // is periodic, so a gradient large enough to wrap the phase by more than π
+    // across the NV span makes the measurement aliased — and the I-optimal
+    // scorer *favours* those large gradients (biggest linearised Jacobian),
+    // which lets the linearised EKF lock onto a wrapped, wrong mode. During the
+    // first WARMUP_ITERS iterations we ramp the gradient ceiling from the
+    // unambiguous value (phase wrap < π) up to GRAD_MAX_TPM, so the posterior
+    // settles into the correct basin on coarse, alias-free measurements before
+    // the scan opens up to the high-gradient fine-resolution regime.
+    static final int    WARMUP_ITERS = 300;
 
     // Ramsey pulse template.
     static final double MW_PI_HALF_AMP_T = 89.21e-6;             // γ·B·t = π/2 at t = 100 ns
@@ -60,6 +71,11 @@ class NvAdaptiveCoherent implements Script {
         double pad = 0.02 * (xMax - xMin + 1e-12);
         double[] xEval = linspace(xMin - pad, xMax + pad, N_EVAL);
         double yEval = mean(yNv), zEval = mean(zNv);
+
+        // Gradient whose readout phase stays unambiguous (< π wrap) across the
+        // NV span — the floor of the warmup ramp (see WARMUP_ITERS).
+        double xSpan = max(xMax - xMin, 1e-12);
+        double gUnambiguous = min(GRAD_MAX_TPM, PI / (GAMMA * TAU_S * xSpan));
 
         // Two-point bright/dark calibration absorbs every device-side
         // scale (QE, dark counts, pump-during-read leakage) and lets
@@ -104,10 +120,17 @@ class NvAdaptiveCoherent implements Script {
             ctx.checkpoint();
             double[][] sigma = invertSpd(lambda);
 
+            // Warmup ramp: open the gradient ceiling from the unambiguous value
+            // to the full range over WARMUP_ITERS, so the EKF locks the correct
+            // basin on alias-free measurements before chasing high-gradient
+            // resolution.
+            double warm  = min(1.0, (double) iter / WARMUP_ITERS);
+            double gCeil = gUnambiguous + warm * (GRAD_MAX_TPM - gUnambiguous);
+
             double bestScore = Double.NEGATIVE_INFINITY;
             double bestG = 0, bestTheta = 0;
             double[] bestA = null;
-            for (double g : linspace(-GRAD_MAX_TPM, +GRAD_MAX_TPM, N_GRAD)) {
+            for (double g : linspace(-gCeil, +gCeil, N_GRAD)) {
                 for (double theta : THETAS) {
                     double[] a = linearisedA(mu, xNv, TAU_S, g, theta);
                     double[] sigmaA = matVec(sigma, a);
