@@ -9,10 +9,11 @@ import ax.xz.mri.model.circuit.compile.ComplexPairFormat;
 import ax.xz.mri.model.circuit.compile.CtlBinding;
 import ax.xz.mri.model.circuit.compile.Node;
 import ax.xz.mri.model.circuit.compile.SwitchParams;
+import ax.xz.mri.model.field.SpatialGrid;
 import ax.xz.mri.model.simulation.AmplitudeKind;
 import ax.xz.mri.model.simulation.Vec3;
-import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
-import ax.xz.mri.model.simulation.dsl.EigenfieldScriptEngine;
+import ax.xz.mri.dsl.EigenfieldScript;
+import ax.xz.mri.dsl.EigenfieldEngine;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.state.ProjectState;
@@ -50,20 +51,31 @@ public final class CircuitCompiler {
 
     private CircuitCompiler() {}
 
-    public static CompiledCircuit compile(CircuitDocument circuit, ProjectState repository,
-                                          double[] rMm, double[] zMm) {
+    public static CompiledCircuit compile(CircuitDocument circuit, ProjectState repository, SpatialGrid grid) {
         if (circuit == null) throw new IllegalArgumentException("CircuitCompiler.compile: circuit is null");
+        if (grid == null) throw new IllegalArgumentException("CircuitCompiler.compile: grid is null");
 
-        // --- Union-find over terminals → dense MNA node ids. ---
+        // --- Union-find over electrical terminals → dense MNA node ids. ---
+        // Optical and control wires are kept out of the electrical net graph
+        // entirely; CompiledSimulation routes them at probe-collect time.
+        var componentsById = new HashMap<ComponentId, CircuitComponent>();
+        for (var c : circuit.components()) componentsById.put(c.id(), c);
+
         var termIndex = new HashMap<ComponentTerminal, Integer>();
         for (var c : circuit.components()) {
             for (var port : c.ports()) {
+                if (c.portKind(port) != ax.xz.mri.model.circuit.ChannelKind.ELECTRICAL) continue;
                 termIndex.put(new ComponentTerminal(c.id(), port), termIndex.size());
             }
         }
         int[] parent = new int[termIndex.size()];
         for (int i = 0; i < parent.length; i++) parent[i] = i;
         for (var w : circuit.wires()) {
+            var fromComp = componentsById.get(w.from().componentId());
+            var toComp = componentsById.get(w.to().componentId());
+            if (fromComp == null || toComp == null) continue;
+            if (fromComp.portKind(w.from().port()) != ax.xz.mri.model.circuit.ChannelKind.ELECTRICAL) continue;
+            if (toComp.portKind(w.to().port())     != ax.xz.mri.model.circuit.ChannelKind.ELECTRICAL) continue;
             union(parent, termIndex.get(w.from()), termIndex.get(w.to()));
         }
         Map<Integer, Integer> rootToNode = new HashMap<>();
@@ -76,7 +88,7 @@ public final class CircuitCompiler {
         int nodeCount = rootToNode.size();
 
         // --- Build a context bound to each component in turn. ---
-        var ctx = new CompilerContext(circuit, repository, rMm, zMm, nodeOf, nodeCount);
+        var ctx = new CompilerContext(circuit, repository, grid, nodeOf, nodeCount);
         for (var component : circuit.components()) {
             ctx.bindOwner(component);
             component.stamp(ctx);
@@ -103,8 +115,7 @@ public final class CircuitCompiler {
     private static final class CompilerContext implements CircuitStampContext {
         private final CircuitDocument circuit;
         private final ProjectState repository;
-        private final double[] rMm;
-        private final double[] zMm;
+        private final SpatialGrid grid;
         private final Map<ComponentTerminal, Integer> nodeOf;
         private final int nodeCount;
 
@@ -132,12 +143,11 @@ public final class CircuitCompiler {
         private CircuitComponent owner;
 
         CompilerContext(CircuitDocument circuit, ProjectState repository,
-                        double[] rMm, double[] zMm,
+                        SpatialGrid grid,
                         Map<ComponentTerminal, Integer> nodeOf, int nodeCount) {
             this.circuit = circuit;
             this.repository = repository;
-            this.rMm = rMm;
-            this.zMm = zMm;
+            this.grid = grid;
             this.nodeOf = nodeOf;
             this.nodeCount = nodeCount;
         }
@@ -306,7 +316,7 @@ public final class CircuitCompiler {
                                  double selfInductanceHenry, double seriesResistanceOhms,
                                  double sensitivityT_per_A,
                                  Node inPort) {
-            var sample = sampleEigenfield(eigenfieldId, repository, rMm, zMm, sensitivityT_per_A);
+            var sample = sampleEigenfield(eigenfieldId, repository, grid, sensitivityT_per_A);
             int index = coils.size();
             coils.add(new CompiledCoil(id, name, selfInductanceHenry, seriesResistanceOhms,
                 sample[0], sample[1], sample[2]));
@@ -427,42 +437,43 @@ public final class CircuitCompiler {
         return out;
     }
 
-    private static double[][][] sampleEigenfield(ProjectNodeId eigenfieldId,
-                                                 ProjectState repository,
-                                                 double[] rMm, double[] zMm,
-                                                 double coilSensitivityT_per_A) {
-        int nR = rMm.length;
-        int nZ = zMm.length;
-        double[][] ex = new double[nR][nZ];
-        double[][] ey = new double[nR][nZ];
-        double[][] ez = new double[nR][nZ];
+    /**
+     * Bake an eigenfield script onto every point of the simulation grid. The
+     * grid hands us 3-D positions (metres); cylindrical impls return points on
+     * the `(r, 0, z)` slice — the rest of the pipeline reconstructs the off-φ
+     * vector via the grid's {@code sampleVec3} azimuthal rotation. Returns
+     * `[ex, ey, ez]` flat arrays of length {@code grid.size()}.
+     */
+    private static double[][] sampleEigenfield(ProjectNodeId eigenfieldId,
+                                               ProjectState repository,
+                                               SpatialGrid grid,
+                                               double coilSensitivityT_per_A) {
+        int n = grid.size();
+        double[] ex = new double[n];
+        double[] ey = new double[n];
+        double[] ez = new double[n];
 
         EigenfieldDocument doc = (repository == null || eigenfieldId == null)
             ? null
             : (repository.node(eigenfieldId) instanceof EigenfieldDocument d ? d : null);
-        if (doc == null) return new double[][][]{ex, ey, ez};
+        if (doc == null) return new double[][]{ex, ey, ez};
 
-        EigenfieldScript script;
-        try {
-            script = EigenfieldScriptEngine.compile(doc.script());
-        } catch (RuntimeException compileFailure) {
-            return new double[][][]{ex, ey, ez};
-        }
+        // Re-throw eigenfield compile failures so the user sees them; the
+        // alternative — silently zeroing the coil — turns a script typo into
+        // an invisible "no field" bug that's almost impossible to debug.
+        EigenfieldScript script = EigenfieldEngine.compile(doc.script());
         // Shape only from the eigenfield; magnitude comes from the coil.
         double scale = coilSensitivityT_per_A;
 
-        for (int ri = 0; ri < nR; ri++) {
-            double x = rMm[ri] * 1e-3;
-            for (int zi = 0; zi < nZ; zi++) {
-                double z = zMm[zi] * 1e-3;
-                Vec3 v;
-                try { v = script.evaluate(x, 0, z); } catch (Throwable t) { v = Vec3.ZERO; }
-                if (v == null) v = Vec3.ZERO;
-                ex[ri][zi] = scale * (Double.isFinite(v.x()) ? v.x() : 0);
-                ey[ri][zi] = scale * (Double.isFinite(v.y()) ? v.y() : 0);
-                ez[ri][zi] = scale * (Double.isFinite(v.z()) ? v.z() : 0);
-            }
+        for (int i = 0; i < n; i++) {
+            Vec3 p = grid.position(i);
+            Vec3 v;
+            try { v = script.evaluate(p.x(), p.y(), p.z()); } catch (Throwable t) { v = Vec3.ZERO; }
+            if (v == null) v = Vec3.ZERO;
+            ex[i] = scale * (Double.isFinite(v.x()) ? v.x() : 0);
+            ey[i] = scale * (Double.isFinite(v.y()) ? v.y() : 0);
+            ez[i] = scale * (Double.isFinite(v.z()) ? v.z() : 0);
         }
-        return new double[][][]{ex, ey, ez};
+        return new double[][]{ex, ey, ez};
     }
 }

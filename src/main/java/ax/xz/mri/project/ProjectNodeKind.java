@@ -6,5 +6,7 @@ public enum ProjectNodeKind {
     SIMULATION_CONFIG,
     HARDWARE_CONFIG,
     EIGENFIELD,
-    CIRCUIT
+    CIRCUIT,
+    SUBSTANCE,
+    PROCEDURE
 }

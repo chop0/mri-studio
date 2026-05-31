@@ -3,11 +3,13 @@ package ax.xz.mri.state;
 import ax.xz.mri.model.circuit.CircuitDocument;
 import ax.xz.mri.project.EigenfieldDocument;
 import ax.xz.mri.project.HardwareConfigDocument;
+import ax.xz.mri.project.ProcedureDocument;
 import ax.xz.mri.project.ProjectManifest;
 import ax.xz.mri.project.ProjectNode;
 import ax.xz.mri.project.ProjectNodeId;
 import ax.xz.mri.project.SequenceDocument;
 import ax.xz.mri.project.SimulationConfigDocument;
+import ax.xz.mri.project.SubstanceDocument;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,7 +18,7 @@ import java.util.Map;
 /**
  * The single source of truth for a project's persistent state.
  *
- * <p>An immutable record holding every persisted document by id. The five
+ * <p>An immutable record holding every persisted document by id. The
  * document maps are insertion-ordered ({@link java.util.LinkedHashMap}-backed
  * unmodifiable wrappers) — order is part of the user-visible UX, but rather
  * than carry a second {@code List<Id>} order field per type (which lets
@@ -30,31 +32,35 @@ import java.util.Map;
  */
 public record ProjectState(
     ProjectManifest manifest,
-    Map<ProjectNodeId, SequenceDocument> sequences,
+    Map<ProjectNodeId, SequenceDocument>         sequences,
     Map<ProjectNodeId, SimulationConfigDocument> simulations,
-    Map<ProjectNodeId, EigenfieldDocument> eigenfields,
-    Map<ProjectNodeId, CircuitDocument> circuits,
-    Map<ProjectNodeId, HardwareConfigDocument> hardware
+    Map<ProjectNodeId, EigenfieldDocument>       eigenfields,
+    Map<ProjectNodeId, CircuitDocument>          circuits,
+    Map<ProjectNodeId, HardwareConfigDocument>   hardware,
+    Map<ProjectNodeId, SubstanceDocument>        substances,
+    Map<ProjectNodeId, ProcedureDocument>        procedures
 ) {
 
     public ProjectState {
         if (manifest == null) throw new IllegalArgumentException("manifest must not be null");
-        sequences = freezeMap(sequences);
+        sequences   = freezeMap(sequences);
         simulations = freezeMap(simulations);
         eigenfields = freezeMap(eigenfields);
-        circuits = freezeMap(circuits);
-        hardware = freezeMap(hardware);
+        circuits    = freezeMap(circuits);
+        hardware    = freezeMap(hardware);
+        substances  = freezeMap(substances);
+        procedures  = freezeMap(procedures);
     }
 
     public static ProjectState empty() {
         return new ProjectState(
             new ProjectManifest("Untitled Project", ".mri-studio/layout.json", ".mri-studio/ui-state.json"),
-            Map.of(), Map.of(), Map.of(), Map.of(), Map.of()
+            Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of()
         );
     }
 
     public static ProjectState fresh(ProjectManifest manifest) {
-        return new ProjectState(manifest, Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
+        return new ProjectState(manifest, Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
     }
 
     /* Insertion-ordered id lists, derived live from each map's key set. */
@@ -64,16 +70,20 @@ public record ProjectState(
     public List<ProjectNodeId> eigenfieldIds()  { return List.copyOf(eigenfields.keySet()); }
     public List<ProjectNodeId> circuitIds()     { return List.copyOf(circuits.keySet()); }
     public List<ProjectNodeId> hardwareIds()    { return List.copyOf(hardware.keySet()); }
+    public List<ProjectNodeId> substanceIds()   { return List.copyOf(substances.keySet()); }
+    public List<ProjectNodeId> procedureIds()   { return List.copyOf(procedures.keySet()); }
 
-    /** Lookup any node by id, walking all five maps. Returns {@code null} if no match. */
+    /** Lookup any node by id, walking all maps. Returns {@code null} if no match. */
     public ProjectNode node(ProjectNodeId id) {
         if (id == null) return null;
         ProjectNode n;
-        if ((n = sequences.get(id)) != null) return n;
+        if ((n = sequences.get(id))   != null) return n;
         if ((n = simulations.get(id)) != null) return n;
         if ((n = eigenfields.get(id)) != null) return n;
-        if ((n = circuits.get(id)) != null) return n;
-        if ((n = hardware.get(id)) != null) return n;
+        if ((n = circuits.get(id))    != null) return n;
+        if ((n = hardware.get(id))    != null) return n;
+        if ((n = substances.get(id))  != null) return n;
+        if ((n = procedures.get(id))  != null) return n;
         return null;
     }
 
@@ -81,77 +91,112 @@ public record ProjectState(
         return node(id) != null;
     }
 
-    public SequenceDocument sequence(ProjectNodeId id)               { return sequences.get(id); }
-    public SimulationConfigDocument simulation(ProjectNodeId id)     { return simulations.get(id); }
-    public EigenfieldDocument eigenfield(ProjectNodeId id)           { return eigenfields.get(id); }
-    public CircuitDocument circuit(ProjectNodeId id)                 { return circuits.get(id); }
-    public HardwareConfigDocument hardwareConfig(ProjectNodeId id)   { return hardware.get(id); }
+    /** True when the project holds no documents of any kind. */
+    public boolean isEmpty() {
+        return sequences.isEmpty() && simulations.isEmpty() && eigenfields.isEmpty()
+            && circuits.isEmpty() && hardware.isEmpty() && substances.isEmpty()
+            && procedures.isEmpty();
+    }
+
+    public SequenceDocument         sequence(ProjectNodeId id)        { return sequences.get(id); }
+    public SimulationConfigDocument simulation(ProjectNodeId id)      { return simulations.get(id); }
+    public EigenfieldDocument       eigenfield(ProjectNodeId id)      { return eigenfields.get(id); }
+    public CircuitDocument          circuit(ProjectNodeId id)         { return circuits.get(id); }
+    public HardwareConfigDocument   hardwareConfig(ProjectNodeId id)  { return hardware.get(id); }
+    public SubstanceDocument        substance(ProjectNodeId id)       { return substances.get(id); }
+    public ProcedureDocument        procedure(ProjectNodeId id)       { return procedures.get(id); }
 
     /** Builder-style helpers for adding/replacing/removing documents. Each returns a new state. */
 
     public ProjectState withSequence(SequenceDocument doc) {
         return new ProjectState(manifest,
             putInto(sequences, doc.id(), doc),
-            simulations, eigenfields, circuits, hardware);
+            simulations, eigenfields, circuits, hardware, substances, procedures);
     }
     public ProjectState withoutSequence(ProjectNodeId id) {
         return new ProjectState(manifest,
             removeFrom(sequences, id),
-            simulations, eigenfields, circuits, hardware);
+            simulations, eigenfields, circuits, hardware, substances, procedures);
     }
 
     public ProjectState withSimulation(SimulationConfigDocument doc) {
         return new ProjectState(manifest,
             sequences,
             putInto(simulations, doc.id(), doc),
-            eigenfields, circuits, hardware);
+            eigenfields, circuits, hardware, substances, procedures);
     }
     public ProjectState withoutSimulation(ProjectNodeId id) {
         return new ProjectState(manifest,
             sequences,
             removeFrom(simulations, id),
-            eigenfields, circuits, hardware);
+            eigenfields, circuits, hardware, substances, procedures);
     }
 
     public ProjectState withEigenfield(EigenfieldDocument doc) {
         return new ProjectState(manifest,
             sequences, simulations,
             putInto(eigenfields, doc.id(), doc),
-            circuits, hardware);
+            circuits, hardware, substances, procedures);
     }
     public ProjectState withoutEigenfield(ProjectNodeId id) {
         return new ProjectState(manifest,
             sequences, simulations,
             removeFrom(eigenfields, id),
-            circuits, hardware);
+            circuits, hardware, substances, procedures);
     }
 
     public ProjectState withCircuit(CircuitDocument doc) {
         return new ProjectState(manifest,
             sequences, simulations, eigenfields,
             putInto(circuits, doc.id(), doc),
-            hardware);
+            hardware, substances, procedures);
     }
     public ProjectState withoutCircuit(ProjectNodeId id) {
         return new ProjectState(manifest,
             sequences, simulations, eigenfields,
             removeFrom(circuits, id),
-            hardware);
+            hardware, substances, procedures);
     }
 
     public ProjectState withHardware(HardwareConfigDocument doc) {
         return new ProjectState(manifest,
             sequences, simulations, eigenfields, circuits,
-            putInto(hardware, doc.id(), doc));
+            putInto(hardware, doc.id(), doc),
+            substances, procedures);
     }
     public ProjectState withoutHardware(ProjectNodeId id) {
         return new ProjectState(manifest,
             sequences, simulations, eigenfields, circuits,
-            removeFrom(hardware, id));
+            removeFrom(hardware, id),
+            substances, procedures);
+    }
+
+    public ProjectState withSubstance(SubstanceDocument doc) {
+        return new ProjectState(manifest,
+            sequences, simulations, eigenfields, circuits, hardware,
+            putInto(substances, doc.id(), doc),
+            procedures);
+    }
+    public ProjectState withoutSubstance(ProjectNodeId id) {
+        return new ProjectState(manifest,
+            sequences, simulations, eigenfields, circuits, hardware,
+            removeFrom(substances, id),
+            procedures);
+    }
+
+    public ProjectState withProcedure(ProcedureDocument doc) {
+        return new ProjectState(manifest,
+            sequences, simulations, eigenfields, circuits, hardware, substances,
+            putInto(procedures, doc.id(), doc));
+    }
+    public ProjectState withoutProcedure(ProjectNodeId id) {
+        return new ProjectState(manifest,
+            sequences, simulations, eigenfields, circuits, hardware, substances,
+            removeFrom(procedures, id));
     }
 
     public ProjectState withManifest(ProjectManifest m) {
-        return new ProjectState(m, sequences, simulations, eigenfields, circuits, hardware);
+        return new ProjectState(m, sequences, simulations, eigenfields, circuits, hardware, substances, procedures);
     }
 
     /* ── helpers ──────────────────────────────────────────────────────────── */

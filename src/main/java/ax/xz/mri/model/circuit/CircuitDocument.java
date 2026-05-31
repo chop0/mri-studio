@@ -74,6 +74,18 @@ public record CircuitDocument(
         return List.copyOf(out);
     }
 
+    /**
+     * Optical-output probes. These are first-class output channels alongside
+     * electrical probes — the simulator emits a click-rate trace for each,
+     * and the editor's output band auto-enables them so the user doesn't have
+     * to discover the Outputs popover to see NV photon clicks.
+     */
+    public List<CircuitComponent.OpticalCounter> opticalCounters() {
+        var out = new ArrayList<CircuitComponent.OpticalCounter>();
+        for (var c : components) if (c instanceof CircuitComponent.OpticalCounter v) out.add(v);
+        return List.copyOf(out);
+    }
+
     /** Total pulse-sequence control scalars per step — sum over all voltage sources. */
     @JsonIgnore
     public int totalChannelCount() {
@@ -143,27 +155,46 @@ public record CircuitDocument(
     private static void validate(List<CircuitComponent> components, List<Wire> wires) {
         var ids = new HashSet<ComponentId>();
         var names = new HashSet<String>();
-        var portsByComponent = new HashMap<ComponentId, List<String>>();
+        var componentsById = new HashMap<ComponentId, CircuitComponent>();
         for (var c : components) {
             if (!ids.add(c.id())) throw new IllegalArgumentException("Duplicate component id: " + c.id());
             if (!names.add(c.name())) throw new IllegalArgumentException("Duplicate component name: " + c.name());
-            portsByComponent.put(c.id(), c.ports());
+            componentsById.put(c.id(), c);
         }
 
         var wireIds = new HashSet<String>();
         for (var w : wires) {
             if (!wireIds.add(w.id())) throw new IllegalArgumentException("Duplicate wire id: " + w.id());
-            validateTerminal(portsByComponent, w.from());
-            validateTerminal(portsByComponent, w.to());
+            ChannelKind fromKind = validateTerminal(componentsById, w.from());
+            ChannelKind toKind = validateTerminal(componentsById, w.to());
+            if (!kindsCompatible(fromKind, toKind)) {
+                throw new IllegalArgumentException(
+                    "Wire " + w.id() + " connects incompatible kinds: "
+                    + w.from().componentId() + "." + w.from().port() + " (" + fromKind + ") -> "
+                    + w.to().componentId() + "." + w.to().port() + " (" + toKind + ")");
+            }
             if (w.from().componentId().equals(w.to().componentId()))
                 throw new IllegalArgumentException("Wire " + w.id() + " has both endpoints on " + w.from().componentId());
         }
     }
 
-    private static void validateTerminal(Map<ComponentId, List<String>> portsByComponent, ComponentTerminal terminal) {
-        var ports = portsByComponent.get(terminal.componentId());
-        if (ports == null) throw new IllegalArgumentException("Wire references unknown component: " + terminal.componentId());
-        if (!ports.contains(terminal.port()))
+    /**
+     * Wire kinds compatible for connection. Same-kind always passes;
+     * ELECTRICAL ↔ CONTROL is also allowed, because a GATE-style
+     * VoltageSource emits its 0/1 scalar on an ELECTRICAL port and that
+     * naturally fits a substance / switch / multiplexer CONTROL input.
+     */
+    private static boolean kindsCompatible(ChannelKind a, ChannelKind b) {
+        if (a == b) return true;
+        return (a == ChannelKind.ELECTRICAL && b == ChannelKind.CONTROL)
+            || (a == ChannelKind.CONTROL && b == ChannelKind.ELECTRICAL);
+    }
+
+    private static ChannelKind validateTerminal(Map<ComponentId, CircuitComponent> componentsById, ComponentTerminal terminal) {
+        var c = componentsById.get(terminal.componentId());
+        if (c == null) throw new IllegalArgumentException("Wire references unknown component: " + terminal.componentId());
+        if (!c.ports().contains(terminal.port()))
             throw new IllegalArgumentException("Wire references unknown port '" + terminal.port() + "' on component " + terminal.componentId());
+        return c.portKind(terminal.port());
     }
 }

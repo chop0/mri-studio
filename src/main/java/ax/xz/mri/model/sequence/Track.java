@@ -21,7 +21,7 @@ import java.util.UUID;
  * re-routed) and persisted with the {@link ClipSequence}. Clips reference
  * their track by {@link #id()}, not by channel — changing a track's routing
  * moves all its clips in lockstep. Per-track collapse state is view-level
- * (see {@link ax.xz.mri.ui.viewmodel.SequenceEditSession#collapsedTrackIds}).
+ * (see {@link ax.xz.mri.ui.edit.EditSession#collapsedTrackIds}).
  */
 public record Track(
     String id,

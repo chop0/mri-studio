@@ -184,12 +184,11 @@ public abstract class BlochObjectiveEngine implements ObjectiveEngine {
                 by += iDrive[c] * eyp + qDrive[c] * exp;
                 bz += iDrive[c] * ezp;
             }
-            var next = (bx * bx + by * by) < BlochStep.B_PERP_SQ_FLOOR
-                ? BlochStep.zOnly(bz, gamma, dt, e1, e2, mx[p], my[p], mz[p])
-                : BlochStep.rodrigues(bx, by, bz, gamma, dt, e1, e2, mx[p], my[p], mz[p]);
-            mx[p] = next.mx();
-            my[p] = next.my();
-            mz[p] = next.mz();
+            if ((bx * bx + by * by) < BlochStep.B_PERP_SQ_FLOOR) {
+                BlochStep.zOnlyInto(bz, gamma, dt, e1, e2, mx, my, mz, p);
+            } else {
+                BlochStep.rodriguesInto(bx, by, bz, gamma, dt, e1, e2, mx, my, mz, p);
+            }
         }
     }
 

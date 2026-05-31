@@ -1,17 +1,20 @@
 package ax.xz.mri.model.simulation;
 
 /**
- * User-editable physics knobs that feed into a {@link SimulationConfig} —
- * gyromagnetic ratio, T1/T2, FOV, integration step. Decoupled from the
- * config itself so wizards can collect values before knowing the circuit.
+ * Wizard-stage simulation parameter bundle. Currently just the integration
+ * step — spatial layout (extent + resolution) and tissue physics live on the
+ * substance documents the circuit references.
+ *
+ * <p>This bundle stays as its own record so the wizard's
+ * {@code PhysicsParamsStep} has a coherent value type to collect, and so
+ * future global parameters (e.g. solver tolerance) can be added without
+ * widening {@link SimulationConfig}'s signature.
  */
-public record PhysicsParams(
-    double gamma,
-    double t1Ms, double t2Ms,
-    double sliceHalfMm, double fovZMm, double fovRMm,
-    int nZ, int nR,
-    double dtSeconds
-) {
-    public static final PhysicsParams DEFAULTS =
-        new PhysicsParams(267.522e6, 1000, 100, 5, 20, 30, 50, 5, 1e-6);
+public record PhysicsParams(double dtSeconds) {
+    public static final PhysicsParams DEFAULTS = new PhysicsParams(1e-6);
+
+    public PhysicsParams {
+        if (!(dtSeconds > 0) || !Double.isFinite(dtSeconds))
+            throw new IllegalArgumentException("dtSeconds must be a finite positive value, got " + dtSeconds);
+    }
 }

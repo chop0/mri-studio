@@ -51,6 +51,7 @@ public final class SiFormat {
     /** Format a value with arbitrary SI units, sweeping from giga down to nano. */
     public static String si(double value, String units) {
         if (units == null || units.isEmpty()) return String.format("%.3g", value);
+        if (!Double.isFinite(value)) return "—";
         double abs = Math.abs(value);
         if (abs == 0)         return "0 " + units;
         if (abs >= 1e9)       return String.format("%.2f G%s", value / 1e9, units);
@@ -62,4 +63,43 @@ public final class SiFormat {
         if (abs >= 1e-9)      return String.format("%.2f n%s", value * 1e9, units);
         return String.format("%.3g %s", value, units);
     }
+
+    /**
+     * Format a 3-D half-extent (e.g. a substance bounding box) as
+     * {@code "±X×±Y×±Z UNIT"} using one SI prefix chosen from the largest
+     * extent so all three numbers stay legible.
+     */
+    public static String fovExtents(double xMetres, double yMetres, double zMetres) {
+        double max = Math.max(Math.abs(xMetres), Math.max(Math.abs(yMetres), Math.abs(zMetres)));
+        String unit; double scale;
+        if (max == 0)         { unit = "m";  scale = 1.0; }
+        else if (max < 1e-6)  { unit = "nm"; scale = 1e9; }
+        else if (max < 1e-3)  { unit = "μm"; scale = 1e6; }
+        else if (max < 1.0)   { unit = "mm"; scale = 1e3; }
+        else                  { unit = "m";  scale = 1.0; }
+        return String.format("±%.2f × ±%.2f × ±%.2f %s",
+            xMetres * scale, yMetres * scale, zMetres * scale, unit);
+    }
+
+    /**
+     * Pick a single SI prefix for a column of values whose magnitudes vary.
+     * Returns a {@code {scale, label}} pair so the same prefix is used for
+     * every tick on a chart axis. {@code scale} is the multiplier to convert
+     * the base-unit value to the prefixed-unit value; {@code label} is the
+     * prefixed unit string like {@code "nT"} or {@code "mm"}.
+     */
+    public static UnitChoice pickPrefix(double maxAbs, String baseUnit) {
+        if (baseUnit == null) baseUnit = "";
+        if (!Double.isFinite(maxAbs) || maxAbs == 0) return new UnitChoice(1.0, baseUnit);
+        if (maxAbs >= 1e9)  return new UnitChoice(1e-9, "G" + baseUnit);
+        if (maxAbs >= 1e6)  return new UnitChoice(1e-6, "M" + baseUnit);
+        if (maxAbs >= 1e3)  return new UnitChoice(1e-3, "k" + baseUnit);
+        if (maxAbs >= 1)    return new UnitChoice(1.0,  baseUnit);
+        if (maxAbs >= 1e-3) return new UnitChoice(1e3,  "m" + baseUnit);
+        if (maxAbs >= 1e-6) return new UnitChoice(1e6,  "μ" + baseUnit);
+        if (maxAbs >= 1e-9) return new UnitChoice(1e9,  "n" + baseUnit);
+        return new UnitChoice(1e12, "p" + baseUnit);
+    }
+
+    public record UnitChoice(double scale, String label) {}
 }

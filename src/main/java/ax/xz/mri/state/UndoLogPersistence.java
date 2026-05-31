@@ -60,6 +60,7 @@ public final class UndoLogPersistence {
                 }
             });
         this.mapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jdk8.Jdk8Module())
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             // Java records have package-private fields by default; tell Jackson
             // to look at the canonical accessor methods instead.

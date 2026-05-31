@@ -13,10 +13,11 @@ import java.util.Map;
 /** Simple project manifest TOML plus JSON document serialiser. */
 public final class ProjectSerialiser {
     private final ObjectMapper mapper = new ObjectMapper()
+        .registerModule(new com.fasterxml.jackson.datatype.jdk8.Jdk8Module())
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     public void writeManifest(Path path, ProjectManifest manifest) throws IOException {
-        AtomicWriter.writeString(path, """
+        var sb = new StringBuilder("""
             schema = 1
             name = "%s"
             layout_file = "%s"
@@ -24,8 +25,13 @@ public final class ProjectSerialiser {
             """.formatted(
             escape(manifest.name()),
             escape(manifest.layoutFile()),
-            escape(manifest.uiStateFile())
-        ));
+            escape(manifest.uiStateFile())));
+        if (manifest.activeSimulation() != null) {
+            sb.append("active_simulation = \"")
+              .append(escape(manifest.activeSimulation()))
+              .append("\"\n");
+        }
+        AtomicWriter.writeString(path, sb.toString());
     }
 
     public ProjectManifest readManifest(Path path) throws IOException {
@@ -33,7 +39,8 @@ public final class ProjectSerialiser {
         return new ProjectManifest(
             values.getOrDefault("name", "Untitled Project"),
             values.getOrDefault("layout_file", ".mri-studio/layout.json"),
-            values.getOrDefault("ui_state_file", ".mri-studio/ui-state.json")
+            values.getOrDefault("ui_state_file", ".mri-studio/ui-state.json"),
+            values.get("active_simulation")
         );
     }
 

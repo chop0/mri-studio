@@ -1,11 +1,11 @@
-package ax.xz.mri.model.simulation.dsl;
+package ax.xz.mri.dsl;
 
 /**
- * A compilation error reported by the Janino-backed eigenfield script engine.
+ * A compilation error reported by the Janino-backed {@link ScriptEngine}.
  *
  * <p>Carries source location so the editor can place a red squiggle exactly
- * where Janino rejected the input. {@code line} and {@code column} are 1-based
- * (line 0 / column 0 means "unknown").
+ * where Janino rejected the input. {@code line} and {@code column} are
+ * 1-based (line 0 / column 0 means "unknown").
  */
 public final class ScriptCompileException extends RuntimeException {
     private final int line;

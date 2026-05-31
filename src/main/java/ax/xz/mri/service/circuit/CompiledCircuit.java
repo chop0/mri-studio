@@ -57,19 +57,23 @@ public record CompiledCircuit(
     }
 
     /**
-     * A coil compiled onto the (r, z) grid. {@code ex[ri][zi]} / {@code ey} /
-     * {@code ez} are the eigenfield components per grid point, pre-multiplied
-     * by the coil's {@code sensitivityT_per_A} (Tesla per amp). The eigenfield
-     * itself is dimensionless shape; calibration lives on the coil.
+     * A coil compiled onto a {@link ax.xz.mri.model.field.SpatialGrid}.
+     * {@code ex / ey / ez} are flat arrays of length
+     * {@link ax.xz.mri.model.field.SpatialGrid#size()} carrying the eigenfield
+     * components per grid point, pre-multiplied by the coil's
+     * {@code sensitivityT_per_A} (Tesla per amp). The eigenfield itself is a
+     * dimensionless shape; calibration lives on the coil. The grid is owned by
+     * the parent {@link ax.xz.mri.model.field.FieldMap}; the flat layout here
+     * matches the grid's flat indexing exactly.
      */
     public record CompiledCoil(
         ComponentId id,
         String name,
         double selfInductanceHenry,
         double seriesResistanceOhms,
-        double[][] ex,
-        double[][] ey,
-        double[][] ez
+        double[] ex,
+        double[] ey,
+        double[] ez
     ) {}
 
     public record CompiledProbe(

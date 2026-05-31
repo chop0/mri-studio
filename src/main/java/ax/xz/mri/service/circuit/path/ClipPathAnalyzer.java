@@ -241,6 +241,12 @@ public final class ClipPathAnalyzer {
                     new InternalEdge("pb", EdgeKind.TRANSFORMER_CROSS));
                 default -> List.of();
             };
+
+            // Substance and OpticalCounter ports are optical / control —
+            // no electrical path to ground, so the source-to-coil analyser
+            // treats them as terminators just like coils and probes.
+            case CircuitComponent.Substance ignored -> List.of();
+            case CircuitComponent.OpticalCounter ignored -> List.of();
         };
     }
 

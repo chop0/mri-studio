@@ -1,7 +1,7 @@
 package ax.xz.mri.service.circuit.path;
 
 import ax.xz.mri.model.simulation.Vec3;
-import ax.xz.mri.model.simulation.dsl.EigenfieldScript;
+import ax.xz.mri.dsl.EigenfieldScript;
 
 import java.util.Objects;
 

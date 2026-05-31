@@ -1,5 +1,8 @@
 package ax.xz.mri.model.sequence;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.util.UUID;
 
 /**
@@ -21,6 +24,12 @@ import java.util.UUID;
  * shape — this is {@link #centred()}'s inverse: the media extent sits around
  * the visible window with room either side.
  *
+ * <h3>Stay-centred edges</h3>
+ * <p>When {@link #stayCentred} is {@code true} (the default for new clips),
+ * resizing one edge mirrors the change to the opposite edge so the visible
+ * window's centre stays put. The {@code edit/} package's {@code ClipEditor}
+ * implements that symmetry; this record only holds the flag.
+ *
  * <h3>Shape parameters</h3>
  * <p>Each {@link ClipShape} variant owns its own typed parameters; there is no
  * shared parameter map. Changing shape is a full replacement
@@ -35,7 +44,8 @@ public record SignalClip(
     double duration,
     double amplitude,
     double mediaOffset,
-    double mediaDuration
+    double mediaDuration,
+    boolean stayCentred
 ) {
     public SignalClip {
         if (id == null) id = UUID.randomUUID().toString();
@@ -43,8 +53,32 @@ public record SignalClip(
         if (mediaDuration <= 0) mediaDuration = duration;
     }
 
+    /**
+     * Jackson factory: project files written before {@code stayCentred} existed
+     * deserialise with {@code stayCentred = true} (matching the new-clip
+     * default), rather than the boolean-primitive default of {@code false}.
+     */
+    @JsonCreator
+    public static SignalClip fromJson(
+        @JsonProperty("id") String id,
+        @JsonProperty("trackId") String trackId,
+        @JsonProperty("shape") ClipShape shape,
+        @JsonProperty("startTime") double startTime,
+        @JsonProperty("duration") double duration,
+        @JsonProperty("amplitude") double amplitude,
+        @JsonProperty("mediaOffset") double mediaOffset,
+        @JsonProperty("mediaDuration") double mediaDuration,
+        @JsonProperty("stayCentred") Boolean stayCentred
+    ) {
+        return new SignalClip(id, trackId, shape, startTime, duration, amplitude,
+            mediaOffset, mediaDuration, stayCentred == null || stayCentred);
+    }
+
     /** End time in microseconds on the timeline. */
     public double endTime() { return startTime + duration; }
+
+    /** Centre of the visible window, in microseconds. */
+    public double centre() { return startTime + duration * 0.5; }
 
     /**
      * Normalised position within the media extent at a given absolute time —
@@ -77,7 +111,8 @@ public record SignalClip(
     /**
      * Build a fresh clip with a media extent centred around the visible window
      * (four times the duration, shifted so the visible part sits in the middle).
-     * The shape's own default parameters are used.
+     * The shape's own default parameters are used; {@code stayCentred} starts
+     * {@code true}.
      */
     public static SignalClip freshCentred(String trackId, ClipKind kind,
                                           double startTime, double duration, double amplitude) {
@@ -86,7 +121,7 @@ public record SignalClip(
         return new SignalClip(
             null, trackId, kind.defaultFor(mediaDuration),
             startTime, duration, amplitude,
-            mediaOffset, mediaDuration
+            mediaOffset, mediaDuration, true
         );
     }
 
@@ -97,14 +132,14 @@ public record SignalClip(
     /**
      * Re-centre this clip so the visible window sits in the middle of a fresh
      * {@link #MEDIA_EXTENT_FACTOR}×-duration media extent — gives the user
-     * room to drag either trim edge back out.
+     * room to drag either trim edge back out. Sets {@code stayCentred = true}.
      */
     public SignalClip centred() {
         double newMediaDuration = duration * MEDIA_EXTENT_FACTOR;
         double newMediaOffset = duration * MEDIA_OFFSET_FACTOR;
         return new SignalClip(id, trackId, shape,
             startTime, duration, amplitude,
-            newMediaOffset, newMediaDuration);
+            newMediaOffset, newMediaDuration, true);
     }
 
     /**
@@ -124,12 +159,12 @@ public record SignalClip(
         var left = new SignalClip(
             UUID.randomUUID().toString(), trackId, shape.onSplit(duration, splitU, true),
             startTime, leftDuration, amplitude,
-            0, leftDuration
+            0, leftDuration, stayCentred
         );
         var right = new SignalClip(
             UUID.randomUUID().toString(), trackId, shape.onSplit(duration, splitU, false),
             splitTime, rightDuration, amplitude,
-            0, rightDuration
+            0, rightDuration, stayCentred
         );
         return new Split(left, right);
     }
@@ -140,31 +175,35 @@ public record SignalClip(
     // ── with* mutators ───────────────────────────────────────────────────────
 
     public SignalClip withStartTime(double newStartTime) {
-        return new SignalClip(id, trackId, shape, newStartTime, duration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, newStartTime, duration, amplitude, mediaOffset, mediaDuration, stayCentred);
     }
 
     public SignalClip withDuration(double newDuration) {
-        return new SignalClip(id, trackId, shape, startTime, newDuration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, newDuration, amplitude, mediaOffset, mediaDuration, stayCentred);
     }
 
     public SignalClip withAmplitude(double newAmplitude) {
-        return new SignalClip(id, trackId, shape, startTime, duration, newAmplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, duration, newAmplitude, mediaOffset, mediaDuration, stayCentred);
     }
 
     public SignalClip withMediaDuration(double newMediaDuration) {
-        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, mediaOffset, newMediaDuration);
+        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, mediaOffset, newMediaDuration, stayCentred);
     }
 
     public SignalClip withShape(ClipShape newShape) {
-        return new SignalClip(id, trackId, newShape, startTime, duration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, trackId, newShape, startTime, duration, amplitude, mediaOffset, mediaDuration, stayCentred);
     }
 
     public SignalClip withTrack(String newTrackId) {
-        return new SignalClip(id, newTrackId, shape, startTime, duration, amplitude, mediaOffset, mediaDuration);
+        return new SignalClip(id, newTrackId, shape, startTime, duration, amplitude, mediaOffset, mediaDuration, stayCentred);
+    }
+
+    public SignalClip withStayCentred(boolean newStayCentred) {
+        return new SignalClip(id, trackId, shape, startTime, duration, amplitude, mediaOffset, mediaDuration, newStayCentred);
     }
 
     public SignalClip withNewId() {
         return new SignalClip(UUID.randomUUID().toString(), trackId, shape,
-            startTime, duration, amplitude, mediaOffset, mediaDuration);
+            startTime, duration, amplitude, mediaOffset, mediaDuration, stayCentred);
     }
 }

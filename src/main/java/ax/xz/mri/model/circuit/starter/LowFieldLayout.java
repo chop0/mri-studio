@@ -32,7 +32,7 @@ final class LowFieldLayout {
     private static final double RX_ROW_OFFSET = 170;
 
     /**
-     * Arrange the 13 components of the low-field MRI starter.
+     * Arrange the 15 components of the low-field MRI starter.
      *
      * @param sources order [b0, rfI, rfQ, gx, gz]
      * @param coils   order [b0Coil, rfCoil, gxCoil, gzCoil]
@@ -43,7 +43,8 @@ final class LowFieldLayout {
                                   CircuitComponent.Multiplexer mux,
                                   CircuitComponent.VoltageMetadata rfActive,
                                   CircuitComponent.Mixer mixer,
-                                  CircuitComponent.Probe probe) {
+                                  CircuitComponent.Probe probe,
+                                  CircuitComponent.Substance substance) {
         var layout = CircuitLayout.empty();
 
         // B0 on row 0.
@@ -79,6 +80,12 @@ final class LowFieldLayout {
             .with(new ComponentPosition(coils.get(2).id(), COIL_X, gxY, 0))
             .with(new ComponentPosition(sources.get(4).id(), SRC_X, gzY, 0))
             .with(new ComponentPosition(coils.get(3).id(), COIL_X, gzY, 0));
+
+        // Substance block sits between the coils column and the FOV — far
+        // right of the schematic, vertically centred on the B0 row so the
+        // ambient-coupling visual lines up with "the sample" beside B0.
+        double substanceX = COIL_X + 180;
+        layout = layout.with(new ComponentPosition(substance.id(), substanceX, b0Y, 0));
 
         return layout;
     }

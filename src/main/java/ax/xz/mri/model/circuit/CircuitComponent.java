@@ -63,12 +63,24 @@ import java.util.List;
     @JsonSubTypes.Type(value = CircuitComponent.IdealTransformer.class, name = "transformer"),
     @JsonSubTypes.Type(value = CircuitComponent.Mixer.class, name = "mixer"),
     @JsonSubTypes.Type(value = CircuitComponent.Modulator.class, name = "modulator"),
-    @JsonSubTypes.Type(value = CircuitComponent.VoltageMetadata.class, name = "voltage_metadata")
+    @JsonSubTypes.Type(value = CircuitComponent.VoltageMetadata.class, name = "voltage_metadata"),
+    @JsonSubTypes.Type(value = CircuitComponent.Substance.class, name = "substance"),
+    @JsonSubTypes.Type(value = CircuitComponent.OpticalCounter.class, name = "optical_counter")
 })
 public sealed interface CircuitComponent {
     ComponentId id();
     String name();
     List<String> ports();
+
+    /**
+     * What kind of signal port {@code portName} carries — electrical / optical
+     * / control. Defaults to {@link ChannelKind#ELECTRICAL} for the historic
+     * voltage-and-current components; substances and optical probes override
+     * to {@link ChannelKind#OPTICAL} / {@link ChannelKind#CONTROL} where it
+     * applies. Wires require both endpoints to share a kind; the MNA solver
+     * only walks the electrical subgraph.
+     */
+    default ChannelKind portKind(String portName) { return ChannelKind.ELECTRICAL; }
 
     CircuitComponent withName(String newName);
     CircuitComponent withId(ComponentId newId);
@@ -756,5 +768,167 @@ public sealed interface CircuitComponent {
         }
 
         public IdealTransformer withTurnsRatio(double v) { return new IdealTransformer(id, name, v); }
+    }
+
+    /**
+     * A schematic block representing a {@link ax.xz.mri.project.SubstanceDocument}
+     * placed in the FOV at a specified {@code (xMetres, yMetres, zMetres)}
+     * offset from origin.
+     *
+     * <p>The block declares typed ports per substance {@link Kind}:
+     * <ul>
+     *   <li>{@link Kind#NV} — {@code laser_on} (CONTROL input from a sequence
+     *       track) and {@code clicks_red} (OPTICAL output routed to an
+     *       {@link OpticalCounter} probe).</li>
+     *   <li>{@link Kind#CONTINUOUS_MAGNETISATION} — no ports. Magnetic
+     *       coupling to coils is implicit / ambient via reciprocity; nothing
+     *       to wire.</li>
+     * </ul>
+     *
+     * <p>The block contributes nothing to the MNA — substances are handed
+     * to {@link ax.xz.mri.service.simulation.compiled.CompiledSimulation}
+     * directly through the substance list at compile time, not through the
+     * electrical circuit graph. {@code stamp} is intentionally a no-op.
+     */
+    record Substance(
+        ComponentId id,
+        String name,
+        ProjectNodeId substanceDocId,
+        Kind kind,
+        double xMetres,
+        double yMetres,
+        double zMetres
+    ) implements CircuitComponent {
+
+        /**
+         * Which substance kind the linked {@link ax.xz.mri.project.SubstanceDocument}
+         * holds. Stored on the block (not derived on-demand from the doc) so
+         * port shapes resolve without a project-state lookup — wires reference
+         * port names by string and the validator needs to see them eagerly.
+         */
+        public enum Kind {
+            CONTINUOUS_MAGNETISATION,
+            NV
+        }
+
+        public Substance {
+            if (id == null) throw new IllegalArgumentException("Substance.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("Substance.name must be non-blank");
+            if (substanceDocId == null) throw new IllegalArgumentException("Substance.substanceDocId must not be null");
+            if (kind == null) throw new IllegalArgumentException("Substance.kind must not be null");
+            if (!Double.isFinite(xMetres) || !Double.isFinite(yMetres) || !Double.isFinite(zMetres))
+                throw new IllegalArgumentException("Substance offset must be finite");
+        }
+
+        /** Origin-centred substance. */
+        public Substance(ComponentId id, String name, ProjectNodeId substanceDocId, Kind kind) {
+            this(id, name, substanceDocId, kind, 0.0, 0.0, 0.0);
+        }
+
+        @Override
+        public List<String> ports() {
+            return switch (kind) {
+                case CONTINUOUS_MAGNETISATION -> List.of();
+                case NV                       -> List.of("laser_on", "clicks_red");
+            };
+        }
+
+        @Override
+        public ChannelKind portKind(String portName) {
+            return switch (portName) {
+                case "laser_on"   -> ChannelKind.CONTROL;
+                case "clicks_red" -> ChannelKind.OPTICAL;
+                default           -> ChannelKind.ELECTRICAL;
+            };
+        }
+
+        @Override
+        public Substance withName(String newName) {
+            return new Substance(id, newName, substanceDocId, kind, xMetres, yMetres, zMetres);
+        }
+
+        @Override
+        public Substance withId(ComponentId newId) {
+            return new Substance(newId, name, substanceDocId, kind, xMetres, yMetres, zMetres);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            // No electrical contribution; substances reach CompiledSimulation
+            // through the simulation config's substance list, not through the
+            // MNA. The block exists for layout, ports, and inspector-side
+            // configuration.
+        }
+
+        public Substance withSubstanceDocId(ProjectNodeId newDocId) {
+            return new Substance(id, name, newDocId, kind, xMetres, yMetres, zMetres);
+        }
+
+        public Substance withKind(Kind newKind) {
+            return new Substance(id, name, substanceDocId, newKind, xMetres, yMetres, zMetres);
+        }
+
+        public Substance withOffset(double x, double y, double z) {
+            return new Substance(id, name, substanceDocId, kind, x, y, z);
+        }
+    }
+
+    /**
+     * Photon-counter probe. Wired from a {@link Substance} block's
+     * {@code clicks_red} (or future {@code clicks_green}) OPTICAL output to
+     * this counter's {@code in} port. The compiler follows the optical wire
+     * during sim-prep to bind the counter to the upstream substance's click
+     * stream; click integration is Poisson-sampled over the window.
+     *
+     * <p>The counter contributes nothing to the electrical MNA — only the
+     * wire-graph optical edges between substances and counters are walked.
+     */
+    record OpticalCounter(
+        ComponentId id,
+        String name,
+        double quantumEfficiency,
+        double darkRateHz,
+        long seed
+    ) implements CircuitComponent {
+
+        public OpticalCounter {
+            if (id == null) throw new IllegalArgumentException("OpticalCounter.id must not be null");
+            if (name == null || name.isBlank()) throw new IllegalArgumentException("OpticalCounter.name must be non-blank");
+            if (!(quantumEfficiency >= 0 && quantumEfficiency <= 1))
+                throw new IllegalArgumentException("OpticalCounter.quantumEfficiency must be in [0, 1]");
+            if (!(darkRateHz >= 0) || !Double.isFinite(darkRateHz))
+                throw new IllegalArgumentException("OpticalCounter.darkRateHz must be finite non-negative");
+        }
+
+        @Override public List<String> ports() { return List.of("in"); }
+
+        @Override
+        public ChannelKind portKind(String portName) { return ChannelKind.OPTICAL; }
+
+        @Override
+        public OpticalCounter withName(String newName) {
+            return new OpticalCounter(id, newName, quantumEfficiency, darkRateHz, seed);
+        }
+
+        @Override
+        public OpticalCounter withId(ComponentId newId) {
+            return new OpticalCounter(newId, name, quantumEfficiency, darkRateHz, seed);
+        }
+
+        @Override
+        public void stamp(CircuitStampContext ctx) {
+            // No electrical MNA contribution; CompiledSimulation routes the
+            // counter to its upstream substance via the optical wire graph.
+        }
+
+        public OpticalCounter withQuantumEfficiency(double v) {
+            return new OpticalCounter(id, name, v, darkRateHz, seed);
+        }
+        public OpticalCounter withDarkRateHz(double v) {
+            return new OpticalCounter(id, name, quantumEfficiency, v, seed);
+        }
+        public OpticalCounter withSeed(long v) {
+            return new OpticalCounter(id, name, quantumEfficiency, darkRateHz, v);
+        }
     }
 }

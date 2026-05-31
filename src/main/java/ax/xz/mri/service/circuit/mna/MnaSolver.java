@@ -1,5 +1,6 @@
 package ax.xz.mri.service.circuit.mna;
 
+import ax.xz.mri.model.circuit.compile.ComplexPairFormat;
 import ax.xz.mri.model.circuit.compile.CtlBinding;
 import ax.xz.mri.service.circuit.CompiledCircuit;
 
@@ -371,16 +372,18 @@ public final class MnaSolver {
                     bQ[branchRow] = im;
                 }
                 case MIXER_OUT_0 -> {
-                    // Mixer's first scalar output — real-part (IQ) or
-                    // magnitude (MAG_PHASE). Value comes from the current
-                    // iteration's read of V(in). First pass has everything
-                    // zero; updateMixerOutputs() refreshes each iteration.
+                    // IQ format: out0 carries the FULL complex demodulated
+                    // signal (Re in I-channel, Im in Q-channel) so a single
+                    // probe captures both. MAG_PHASE: out0 is the magnitude
+                    // scalar (I-channel only), out1 is phase. Refreshed each
+                    // iteration by updateMixerOutputs().
                     bI[branchRow] = mixerOut0[ref];
-                    bQ[branchRow] = 0;
+                    bQ[branchRow] = net.mixerFormat()[ref] == ComplexPairFormat.IQ ? mixerOut1[ref] : 0;
                 }
                 case MIXER_OUT_1 -> {
-                    // Mixer's second scalar output — imag-part (IQ) or
-                    // phase (MAG_PHASE).
+                    // MAG_PHASE: phase scalar. IQ: redundant scalar imag — kept
+                    // for backward compatibility but the recommended wiring is
+                    // out0 → probe (which now carries the full complex value).
                     bI[branchRow] = mixerOut1[ref];
                     bQ[branchRow] = 0;
                 }
