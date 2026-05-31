@@ -203,6 +203,37 @@ tasks.register<JavaExec>("uiPreview") {
     }
 }
 
+tasks.register<JavaExec>("fieldDensityPreview") {
+    group = "verification"
+    description = "Snapshots the B-field viewer + NV overlay at several zooms to verify adaptive arrow density."
+    dependsOn("compileTestJava")
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("ax.xz.mri.ui.preview.FieldDensityPreview")
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    })
+    doFirst {
+        val classifier = when {
+            org.gradle.internal.os.OperatingSystem.current().isMacOsX ->
+                if (System.getProperty("os.arch") == "aarch64") "mac-aarch64" else "mac"
+            org.gradle.internal.os.OperatingSystem.current().isLinux -> "linux"
+            else -> "win"
+        }
+        val jfxJars = configurations.testRuntimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+            .filter { a ->
+                a.moduleVersion.id.group == "org.openjfx"
+                && (a.classifier == classifier || a.classifier == null)
+            }
+            .map { it.file.absolutePath }
+        jvmArgs(
+            "--module-path", jfxJars.joinToString(File.pathSeparator),
+            "--add-modules", "javafx.controls,javafx.graphics,javafx.swing",
+            "-Dprism.order=sw",
+            "-Dprism.text=t2k"
+        )
+    }
+}
+
 // jlink-baked custom JDK runtime that has the studio module + JavaFX
 // already on the boot module-path. The Badass JLink plugin auto-injects
 // stub module-info into automatic-modular JARs (protobuf-java,
