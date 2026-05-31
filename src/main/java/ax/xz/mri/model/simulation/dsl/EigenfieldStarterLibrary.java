@@ -83,6 +83,43 @@ public final class EigenfieldStarterLibrary {
             "T"),
 
         new EigenfieldStarter(
+            "helmholtz-b0-shim",
+            "B0 Helmholtz (shim)",
+            "Helmholtz B0 with a small residual linear-z inhomogeneity (~2 mT/m "
+            + "at 15 mT) — the static field imperfection a CPMG echo train refocuses, "
+            + "so dephasing and rephasing are visible without an applied gradient.",
+            """
+            import module ax.xz.mri;
+            import static java.lang.Math.*;
+
+            class HelmholtzB0Shim implements EigenfieldScript {
+                static final double R = 0.10;   // coil radius (m)
+                static final double D = R / 2;  // half-separation
+                static final double PEAK = 1.0 / pow(1 + (D / R) * (D / R), 1.5);
+                // Residual z-shim, in fractions of B0 per metre. At B0 = 15.4 mT
+                // this is ~2 mT/m: the FID dephases (T2*) within a ~1 ms echo
+                // spacing and the 180° pulses refocus it into clear echoes.
+                static final double SHIM_PER_M = 0.13;
+
+                public Vec3 evaluate(double x, double y, double z) {
+                    double u1 = (z - D) / R;
+                    double u2 = (z + D) / R;
+                    double bz0 = 0.5 / pow(1 + u1 * u1, 1.5)
+                               + 0.5 / pow(1 + u2 * u2, 1.5);
+                    double r = hypot(x, y);
+                    double rho2 = (r / R) * (r / R);
+                    double curvature = -0.5 * rho2 * (
+                          (2.0 * u1 * u1 - 1.0) / pow(1 + u1 * u1, 3.5)
+                        + (2.0 * u2 * u2 - 1.0) / pow(1 + u2 * u2, 3.5)
+                    );
+                    // Shim added after normalisation, so isocentre (z=0) stays unit.
+                    return Vec3.of(0, 0, (bz0 + curvature) / PEAK + SHIM_PER_M * z);
+                }
+            }
+            """,
+            "T"),
+
+        new EigenfieldStarter(
             "gradient-x",
             "Gradient X",
             "Linear x-gradient of Bz. At 1 T/m, Bz(x) = x tesla.",

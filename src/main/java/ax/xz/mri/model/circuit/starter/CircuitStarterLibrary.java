@@ -81,7 +81,11 @@ public final class CircuitStarterLibrary {
             double larmorHz = gamma * b0Tesla / (2 * Math.PI);
 
             var newEigenfields = new ArrayList<EigenfieldDocument>();
-            var b0Eigen = ensureEigenfield(state, "B0 Helmholtz", "helmholtz-b0", newEigenfields);
+            // Shimmed B0 (Helmholtz + a small residual z-gradient) so the static
+            // field varies across the sample — that inhomogeneity is what a CPMG
+            // echo train dephases and refocuses into visible echoes. The ideal
+            // helmholtz-b0 (no shim) stays available for uniform-field setups.
+            var b0Eigen = ensureEigenfield(state, "B0 Helmholtz (shim)", "helmholtz-b0-shim", newEigenfields);
             var gxEigen = ensureEigenfield(state, "Gradient X", "gradient-x", newEigenfields);
             var gzEigen = ensureEigenfield(state, "Gradient Z", "gradient-z", newEigenfields);
             var rfEigen = ensureEigenfield(state, "RF Transverse", "uniform-b-perp", newEigenfields);

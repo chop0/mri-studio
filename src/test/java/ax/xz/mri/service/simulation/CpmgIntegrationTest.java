@@ -287,6 +287,67 @@ class CpmgIntegrationTest {
             "Ensemble echo peak should be inside the 2τ window, not at an edge. Got t=" + peakTimeUs);
     }
 
+    /**
+     * The default low-field template must show dephasing + rephasing out of the
+     * box — i.e. with NO hand-installed off-resonance. The template's shimmed B0
+     * eigenfield (Helmholtz + ~2 mT/m residual z-gradient) is what spreads the
+     * isochromat frequencies, so the FID dephases within τ and the 180° pulses
+     * refocus it into echoes. This is the regression guard for "the CPMG example
+     * shows clear dephasing and rephasing peaks."
+     */
+    @Test
+    void defaultLowFieldTemplateProducesEchoesWithoutManualInhomogeneity() {
+        var session = ProjectSessionViewModel.standalone();
+        var doc = session.createSimConfig("CPMG-default",
+            SimConfigTemplate.LOW_FIELD_MRI,
+            PhysicsParams.DEFAULTS);
+        var config = doc.config();
+        var repo = session.project();          // NOTE: no installZAxisOffResonance — rely on the shimmed B0
+
+        int nEchoes = 3;
+        var train = buildCpmg(nEchoes);
+        var simulation = new SimulationCompiler().compile(config, train.segments(), train.pulse(), repo);
+
+        // Ensemble spanning the sample's z-extent (±10 mm), where the B0 shim
+        // gives each isochromat a different Larmor offset.
+        double[] zSamples = {-10, -7, -4, -1, 1, 4, 7, 10};
+        var trajectories = new ArrayList<ax.xz.mri.model.simulation.Trajectory>();
+        for (double z : zSamples) {
+            var traj = simulation.singleSpinTrajectory(new Vec3(0.0, 0.0, z * 1e-3));
+            assertNotNull(traj);
+            trajectories.add(traj);
+        }
+
+        int[] b = segmentStepBoundaries(train.segments());
+
+        // In phase right after the 90°, dephased after the first τ.
+        assertEquals(1.0, coherentMperp(trajectories, b[1]), 0.03,
+            "Right after excitation the ensemble is coherent (|M⊥| ≈ 1)");
+        double dephased = coherentMperp(trajectories, b[2]);
+        assertTrue(dephased < 0.5,
+            "The shimmed B0 must dephase the ensemble within τ. Got |M⊥| = " + dephased);
+
+        // Every echo window (between successive 180° pulses) must rephase to a
+        // clear peak well above the dephased trough.
+        double pulse90CentreUs = b[1] * 0.5;
+        for (int e = 0; e < nEchoes; e++) {
+            int refocusSegment = 2 + 2 * e;        // seg layout: 90, τ, [180, 2τ]×n
+            double pulse180CentreUs = b[refocusSegment] + 0.5 * (b[refocusSegment + 1] - b[refocusSegment]);
+            double tauUs = pulse180CentreUs - pulse90CentreUs;
+            double echoTimeUs = pulse180CentreUs + tauUs;
+            pulse90CentreUs = pulse180CentreUs;
+
+            double peak = 0;
+            for (int i = b[refocusSegment + 1]; i < b[Math.min(refocusSegment + 2, b.length - 1)]; i++) {
+                peak = Math.max(peak, coherentMperp(trajectories, i));
+            }
+            assertTrue(peak > 0.85,
+                "Echo #" + e + " (t≈" + echoTimeUs + " µs) should rephase to a clear peak. Got " + peak);
+            assertTrue(peak > dephased + 0.2,
+                "Echo #" + e + " peak (" + peak + ") must stand clearly above the dephased trough (" + dephased + ")");
+        }
+    }
+
     private static double coherentMperp(List<ax.xz.mri.model.simulation.Trajectory> trajectories, int stepIdx) {
         double sx = 0, sy = 0;
         for (var t : trajectories) {
