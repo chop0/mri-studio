@@ -27,17 +27,35 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up JDK 25
+      # The project's Java-25 toolchain (javac + jlink + jpackage) comes from
+      # this JDK. Gradle does NOT run on it: Gradle 8.14's bundled Kotlin DSL
+      # compiler can't parse a JDK 25 version string, so Gradle itself runs on
+      # JDK 21 below and reaches 25 only through the toolchain.
+      - name: Set up JDK 25 (project toolchain)
         uses: actions/setup-java@v4
         with:
           distribution: temurin   # full JDK — bundles jlink + jpackage
           java-version: '25'
 
+      - name: Remember the JDK 25 home
+        run: echo "JDK25_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 21 (runs Gradle itself)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build native .app bundle
-        run: ./gradlew packageApp --no-daemon --stacktrace
+        # Gradle runs on JDK 21 (last setup-java sets JAVA_HOME); point its
+        # toolchain detection at the JDK 25 install so compileJava/jlink/jpackage
+        # use 25.
+        run: |
+          echo "org.gradle.java.installations.paths=$JDK25_HOME" >> gradle.properties
+          ./gradlew packageApp --no-daemon --stacktrace
 
       - name: Zip the .app
         # ditto is the macOS-correct archiver — it preserves the bundle's
