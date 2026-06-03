@@ -190,60 +190,30 @@ public final class EigenfieldStarterLibrary {
         new EigenfieldStarter(
             "lorentzian-dipole",
             "Lorentzian dipole pair",
-            "Two anti-parallel point dipoles buried below the sample surface — " +
-                "the canonical 'current loop pair' truth shape for NV magnetometry. " +
-                "DEPTH sets how far the sources sit below z=0; SEPARATION is the " +
-                "half-spacing along x. Normalised so |B|_peak ≈ 1 T at the NV layer " +
-                "for a unit source drive — a Sample voltage source amplitude in " +
-                "tesla then gives a peak field of that many tesla.",
+            "Anti-parallel buried-dipole pair, modelled (as in the reference NV " +
+                "magnetometry literature) by a difference of Lorentzians along x: " +
+                "Bz(x) = z²·(1/(z²+(x−SEP)²) − 1/(z²+(x+SEP)²)). HALFWIDTH z sets " +
+                "how sharply the field varies; SEP is the half-spacing. A Sample " +
+                "source amplitude A tesla reproduces this with peak |Bz| ≈ 0.985·A " +
+                "at x = ±SEP. (This is exactly the truth field B_true(x) of the " +
+                "adaptive_gradient_1d notebook with B_amp = A.)",
             """
             import module ax.xz.mri;
             import static java.lang.Math.*;
 
             class LorentzianDipolePair implements EigenfieldScript {
-                static final double DEPTH = 50e-9;        // dipole depth below surface
-                static final double SEPARATION = 200e-9;  // half-separation along x
+                static final double HALFWIDTH = 50e-9;    // z: Lorentzian half-width along x
+                static final double SEPARATION = 200e-9;  // half-spacing of the dipole pair
 
-                /**
-                 * Sample plane (in lab z): where NVs typically sit and where
-                 * peak |Bz| is normalised to match the source amplitude.
-                 * Default 50 nm matches the {@link NvArrayGeometry#depthMetres}
-                 * default of the canonical "16-centre linear array" starter,
-                 * so a Sample source set to A tesla produces a peak |Bz| of A
-                 * tesla at the NV layer (not at the substrate surface).
-                 */
-                static final double SAMPLE_Z = 50e-9;
-
-                /**
-                 * Peak |Bz| of the raw (1/r³) dipole sum evaluated AT the NV
-                 * plane (z = SAMPLE_Z). Used to renormalise so a Sample source
-                 * amplitude of A gives a peak field of A tesla at the place the
-                 * NVs actually sense, not at z=0 where there's nothing.
-                 */
-                static final double PEAK_NORM = computePeak();
+                // Difference of two Lorentzians centred at ±SEPARATION. Purely a
+                // function of x (the buried-source field is taken at the fixed NV
+                // plane), so the NV depth doesn't enter — matching the notebook's
+                // 1-D B_true(x). A Sample drive of A tesla scales this directly.
                 public Vec3 evaluate(double x, double y, double z) {
-                    double z_eff = z + DEPTH;
-                    double bzPlus  =  dipoleBz(x - SEPARATION, y, z_eff);
-                    double bzMinus = -dipoleBz(x + SEPARATION, y, z_eff);
-                    return Vec3.of(0, 0, (bzPlus + bzMinus) / PEAK_NORM);
-                }
-                private static double dipoleBz(double dx, double dy, double dz) {
-                    double r2 = dx*dx + dy*dy + dz*dz;
-                    if (r2 < 1e-30) return 0;
-                    double r = sqrt(r2);
-                    double cosTheta = dz / r;
-                    return (3.0 * cosTheta * cosTheta - 1.0) / (r * r * r);
-                }
-                private static double computePeak() {
-                    double zEffNv = SAMPLE_Z + DEPTH;   // z inside the dipole formula at the NV plane
-                    double best = 0;
-                    for (int i = 0; i <= 400; i++) {
-                        double x = (-2.0 + 4.0 * i / 400) * SEPARATION;
-                        double v = abs(dipoleBz(x - SEPARATION, 0, zEffNv)
-                                     - dipoleBz(x + SEPARATION, 0, zEffNv));
-                        if (v > best) best = v;
-                    }
-                    return best;
+                    double z2 = HALFWIDTH * HALFWIDTH;
+                    double xm = x - SEPARATION, xp = x + SEPARATION;
+                    double bz = z2 * (1.0 / (z2 + xm * xm) - 1.0 / (z2 + xp * xp));
+                    return Vec3.of(0, 0, bz);
                 }
             }
             """,

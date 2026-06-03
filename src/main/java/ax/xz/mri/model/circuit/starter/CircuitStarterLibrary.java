@@ -229,16 +229,15 @@ public final class CircuitStarterLibrary {
             // STATIC sources: B0 bias defaults to 10 mT (matching the NV
             // SimConfigTemplate's b0Ref, so the NV is on-resonance out of the
             // box). For STATIC the steady-state coil drive comes from the
-            // source's maxAmplitude. Sample defaults to 50 nT — the
-            // Lorentzian-dipole eigenfield is peak-normalised to 1 T per
-            // unit drive, so 50 nT amplitude × 1 T / unit = 50 nT peak field
-            // at the NV layer. This matches the NV-adaptive-coherent GP
-            // prior (GP_AMP_T = 50 nT), so the Bayesian procedure can
-            // immediately estimate a non-zero ground truth.
+            // source's maxAmplitude. Sample = 100 nT = the reference notebook's
+            // B_amp: the lorentzian-dipole eigenfield returns its raw bracket
+            // z²·(1/(z²+(x-200nm)²) − 1/(z²+(x+200nm)²)), so a 100 nT drive
+            // reproduces the notebook's B_true(x) exactly (peak ≈ 98.5 nT). This
+            // matches the NV-adaptive-coherent GP prior (GP_AMP_T = 100 nT).
             var b0Src = new VoltageSource(new ComponentId("src-b0"), "B0",
                 AmplitudeKind.STATIC, 0, 0, 0.01, 0);
             var sampleSrc = new VoltageSource(new ComponentId("src-sample"), "Sample",
-                AmplitudeKind.STATIC, 0, 0, 50e-9, 0);
+                AmplitudeKind.STATIC, 0, 0, 100e-9, 0);
 
             // Microwave I/Q drive. The Modulator upconverts to the NV Larmor
             // carrier (γ_e · b0Ref / 2π ≈ 280 MHz at 10 mT). Default Larmor for
@@ -333,25 +332,29 @@ public final class CircuitStarterLibrary {
     }
 
     /**
-     * The NV-diamond template's centres: the 16-NV uniform line spanning 1 µm
-     * at 50 nm depth (≈62.5 nm spacing — the classic sparse, effectively
-     * independent array), <em>plus</em> one extra centre placed 15 nm off NV #8.
-     * Under the template's default coupling cutoff (30 nm) exactly that pair
-     * forms a dipolar-coupled quantum cluster while the other sixteen stay
-     * independent singletons — a visible "couple some, not all" demonstration
-     * that leaves the sparse line's positions (and the adaptive-reconstruction
-     * sampling) untouched.
+     * The NV-diamond template's 32 centres — the exact NV layout from the
+     * reference {@code adaptive_gradient_1d.ipynb} notebook
+     * ({@code numpy.random.default_rng(0).uniform(-0.5 µm, +0.5 µm, 32)},
+     * sorted), at 50 nm depth. Using the notebook's positions makes the
+     * adaptive-coherent scenario an exact port of that experiment. The random
+     * layout also contains several sub-30 nm pairs (e.g. the 229.50/229.66 nm
+     * centres sit 0.16 nm apart), so the default coupling cutoff still forms
+     * real dipolar clusters — the "couple some, not all" demo survives without a
+     * hand-placed dimer.
      */
     private static List<NvCentre> diamondCentres() {
-        int n = 16;
-        double length = 1e-6, depth = 50e-9, step = length / n;
-        double x0 = -length / 2.0 + step / 2.0;       // mirrors NvArrayGeometry.linearXUniform()
-        var centres = new ArrayList<NvCentre>(n + 1);
-        for (int i = 0; i < n; i++) {
-            centres.add(new NvCentre(x0 + i * step, 0.0, depth, NvAxis.AXIS_PLUS_Z));
-        }
-        // Close partner 15 nm (in +y) off NV #8 — the one dipolar-coupled dimer.
-        centres.add(new NvCentre(x0 + 8 * step, 15e-9, depth, NvAxis.AXIS_PLUS_Z));
+        double[] x = {
+            -4.972615e-07, -4.834724e-07, -4.716803e-07, -4.664144e-07, -4.590265e-07,
+            -3.757167e-07, -3.243444e-07, -2.302133e-07, -2.002881e-07, -1.163224e-07,
+            -1.110786e-07, -7.731278e-08,  4.146122e-08,  4.362499e-08,  1.066358e-07,
+             1.153851e-07,  1.369617e-07,  1.471895e-07,  1.504593e-07,  1.706244e-07,
+             1.855420e-07,  1.884467e-07,  2.294966e-07,  2.296554e-07,  3.132702e-07,
+             3.158536e-07,  3.574043e-07,  3.631789e-07,  4.127556e-07,  4.350724e-07,
+             4.808353e-07,  4.972099e-07,
+        };
+        double depth = 50e-9;
+        var centres = new ArrayList<NvCentre>(x.length);
+        for (double xi : x) centres.add(new NvCentre(xi, 0.0, depth, NvAxis.AXIS_PLUS_Z));
         return centres;
     }
 

@@ -10,30 +10,48 @@ class NvAdaptiveCoherent implements Script {
     static final double GAMMA = 2.0 * PI * 28.024e9;             // rad / (s · T)
 
     // GP prior on Bz(x): Lorentzian kernel, amplitude × half-width.
-    static final double GP_AMP_T = 50e-9;
+    static final double GP_AMP_T = 100e-9;
     static final double GP_DEPTH = 50e-9;
     static final double GP_REG   = 1e-9 * GP_AMP_T * GP_AMP_T;
 
     // Action grid: gradient strength × readout-axis phase.
-    static final double GRAD_MAX_TPM = 10.0;
-    static final int    N_GRAD       = 41;
+    static final double GRAD_MAX_TPM = 5.0;
+    static final int    N_GRAD       = 101;
     static final double[] THETAS     = {0.0, 0.5 * PI};
 
-    static final double TAU_S    = 100e-6;
-    static final long   SHOTS    = 50_000L;
-    static final int    N_ITER   = 2500;
-    static final int    N_EVAL   = 200;
+    // This scenario is a faithful port of the reference adaptive_gradient_1d
+    // notebook (same 32-NV layout, same Lorentzian B_true, same GP prior). The
+    // one number that isn't copied verbatim is SHOTS: the notebook uses 1600,
+    // but its readout noise is an idealised per-shot Poisson, whereas this
+    // simulator's photon-counting model integrates a finite read window and so
+    // counts ≈12× fewer photons per shot. What actually drives the result is the
+    // measurement noise σ_M (∝ 1/√(effective photons)); matching the notebook's
+    // σ_M ≈ 0.497 (mean-M units, at its 1600 shots) takes ≈19 000 nominal shots
+    // here. SHOTS only scales the *injected* noise — the sim runs one
+    // deterministic Ramsey block per measurement regardless — so this is free at
+    // runtime and reproduces the notebook's reconstruction quality.
+    static final long   SHOTS    = 19_000L;
+    static final int    N_ITER   = 10_000;
+    static final int    N_EVAL   = 64;
 
-    // Coarse-to-fine warmup. The Ramsey readout M = (1/N) Σ sin(γτ(B + g·x) + θ)
-    // is periodic, so a gradient large enough to wrap the phase by more than π
-    // across the NV span makes the measurement aliased — and the I-optimal
-    // scorer *favours* those large gradients (biggest linearised Jacobian),
-    // which lets the linearised EKF lock onto a wrapped, wrong mode. During the
-    // first WARMUP_ITERS iterations we ramp the gradient ceiling from the
-    // unambiguous value (phase wrap < π) up to GRAD_MAX_TPM, so the posterior
-    // settles into the correct basin on coarse, alias-free measurements before
-    // the scan opens up to the high-gradient fine-resolution regime.
-    static final int    WARMUP_ITERS = 300;
+    // Two-phase τ warmup (coarse-to-fine). The Ramsey readout
+    // M = (1/N) Σ sin(γτ(B + g·x) + θ) is periodic in the phase γτ(B + g·x): a
+    // gradient large enough to wrap that phase by more than 2π across the NV
+    // span aliases the measurement, and the I-optimal scorer *favours* those
+    // large gradients (biggest linearised Jacobian) — so at a fixed long τ the
+    // linearised EKF locks onto a wrapped, wrong mode unless the gradient is
+    // crippled (and crippling it throws away the spatial resolution the gradient
+    // is there to provide). Instead we run the first N_WARMUP iterations at a
+    // SHORT τ, where the same physical gradient produces a (τ_long/τ_short)×
+    // smaller phase so the FULL gradient range stays unambiguous *and* spatially
+    // resolving; the posterior settles into the correct basin on coarse, alias-
+    // free, spatially-informative measurements. We then switch to the long τ for
+    // high precision (its large γτ amplifies the per-shot information once the
+    // basin is locked). This is the standard multi-τ phase-estimation ladder —
+    // measurably better than ramping a gradient ceiling at a fixed long τ.
+    static final double TAU_SHORT_S = 8e-6;
+    static final double TAU_LONG_S  = 100e-6;
+    static final int    N_WARMUP    = 1000;
 
     // Ramsey pulse template.
     static final double MW_PI_HALF_AMP_T = 89.21e-6;             // γ·B·t = π/2 at t = 100 ns
@@ -71,11 +89,6 @@ class NvAdaptiveCoherent implements Script {
         double pad = 0.02 * (xMax - xMin + 1e-12);
         double[] xEval = linspace(xMin - pad, xMax + pad, N_EVAL);
         double yEval = mean(yNv), zEval = mean(zNv);
-
-        // Gradient whose readout phase stays unambiguous (< π wrap) across the
-        // NV span — the floor of the warmup ramp (see WARMUP_ITERS).
-        double xSpan = max(xMax - xMin, 1e-12);
-        double gUnambiguous = min(GRAD_MAX_TPM, PI / (GAMMA * TAU_S * xSpan));
 
         // Two-point bright/dark calibration absorbs every device-side
         // scale (QE, dark counts, pump-during-read leakage) and lets
@@ -120,19 +133,17 @@ class NvAdaptiveCoherent implements Script {
             ctx.checkpoint();
             double[][] sigma = invertSpd(lambda);
 
-            // Warmup ramp: open the gradient ceiling from the unambiguous value
-            // to the full range over WARMUP_ITERS, so the EKF locks the correct
-            // basin on alias-free measurements before chasing high-gradient
-            // resolution.
-            double warm  = min(1.0, (double) iter / WARMUP_ITERS);
-            double gCeil = gUnambiguous + warm * (GRAD_MAX_TPM - gUnambiguous);
+            // Two-phase τ: short (alias-free at the full gradient range) during
+            // the warmup, then long (high-precision) once the posterior has
+            // locked the correct basin. See the TAU_SHORT/LONG comment above.
+            double tau = (iter < N_WARMUP) ? TAU_SHORT_S : TAU_LONG_S;
 
             double bestScore = Double.NEGATIVE_INFINITY;
             double bestG = 0, bestTheta = 0;
             double[] bestA = null;
-            for (double g : linspace(-gCeil, +gCeil, N_GRAD)) {
+            for (double g : linspace(-GRAD_MAX_TPM, +GRAD_MAX_TPM, N_GRAD)) {
                 for (double theta : THETAS) {
-                    double[] a = linearisedA(mu, xNv, TAU_S, g, theta);
+                    double[] a = linearisedA(mu, xNv, tau, g, theta);
                     double[] sigmaA = matVec(sigma, a);
                     double score = quadForm(sigmaA, W) / (sigmaMSq + dot(a, sigmaA));
                     if (score > bestScore) {
@@ -143,10 +154,10 @@ class NvAdaptiveCoherent implements Script {
 
             double Mobs = runRamseyAndDecode(ctx, rng, redCounter,
                 laser, mwI, mwQ, gradX,
-                baseline, contrast, TAU_S, bestG, bestTheta);
+                baseline, contrast, tau, bestG, bestTheta);
 
             // Information-form linearised Kalman update at the current μ.
-            double hMu = sumOfSins(mu, xNv, TAU_S, bestG, bestTheta) / N;
+            double hMu = sumOfSins(mu, xNv, tau, bestG, bestTheta) / N;
             double yLin = Mobs - hMu + dot(bestA, mu);
             rank1UpdateSym(lambda, bestA, 1.0 / sigmaMSq);
             for (int i = 0; i < N; i++) eta[i] += bestA[i] * yLin / sigmaMSq;
@@ -158,12 +169,12 @@ class NvAdaptiveCoherent implements Script {
             double   sigmaDense = sqrt(mean(denseVar));
             double   rmse       = rmse(BpostDense, truthAtEval);
 
-            double[] aTruth = linearisedA(truthAtNvs, xNv, TAU_S, bestG, bestTheta);
+            double[] aTruth = linearisedA(truthAtNvs, xNv, tau, bestG, bestTheta);
             rank1UpdateSym(fisherAcc, aTruth, 1.0 / sigmaMSq);
             double sigmaShannon = sqrt(mean(
                 denseVarianceFromPosterior(Pmap, invertSpd(fisherAcc), gpVar)));
 
-            tauHist[iter]     = TAU_S;
+            tauHist[iter]     = tau;
             gradHist[iter]    = bestG;
             phaseHist[iter]   = bestTheta;
             rmseHist[iter]    = rmse;

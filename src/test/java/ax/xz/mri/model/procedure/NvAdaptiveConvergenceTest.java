@@ -20,36 +20,38 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Convergence smoke-test for the {@code nv-adaptive-coherent} starter.
+ * Convergence + parity test for the {@code nv-adaptive-coherent} starter.
  *
- * <p>Builds the NV-centre-diamond template, runs the full adaptive loop via
- * the {@link ScriptHarness}, and asserts the dense-grid RMSE at the end is
- * at least {@link #CONVERGENCE_RATIO}× smaller than the initial GP-prior
- * RMSE. Also dumps the truth peak, posterior peak, and convergence-history
- * snapshot so a regression here will surface a legible diagnostic, not an
- * unhelpful "rmse went up".
+ * <p>The NV-diamond template is a faithful port of the reference
+ * {@code adaptive_gradient_1d.ipynb} notebook: the same 32-NV layout
+ * ({@code numpy.default_rng(0)}), the same Lorentzian-difference {@code B_true},
+ * the same GP prior, the two-phase-τ ladder, and a shot count chosen so the
+ * simulator's σ_M matches the notebook's. Running the full adaptive loop
+ * through the {@link ScriptHarness} therefore reproduces the notebook's result:
+ * dense RMSE ≈ 11 nT (the notebook's 6-seed spread is 7–17 nT, mean 11.4), with
+ * the posterior peak ≈13 % under the truth peak (the GP prior over-regularises
+ * at this SNR — the notebook shows the same undershoot).
  */
 final class NvAdaptiveConvergenceTest {
 
     /**
-     * Convergence quality bars.
+     * Convergence + parity bars.
      *
-     * <p>{@link #SHAPE_TOLERANCE} — the posterior peak |B| must land within
-     * this fraction of the truth peak |B|. With τ=100 µs, SHOTS=50 000, and
-     * 2500 iters, σ_M ≈ 0.43 per Ramsey block; the GP prior + I-optimal
-     * action schedule give ≈ 25 % under-shoot on truth peaks (the prior
-     * over-regularises slightly at this SNR). Tolerance 0.4 catches genuine
-     * shape regressions without flagging tiny shifts in the rng-driven
-     * residual.
+     * <p>{@link #CONVERGENCE_RATIO} — rmseStart / rmseEnd must be ≥ this. The
+     * two-phase-τ schedule achieves ×3.4 here; 2.5 enforces real convergence
+     * with headroom. (The old fixed-τ gradient-ceiling warmup managed ×2.0.)
      *
-     * <p>{@link #CONVERGENCE_RATIO} — rmseStart / rmseEnd must be ≥ this.
-     * Setting it above 1.0 enforces that the EKF <em>actually converges</em>
-     * (end rmse lower than start), not merely "doesn't diverge". A ratio of
-     * 1.3 corresponds to ≈ 23 % rmse reduction from the GP-prior baseline,
-     * which the procedure beats comfortably (×1.5 typical).
+     * <p>{@link #SHAPE_TOLERANCE} — posterior peak within this fraction of the
+     * truth peak (≈13 % here; 0.2 leaves margin for the inherent low-SNR
+     * undershoot without flagging a genuine shape regression).
+     *
+     * <p>{@link #MAX_RMSE_T} — the dense RMSE must land inside the notebook's
+     * spread (its worst of 6 seeds was 16.9 nT), proving the Java simulator
+     * reproduces the reference, not just "converges".
      */
-    private static final double SHAPE_TOLERANCE = 0.4;
-    private static final double CONVERGENCE_RATIO = 1.3;
+    private static final double SHAPE_TOLERANCE = 0.2;
+    private static final double CONVERGENCE_RATIO = 2.5;
+    private static final double MAX_RMSE_T = 18e-9;
 
     @Test
     void adaptiveCoherentConvergesAgainstNvDiamondTemplate() throws Exception {
@@ -109,6 +111,10 @@ final class NvAdaptiveConvergenceTest {
         assertTrue(shapeError <= SHAPE_TOLERANCE,
             "posterior peak must match truth peak within " + SHAPE_TOLERANCE
             + " (truth=" + truthPeak + ", posterior=" + postPeak + ", error=" + shapeError + ")");
+        // Parity with the reference notebook: the dense RMSE must land inside
+        // its 7–17 nT spread, proving the Java sim reproduces the experiment.
+        assertTrue(rmseEnd < MAX_RMSE_T,
+            "dense RMSE must match the notebook's distribution (< " + MAX_RMSE_T + " T, got " + rmseEnd + ")");
     }
 
     private static int countChannels(List<CircuitComponent> components) {

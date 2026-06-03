@@ -96,23 +96,24 @@ final class NvClusterCompileTest {
     }
 
     @Test
-    void nvDiamondTemplateFormsExactlyOneDimerAtDefaultCutoff() {
-        // The shipped NV-diamond template: a sparse 16-NV line plus one close
-        // partner. Under the template's default method (cap 3, 30 nm cutoff —
-        // see NvDiamondConfigStep) exactly that dimer couples; the rest stay
-        // independent. This proves the default template demonstrates NV–NV
-        // coupling out of the box without an O(N²) blow-up.
+    void nvDiamondTemplateFormsClustersAtDefaultCutoff() {
+        // The shipped NV-diamond template is the reference notebook's 32-NV
+        // random layout, which contains several sub-30 nm pairs. Under the
+        // default method (cap 3, 30 nm cutoff — see NvDiamondConfigStep) those
+        // form real dipolar-coupled clusters while the rest stay independent —
+        // "couple some, not all" demonstrated organically, capped (no O(N²)).
         var built = SimConfigTemplate.NV_CENTRE_DIAMOND.buildCircuit(ProjectState.empty(), "demo");
         var nv = (NvEnsemble) built.newSubstances().get(0).substance();
+        assertEquals(32, nv.centres().size(), "Template ports the notebook's 32-NV layout");
         int[][] clusters = NvClusterUnion.union(nv.centres(), 30e-9, 3);
-        int pairs = 0, singles = 0;
+        int total = 0, multi = 0;
         for (int[] c : clusters) {
             assertTrue(c.length <= 3, "Default cap is 3 — no block may exceed it");
-            if (c.length == 2) pairs++;
-            else if (c.length == 1) singles++;
+            total += c.length;
+            if (c.length >= 2) multi++;
         }
-        assertEquals(1, pairs, "Template couples exactly one dipolar dimer by default");
-        assertEquals(15, singles, "The 15 sparse-line NVs away from the dimer stay independent");
+        assertEquals(32, total, "Every NV is partitioned into exactly one cluster");
+        assertTrue(multi >= 1, "The 32-NV layout forms at least one dipolar-coupled cluster");
     }
 
     /* ── helpers ───────────────────────────────────────────────────────── */
