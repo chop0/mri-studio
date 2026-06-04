@@ -103,6 +103,38 @@ tasks.test {
     )
 }
 
+// ── Procedure-starter templates ───────────────────────────────────────────
+// The starters live in the :starters module as real, compile-checked Java (see
+// settings.gradle.kts). Their *sources* double as the studio's runtime DSL
+// templates, so copy them into resources — blanking the `package` line, because
+// the in-process DSL compiler loads each script as a default-package class by
+// its simple name (see ScriptEngine.extractClassName).
+val copyStarterSources by tasks.registering(Sync::class) {
+    description = "Copy the compile-checked procedure starters from :starters into mri-studio resources (sans package line)."
+    from(project(":starters").file("src/main/java/ax/xz/mri/starters")) {
+        include("*.java")
+        filter { line: String ->
+            if (line.trimStart().startsWith("package ax.xz.mri.starters")) "" else line
+        }
+    }
+    into(layout.buildDirectory.dir("generated/starter-resources/ax/xz/mri/starters"))
+}
+
+sourceSets.named("main") {
+    resources.srcDir(layout.buildDirectory.dir("generated/starter-resources"))
+}
+
+tasks.named("processResources") {
+    dependsOn(copyStarterSources)
+}
+
+// Type-check the starters on every build. compileJava needs the studio jar, but
+// the copy above only reads .java sources (not the compiled module), so there's
+// no project cycle.
+tasks.named("check") {
+    dependsOn(":starters:compileJava")
+}
+
 tasks.register<JavaExec>("runOptimiser") {
     group = "application"
     description = "Runs the Java optimiser CLI."

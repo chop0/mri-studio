@@ -1,3 +1,5 @@
+package ax.xz.mri.starters;
+
 import module ax.xz.mri;
 import static java.lang.Math.*;
 import java.util.SplittableRandom;

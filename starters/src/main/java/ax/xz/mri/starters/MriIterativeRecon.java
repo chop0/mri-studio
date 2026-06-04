@@ -1,3 +1,5 @@
+package ax.xz.mri.starters;
+
 import module ax.xz.mri;
 
 class MriIterativeRecon implements Script {

@@ -11,11 +11,13 @@ import java.util.Optional;
 /**
  * Built-in starter procedures shown in the New-Procedure wizard.
  *
- * <p>Each starter sits as a real Java file under
- * {@code src/main/resources/ax/xz/mri/starters/}. IntelliJ recognises them
- * with full syntax highlighting + lint; Gradle bundles them as classpath
- * resources via the standard {@code processResources} task. The library
- * loads them lazily by classpath name — no giant inlined text blocks.
+ * <p>Each starter is real, compile-checked Java in the {@code :starters} Gradle
+ * module ({@code starters/src/main/java/ax/xz/mri/starters/}), type-checked
+ * against {@code ax.xz.mri}'s exported DSL surface on every build. The root
+ * build's {@code copyStarterSources} task strips the module {@code package}
+ * line and copies the sources into this module's resources, where the library
+ * loads them lazily by classpath name — no giant inlined text blocks, and a
+ * renamed API breaks the build rather than a user's run.
  *
  * <p>The starter source IS the implementation — there is no parallel Java
  * service class behind it. Editing the starter copies its source verbatim

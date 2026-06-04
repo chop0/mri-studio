@@ -1,3 +1,5 @@
+package ax.xz.mri.starters;
+
 import module ax.xz.mri;
 import static java.lang.Math.*;
 import java.util.List;
@@ -19,37 +21,11 @@ class NvAdaptiveCoherent implements Script {
     static final int    N_GRAD       = 101;
     static final double[] THETAS     = {0.0, 0.5 * PI};
 
-    // This scenario is a faithful port of the reference adaptive_gradient_1d
-    // notebook (same 32-NV layout, same Lorentzian B_true, same GP prior). The
-    // one number that isn't copied verbatim is SHOTS: the notebook uses 1600,
-    // but its readout noise is an idealised per-shot Poisson, whereas this
-    // simulator's photon-counting model integrates a finite read window and so
-    // counts ≈12× fewer photons per shot. What actually drives the result is the
-    // measurement noise σ_M (∝ 1/√(effective photons)); matching the notebook's
-    // σ_M ≈ 0.497 (mean-M units, at its 1600 shots) takes ≈19 000 nominal shots
-    // here. SHOTS only scales the *injected* noise — the sim runs one
-    // deterministic Ramsey block per measurement regardless — so this is free at
-    // runtime and reproduces the notebook's reconstruction quality.
     static final long   SHOTS    = 19_000L;
     static final int    N_ITER   = 10_000;
     static final int    N_EVAL   = 64;
 
-    // Two-phase τ warmup (coarse-to-fine). The Ramsey readout
-    // M = (1/N) Σ sin(γτ(B + g·x) + θ) is periodic in the phase γτ(B + g·x): a
-    // gradient large enough to wrap that phase by more than 2π across the NV
-    // span aliases the measurement, and the I-optimal scorer *favours* those
-    // large gradients (biggest linearised Jacobian) — so at a fixed long τ the
-    // linearised EKF locks onto a wrapped, wrong mode unless the gradient is
-    // crippled (and crippling it throws away the spatial resolution the gradient
-    // is there to provide). Instead we run the first N_WARMUP iterations at a
-    // SHORT τ, where the same physical gradient produces a (τ_long/τ_short)×
-    // smaller phase so the FULL gradient range stays unambiguous *and* spatially
-    // resolving; the posterior settles into the correct basin on coarse, alias-
-    // free, spatially-informative measurements. We then switch to the long τ for
-    // high precision (its large γτ amplifies the per-shot information once the
-    // basin is locked). This is the standard multi-τ phase-estimation ladder —
-    // measurably better than ramping a gradient ceiling at a fixed long τ.
-    static final double TAU_SHORT_S = 8e-6;
+    static final double TAU_SHORT_S = 4e-6;
     static final double TAU_LONG_S  = 100e-6;
     static final int    N_WARMUP    = 1000;
 
